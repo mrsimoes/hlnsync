@@ -39,8 +39,8 @@ class OneGraph(object):
         self._arrows[node_a] = node_b
         cyc = self._cycle_from(node_b)
         if cyc is not None: # There is a cycle. Is it a new one?
-            e = cyc[0] # Pick any elem in the cycle found.
-            if not any((e in old_cyc) for old_cyc in self._cycles):
+            elem = cyc[0] # Pick any elem in the cycle found.
+            if not any((elem in old_cyc) for old_cyc in self._cycles):
                 self._cycles.append(set(cyc))
     def add_graph(self, other_one_g):
         """Add to self all arrows in other_one_g."""
@@ -61,28 +61,28 @@ class OneGraph(object):
     def get_all_roots(self):
         """Return the set of all roots (minimal elements)."""
         roots = set(self._arrows.keys())
-        for node_a, node_b in self._arrows.iteritems():
-            if node_b in self._arrows:
-                roots.discard(node_b)
+        for _, node_to in self._arrows.iteritems():
+            if node_to in self._arrows:
+                roots.discard(node_to)
         return roots
     def get_all_leaves(self):
         """Return the set of all nodes which are source to no arrow."""
-        g = self._arrows
-        leaves = set(g.values())
-        for e in g.values():
-            if e in g:
-                leaves.discard(e)
+        arrow_graph = self._arrows
+        leaves = set(arrow_graph.values())
+        for node in arrow_graph.values():
+            if node in arrow_graph:
+                leaves.discard(node)
         return leaves
-    def _cycle_from(self, node_e):
+    def _cycle_from(self, node):
         """Return a (list) cycle starting at e, if one exists, None otherwise."""
-        gr = self._arrows
-        if len(gr) <= 1:
+        arrow_gr = self._arrows
+        if len(arrow_gr) <= 1:
             return None
-        stack = [node_e]
+        stack = [node]
         while True:
             top = stack[-1]
-            if top in gr:        # There is a next node.
-                nxt = gr[top]
+            if top in arrow_gr:        # There is a next node.
+                nxt = arrow_gr[top]
                 if nxt in stack:
                     return stack
                 else:

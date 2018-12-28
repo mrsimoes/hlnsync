@@ -26,7 +26,7 @@ import atexit
 import threading
 
 # Set by the module user.
-option_verbosity = 0
+option_verbosity = 1
 
 APP_PREFIX = ""
 
@@ -59,13 +59,12 @@ def _print_main(*args, **kwargs):
         is_tty = _stderr_is_tty
     if is_tty:
         progress("", flush=True) # Clear any progress info on screen.
-    first_line = True
-    for ln in " ".join(map(str, args)).splitlines():
-        _builtin_print(prefix+ln, file=file, **kwargs)
+    for line in " ".join(map(str, args)).splitlines():
+        _builtin_print(prefix + line, file=file, **kwargs)
     if is_tty:
         _last_print_len = None
     _flushing_needed = True
-    
+
 def print(*args, **kwargs):
     if option_verbosity >= 0:
         _print_main(*args, file=sys.stdout, prefix="", **kwargs)
@@ -95,23 +94,23 @@ def progress(*args, **kwargs):
     if option_verbosity < 0 or not _stdout_is_tty:
         return
 #    _builtin_print("\r", end="")
-    tot = 0
-    for a in args:
-        s = str(a).replace("\n", "\\n")
+    tot_chars = 0
+    for pr_item in args:
+        pr_item = str(pr_item).replace("\n", "\\n")
         try:
-            l = len(s.decode('utf-8'))
-        except:
-            l = len(s) # Not really UTF8.
-        if tot + l > _term_cols:
-            s = s[:_term_cols - tot]
-            l = _term_cols - tot
-        _builtin_print(s, end="")
-        tot += l
+            item_chars = len(pr_item.decode('utf-8'))
+        except Exception:
+            item_chars = len(pr_item) # Not really UTF8.
+        if tot_chars + item_chars > _term_cols:
+            pr_item = pr_item[:_term_cols - tot_chars]
+            item_chars = _term_cols - tot_chars
+        _builtin_print(pr_item, end="")
+        tot_chars += item_chars
     if _last_print_len is None:
         _last_print_len = _term_cols
-    _builtin_print(" " * (_last_print_len - tot), end="")
+    _builtin_print(" " * (_last_print_len - tot_chars), end="")
     _builtin_print("\r", end="") # Carriage return to beg of line.
-    _last_print_len = tot
+    _last_print_len = tot_chars
     if flush:
         sys.stdout.flush()
         _flushing_needed = False

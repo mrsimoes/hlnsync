@@ -40,6 +40,7 @@ from __future__ import with_statement, print_function
 
 import os
 import sys
+import abc
 from collections import namedtuple
 import sqlite3
 
@@ -109,8 +110,9 @@ class FilePropertyDB(FileTree):
         else:
             self.sqlmanager = SQLPropDBManager(dbpath)
 
+    @abc.abstractmethod
     def prop_from_source(self, file_obj):
-        raise NotImplementedError
+        """Should obtain file property value from tree source."""
 
     def _gen_source_dir_entries_offline(self, dir_obj, skipbasenames=None):
         """Yield (basename, obj_id, is_file, rawmetadata).
@@ -125,8 +127,8 @@ class FilePropertyDB(FileTree):
     def _new_file_obj_offline(self, obj_id, raw_metadata):
         """Return file metadata created from raw_metadata input.
         """
-        md = self.sqlmanager.get_metadata(obj_id)
-        file_obj = self._file_type(obj_id, md)
+        metadata = self.sqlmanager.get_metadata(obj_id)
+        file_obj = self._file_type(obj_id, metadata)
         return file_obj
 
     def scan_dir(self, dir_obj, skipbasenames=None):
@@ -142,9 +144,9 @@ class FilePropertyDB(FileTree):
         assert self.mode == "online"
         self.scan_full_tree()
         fileids_now = self._id_to_file.keys()
-        pr.info("discarding old ids from the db")
+        pr.progress("discarding old ids from the db")
         self.sqlmanager.delete_ids_except(fileids_now)
-        pr.info("vacuuming database")
+        pr.progress("vacuuming database")
         self.sqlmanager.vacuum()
         pr.info("database cleaned")
 
@@ -159,7 +161,7 @@ class FilePropertyDB(FileTree):
         else:
             try:
                 res = self.sqlmanager.get_propvalue_metadata(f_obj.file_id)
-            except Exception as e:
+            except Exception:
                 msg = "error reading prop db for file id '%d'." % (f_obj.file_id)
                 raise RuntimeError(msg)
             if res is not None:
@@ -177,13 +179,16 @@ class FilePropertyDB(FileTree):
             raise RuntimeError("no prop on db for file id '%d'." % (f_obj.file_id))
         try:
             prop_value = self.prop_from_source(f_obj)
-        except Exception as e:
+        except Exception:
             raise RuntimeError("error processing file %d, %s." % (f_obj.file_id, f_obj.relpaths))
         f_obj.prop_value = prop_value
         f_obj.prop_metadata = f_obj.file_metadata
         try:
-            self.sqlmanager.insert_propvalue_metadata(f_obj.file_id, prop_value, f_obj.prop_metadata)
-        except:
+            self.sqlmanager.insert_propvalue_metadata(
+                f_obj.file_id,
+                prop_value,
+                f_obj.prop_metadata)
+        except Exception:
             pr.warning("could not save prop value for file id '%d'." % f_obj.file_id)
         return prop_value
 
@@ -228,7 +233,7 @@ class FilePropertyDB(FileTree):
             pr.progress_percentage(cur_item, tot_items, prefix="updating file metadata")
             cur_item += 1
             self.sqlmanager.insert_metadata(f_id, f_obj.file_metadata)
-        self.sqlmanager.cx.commit()
+        self.sqlmanager.commit()
 
     def db_clear_tree(self):
         """Remove offline tree info from db.
@@ -248,14 +253,14 @@ class FilePropertyDB(FileTree):
             for fobj, parent, path in self.walk_paths(dirs=False, recurse=True):
                 try:
                     self.db_get_prop(fobj)
-                except Exception as e:
+                except Exception as exc:
                     pr.warning("error processing file %s" % path)
-                    pr.debug(e)
+                    pr.debug(exc)
                     error_files.add(fobj)
-                for fobj in error_files:
-                    self._rm_file(fobj)
+                for err_fobj in error_files:
+                    self._rm_file(err_fobj)
         finally:
-            self.sqlmanager.cx.commit()
+            self.sqlmanager.commit()
 
     def do_recompute_file(self, file_obj):
         """Recompute property value for given file path.
@@ -300,54 +305,56 @@ class SQLPropDBManager(object):
         """
         if os.path.exists(dbpath):
             raise RuntimeError("file already exists at %s" % dbpath)
+        sql_cx = None
         try:
-            cx = None
-            cx = sqlite3.connect(dbpath)
-            SQLPropDBManager._reset_prop_table(cx)
-            SQLPropDBManager._reset_offline_tables(cx)
-            cx.execute("PRAGMA user_version=%d;" % int(CUR_DB_FORMAT_VERSION))
-        except sqlite3.Error as e:
+            sql_cx = sqlite3.connect(dbpath)
+            SQLPropDBManager._reset_prop_table(sql_cx)
+            SQLPropDBManager._reset_offline_tables(sql_cx)
+            sql_cx.execute("PRAGMA user_version=%d;" % int(CUR_DB_FORMAT_VERSION))
+        except sqlite3.Error:
             pr.error("cannot create database at %s.", dbpath)
             raise
         finally:
-            if cx is not None:
-                cx.close()
-            return SQLPropDBManager(dbpath)
+            if sql_cx is not None:
+                sql_cx.close()
+        return SQLPropDBManager(dbpath)
 
     @staticmethod
-    def _reset_prop_table(cx):
-        SQLPropDBManager._reset_db_table(cx, SQLPropDBManager._prop_table_info)
+    def _reset_prop_table(sql_cx):
+        SQLPropDBManager._reset_db_table(sql_cx, SQLPropDBManager._prop_table_info)
 
     @staticmethod
-    def _reset_offline_tables(cx):
+    def _reset_offline_tables(sql_cx):
         for tab in SQLPropDBManager._offline_tables_info:
-            SQLPropDBManager._reset_db_table(cx, tab)
+            SQLPropDBManager._reset_db_table(sql_cx, tab)
 
     @staticmethod
-    def _reset_db_table(cx, table):
+    def _reset_db_table(sql_cx, table):
         tab_name, fields, index = table
-        cx.execute("DROP TABLE IF EXISTS %s;" % tab_name)
-        cx.execute("CREATE TABLE %s (%s);" % (tab_name, fields))
+        sql_cx.execute("DROP TABLE IF EXISTS %s;" % tab_name)
+        sql_cx.execute("CREATE TABLE %s (%s);" % (tab_name, fields))
         if index is not None:
             cmd = "CREATE INDEX %sidx ON %s (%s);" % (tab_name, tab_name, index)
-            cx.execute(cmd)
-        cx.commit()
+            sql_cx.execute(cmd)
+        sql_cx.commit()
 
     @staticmethod
     def which_db_version(dbpath):
         """Return db version number or None if not recognized.
         """
+        sql_cx = None
+        db_ver = None
         try:
-            cx = None
-            ver = None
-            cx = sqlite3.connect(dbpath)
-            ver = cx.execute("PRAGMA user_version;").fetchone()
-            if ver is not None: return ver[0]
-            else: return 0
-        except sqlite3.Error:
-            return None
+            sql_cx = sqlite3.connect(dbpath)
+            db_ver_rec = sql_cx.execute("PRAGMA user_version;").fetchone()
+            if db_ver_rec is not None:
+                db_ver = db_ver_rec[0]
+            else:
+                db_ver = 0
         finally:
-            if cx: cx.close()
+            if sql_cx:
+                sql_cx.close()
+        return db_ver
 
     @staticmethod
     def copy_db(src_db_path, tgt_db_path, remap_fn=lambda a: a, copyif_fn=lambda a: True):
@@ -361,8 +368,8 @@ class SQLPropDBManager(object):
             os.remove(tgt_db_path)
         tgt_sqlm = SQLPropDBManager.create_new_db(tgt_db_path)
 
-        src_cx = src_sqlm.cx
-        tgt_cx = tgt_sqlm.cx
+        src_cx = src_sqlm._cx
+        tgt_cx = tgt_sqlm._cx
 
         tgt_cx.cursor().execute("DELETE FROM prop;")
 
@@ -379,7 +386,7 @@ class SQLPropDBManager(object):
     def __init__(self, dbpath):
         """The db must exist and be in a current format, else raise exceptions.
         """
-        self.cx = None
+        self._cx = None
         self.dbpath = dbpath
         if not os.path.isfile(dbpath):
             raise RuntimeError("unreadable DB at %s" % dbpath)
@@ -390,21 +397,21 @@ class SQLPropDBManager(object):
             msg = "outdated db version=%d at %s" % (ver, self.dbpath)
             raise RuntimeError(msg)
         try:
-            self.cx = sqlite3.connect(dbpath)
-            def fac(x):
-                return x
-            self.cx.text_factory = fac
+            self._cx = sqlite3.connect(dbpath)
+            def fac(text):
+                return text
+            self._cx.text_factory = fac
         except sqlite3.Error:
             pr.error("cannot open DB at '%s'.", dbpath)
             raise
 
     def __del__(self):
-        if self.cx:
-            self.cx.commit()
-            self.cx.close()
+        if self._cx:
+            self._cx.commit()
+            self._cx.close()
 
     def reset_offline_tables(self):
-        SQLPropDBManager._reset_offline_tables(self.cx)
+        SQLPropDBManager._reset_offline_tables(self._cx)
 
     def delete_ids(self, file_ids):
         """Remove single file_id, or list or set of file_ids, from db.
@@ -413,8 +420,8 @@ class SQLPropDBManager(object):
             file_ids = (file_ids,)
         try:
             del_cmd = "DELETE FROM prop WHERE file_id=?;"
-            self.cx.executemany(del_cmd, [(fid,) for fid in file_ids])
-        except Exception as e:
+            self._cx.executemany(del_cmd, [(fid,) for fid in file_ids])
+        except Exception:
             pr.error("could not delete ids.")
             raise
 
@@ -422,13 +429,13 @@ class SQLPropDBManager(object):
         """Delete from the db all ids, except those given. Costly.
         """
         ids_to_delete = set()
-        pr.info("reading all file ids from the database")
-        tot_file_records = self.cx.execute("SELECT count(*) FROM prop;").fetchone()[0]
+        pr.progress("reading all file ids from the database")
+        tot_file_records = self._cx.execute("SELECT count(*) FROM prop;").fetchone()[0]
         curr_record = 0
-        for r in self.cx.execute("SELECT file_id FROM prop;").fetchall():
+        for fileid_record in self._cx.execute("SELECT file_id FROM prop;").fetchall():
             pr.progress_percentage(curr_record, tot_file_records, "deleting other ids: ")
             curr_record += 1
-            this_id = r[0]
+            this_id = fileid_record[0]
             if not this_id in file_ids_to_keep:
                 ids_to_delete.add(this_id)
         self.delete_ids(ids_to_delete)
@@ -437,23 +444,23 @@ class SQLPropDBManager(object):
         """Fetch file metadata from the database.
         """
         cmd = "SELECT size, mtime, ctime FROM metadata WHERE file_id=?;"
-        size, mtime, ctime = self.cx.execute(cmd, (file_id,)).fetchone()
+        size, mtime, ctime = self._cx.execute(cmd, (file_id,)).fetchone()
         return Metadata(size, mtime, ctime)
 
     def insert_metadata(self, f_id, metadata):
         """Store file metadata in the database.
         """
         cmd = "INSERT INTO metadata VALUES (?, ?, ?, ?);"
-        self.cx.cursor().execute(cmd, (f_id, metadata.size, metadata.mtime, metadata.ctime))
+        self._cx.cursor().execute(cmd, (f_id, metadata.size, metadata.mtime, metadata.ctime))
 
     def get_dir_contents(self, dir_id):
         """Generate dir entries from the database to build the tree.
         """
         cmd = "SELECT obj_basename, obj_id, obj_is_file FROM dir_contents WHERE parent_id=?;"
         try:
-            cur = self.cx.execute(cmd, (dir_id,))
-            for r in cur.fetchall():
-                yield r
+            cur = self._cx.execute(cmd, (dir_id,))
+            for db_rec in cur.fetchall():
+                yield db_rec
         except:
             pr.error("error getting contents.")
             raise
@@ -463,24 +470,30 @@ class SQLPropDBManager(object):
         """
         obj_basename = obj_basename.replace("'", "''") # Escape single quotes for sqlite3.
         cmd = "INSERT INTO dir_contents VALUES (?, ?, ?, ?);"
-        self.cx.cursor().execute(cmd, (dir_id, obj_basename, obj_id, obj_is_file))
+        self._cx.cursor().execute(cmd, (dir_id, obj_basename, obj_id, obj_is_file))
 
     def get_propvalue_metadata(self, file_id):
         """Return either a (prop_value, metadata) pair or None.
         """
         cmd = "SELECT value, size, mtime, ctime FROM prop WHERE file_id=?;"
-        res = self.cx.execute(cmd, (file_id,)).fetchone()
+        res = self._cx.execute(cmd, (file_id,)).fetchone()
         if res is not None:
             res = (res[0], Metadata(res[1], res[2], res[3]))
         return res
 
-    def insert_propvalue_metadata(self, file_id, prop_value, md):
+    def insert_propvalue_metadata(self, file_id, prop_value, metadata):
         cmd = "INSERT INTO prop VALUES (?, ?, ?, ?, ?);"
-        self.cx.cursor().execute(cmd, (file_id, prop_value, md.size, md.mtime, md.ctime))
+        cmd_args = (file_id, prop_value,
+                    metadata.size, metadata.mtime, metadata.ctime)
+        self._cx.cursor().execute(cmd, cmd_args)
 
     def vacuum(self):
-        self.cx.execute("VACUUM;")
-        self.cx.commit()
+        self._cx.execute("VACUUM;")
+        self.commit()
+
+    def commit(self):
+        self._cx.commit()
+
 
 class FilePropertyDBs(object):
     """Manage a context for multiple PropDB objects.
@@ -488,16 +501,17 @@ class FilePropertyDBs(object):
     def __init__(self, db_l):
         self.dbs = []
         try:
-            for db in db_l:
-                self.dbs.append(db)
+            for database in db_l:
+                self.dbs.append(database)
                 self.dbs[-1].__enter__()
-        except Exception as e:
-            if not self.__exit__(type(e), e, sys.exc_info()[2]):
-                raise type(e), e, sys.exc_info()[2]
+        except Exception as exc:
+            traceback = sys.exc_info()[2]
+            if not self.__exit__(type(exc), exc, traceback):
+                raise type(exc), exc, traceback
     def __enter__(self):
         return self.dbs
-    def __exit__(self, type, value, traceback):
+    def __exit__(self, exc_type, exc_value, traceback):
         res = False # By default, the exception was not handled here.
-        for db in self.dbs:
-            res = db.__exit__(type, value, traceback) or res
+        for database in self.dbs:
+            res = database.__exit__(exc_type, exc_value, traceback) or res
         return res

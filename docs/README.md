@@ -30,7 +30,7 @@ Numerous tools already exist for syncing, and some are suitable for the purpose 
 
 The hash database file is created at the root of the file tree, by default with a randomly chosen basename matching `lnsync-[0-9]+.db`. Only one such file may exist there. These files are ignored by all _lnsync_ operations, and they should not be copied from source to target when using other sync tools.
 
-_lnsync_ also offers the ability to incorporate the file tree structure into the hash database, so that the database file by itself may used as an _offline file tree_, in place of the original directory. For example, a directory may be synced from an offline file tree.
+_lnsync_ also allows incorporating the file tree structure into the hash database, so that the database file by itself may used as an _offline file tree_, in place of the original directory. For example, a directory may be synced from an offline file tree.
 
 ## Using _lnsync_
 

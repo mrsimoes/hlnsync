@@ -1,21 +1,17 @@
 #!/usr/bin/env python
 
+# Based on:
+# Bytes-to-human / human-to-bytes converter.
+# Based on: http://goo.gl/kTQMs
+# Working with Python 2.x and 3.x.
+# Author: Giampaolo Rodola' <g.rodola [AT] gmail [DOT] com>
+# License: MIT
+
 """
 Convert numbers to and from human-readable form, using common suffixes.
 """
 
 from __future__ import print_function
-
-"""
-Based on:
-
-Bytes-to-human / human-to-bytes converter.
-Based on: http://goo.gl/kTQMs
-Working with Python 2.x and 3.x.
-Author: Giampaolo Rodola' <g.rodola [AT] gmail [DOT] com>
-License: MIT
-"""
-
 
 # see: http://goo.gl/kTQMs
 SYMBOLS = {
@@ -70,8 +66,8 @@ def bytes2human(value, format='%(value).1f %(symbol)s', symbols='customary'):
         raise ValueError("value < 0")
     symbols = SYMBOLS[symbols]
     prefix = {}
-    for i, s in enumerate(symbols[1:]):
-        prefix[s] = 1 << (i+1)*10
+    for i, sym in enumerate(symbols[1:]):
+        prefix[sym] = 1 << (i+1)*10
     for symbol in reversed(symbols[1:]):
         if value >= prefix[symbol]:
             value = float(value) / prefix[symbol]

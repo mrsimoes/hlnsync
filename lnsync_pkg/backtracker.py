@@ -11,7 +11,9 @@ On backtracking, the extension is undone by applying the delta 'up'.
 """
 
 from __future__ import print_function
-import lnsync_pkg.metadata as metadata
+
+import abc
+
 import lnsync_pkg.printutils as pr
 
 class SearchState(object):
@@ -20,18 +22,22 @@ class SearchState(object):
     Subclasses should implement make_delta_iter, down_delta,
     up_delta, and is_valid.
     """
+
+    @abc.abstractmethod
     def make_delta_iter(self):
         """Return either a non-empty delta iterator or None."""
-        raise NotImplementedError
-    def down_delta(self, delta):
+
+    @abc.abstractmethod
+    def down_delta(self, state_delta):
         """Apply a delta to obtain a child state."""
-        raise NotImplementedError
-    def up_delta(self, delta):
+
+    @abc.abstractmethod
+    def up_delta(self, state_delta):
         """Apply a delta to revert from a child state back to the parent."""
-        raise NotImplementedError
+
+    @abc.abstractmethod
     def is_valid(self):
         """Return True is the current state is valid."""
-        raise NotImplementedError
 
 def do_search(state):
     """Backtrack search for a valid leaf state, return True if one was found.
@@ -85,16 +91,18 @@ class QueensBoard(SearchState):
         else:
             return iter(xrange(self.board_size))
 
-    def down_delta(self, col):
+    def down_delta(self, state_delta):
+        col = state_delta
         row = self.next_row
         self.board[row][col] = 1
-        n = self.board_size
-        for delta in xrange(n):
+        bd_size = self.board_size
+        for delta in xrange(bd_size):
             for row_sign in (-1, 0, 1):
                 for col_sign in (-1, 0, 1):
-                    (r, c) = (row+row_sign*delta, col+col_sign*delta)
-                    if 0 <= r < n and 0 <= c < n and (r, c) != (row, col):
-                        if self.board[r][c] != 0:
+                    (oth_r, oth_c) = (row+row_sign*delta, col+col_sign*delta)
+                    if 0 <= oth_r < bd_size and 0 <= oth_c < bd_size \
+                            and (oth_r, oth_c) != (row, col):
+                        if self.board[oth_r][oth_c] != 0:
                             self.valid = False
                             self.next_row = row + 1
                             return
@@ -102,7 +110,8 @@ class QueensBoard(SearchState):
         self.valid = True
 
 
-    def up_delta(self, col):
+    def up_delta(self, state_delta):
+        col = state_delta
         assert self.next_row > 0, "Cannot go up from row 0."
         assert self.board[self.next_row-1][col] != 0, \
             "Queen expected at (%d,%d)" % (self.next_row-1, col)
@@ -116,19 +125,19 @@ class QueensBoard(SearchState):
     def __str__(self):
         rep = ""
         for row in self.board:
-            for e in row:
-                rep += ("- " if e == 0 else "* ")
+            for elem in row:
+                rep += ("- " if elem == 0 else "* ")
             rep += "\n"
         return rep
 
-if __name__ == "__main__":
+def _solve_n_queen():
     import sys
     try:
         assert len(sys.argv) == 2, "Wrong number of arguments."
-        board_size = int(sys.argv[1]), 
+        board_size = int(sys.argv[1]),
         assert board_size > 0, "Board size must be >=1."
-    except Exception as e:
-        print(e)
+    except Exception as exc:
+        print(exc)
         raise SystemExit("Usage: backtracker <n>\nSolve the n x n queen problem.")
     print("Solving the queens problem with board size %d" % board_size)
     board = QueensBoard(board_size)
@@ -136,3 +145,6 @@ if __name__ == "__main__":
         print(board)
     else:
         print("No solution found.")
+
+if __name__ == "__main__":
+    _solve_n_queen()

@@ -29,14 +29,14 @@ class FileHashDB(FilePropertyDB):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.sqlmanager is not None:
-            pr.info("closing %s [%s]" % (self.dbpath, self.mode))
+            pr.warning("closing %s [%s]" % (self.dbpath, self.mode))
         return super(FileHashDB, self).__exit__(exc_type, exc_val, exc_tb)
 
     def _get_prop_as_size(self, file_obj):
         return file_obj.file_metadata.size
 
     def _create_sql_manager(self, dbpath):
-        pr.info("opening %s [%s]" % (self.dbpath, self.mode))
+        pr.warning("opening %s [%s]" % (self.dbpath, self.mode))
         if self.mode == "offline" or not self.size_as_hash:
             super(FileHashDB, self)._create_sql_manager(dbpath)
 

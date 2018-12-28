@@ -154,12 +154,12 @@ class PathOp(object):
     def join(*pathops):
         """Create a PathOp by merging pathops."""
         if pathops == ():
-            total = PathOp.make_trivial()
+            total_op = PathOp.make_trivial()
         else:
-            total = pathops[0]
-            for p in pathops[1:]:
-                total.add(p)
-        return total
+            total_op = pathops[0]
+            for path_op in pathops[1:]:
+                total_op.add(path_op)
+        return total_op
 
     @staticmethod
     def make_mv(st_path):
@@ -259,25 +259,26 @@ class State(SearchState):
         src_sizes = set(self.dbs.src.get_all_sizes())
         tgt_sizes = set(self.dbs.tgt.get_all_sizes())
         common_sizes = set.intersection(src_sizes, tgt_sizes)
-        for sz in common_sizes:
-            sz_src_files = self.dbs.src.size_to_files(sz)
-            sz_tgt_files = self.dbs.tgt.size_to_files(sz)
+        for common_sz in common_sizes:
+            sz_src_files = self.dbs.src.size_to_files(common_sz)
+            sz_tgt_files = self.dbs.tgt.size_to_files(common_sz)
             src_hashes = [self.dbs.src.db_get_prop(f) for f in sz_src_files]
             tgt_hashes = [self.dbs.tgt.db_get_prop(f) for f in sz_tgt_files]
             sz_common_hashes = set.intersection(set(src_hashes), set(tgt_hashes))
-            for h in sz_common_hashes:
+            for hash_val in sz_common_hashes:
                 szhash_fileids_src = \
-                    [f.file_id for f in sz_src_files if self.dbs.src.db_get_prop(f) == h]
+                    [f.file_id for f in sz_src_files if self.dbs.src.db_get_prop(f) == hash_val]
                 szhash_fileids_tgt = \
-                    [f.file_id for f in sz_tgt_files if self.dbs.tgt.db_get_prop(f) == h]
-                self.szhash_to_ids[(sz, h)] = SrcTgt(szhash_fileids_src, szhash_fileids_tgt)
+                    [f.file_id for f in sz_tgt_files if self.dbs.tgt.db_get_prop(f) == hash_val]
+                self.szhash_to_ids[(common_sz, hash_val)] = \
+                    SrcTgt(szhash_fileids_src, szhash_fileids_tgt)
         szhash_skipped = set()
-        for sz_hash in self.szhash_to_ids:
-            srctgt_ids = self.szhash_to_ids[sz_hash]
+        for szhash in self.szhash_to_ids:
+            srctgt_ids = self.szhash_to_ids[szhash]
             if self._init_eliminated_now(srctgt_ids):
-                szhash_skipped.add(sz_hash)
+                szhash_skipped.add(szhash)
             else:
-                self.szhash_stack.append(sz_hash)
+                self.szhash_stack.append(szhash)
         for szhash in szhash_skipped:
             del self.szhash_to_ids[szhash]
 
@@ -307,7 +308,8 @@ class State(SearchState):
                     return True
         return False
 
-    def down_delta(self, delta):
+    def down_delta(self, state_delta):
+        delta = state_delta
         pr.debug("down: %s", delta)
         if delta.next_szhash:
             pr.debug("new sz-hash: %s", delta.next_szhash)
@@ -316,8 +318,10 @@ class State(SearchState):
             self.cur_srctgt_ids = copy.deepcopy(self.szhash_to_ids[delta.next_szhash])
         elif delta.skip_ids:
             pr.debug("ignoring leftover ids: %s", delta.skip_ids)
-            for s in delta.skip_ids.src: self.cur_srctgt_ids.src.remove(s)
-            for t in delta.skip_ids.tgt: self.cur_srctgt_ids.tgt.remove(t)
+            for s_id in delta.skip_ids.src:
+                self.cur_srctgt_ids.src.remove(s_id)
+            for t_id in delta.skip_ids.tgt:
+                self.cur_srctgt_ids.tgt.remove(t_id)
         elif not delta.final_check:
             pr.debug("new src-tgt id pair: %s", delta.srctgt_id)
             self.cur_srctgt_ids.src.remove(delta.srctgt_id.src)
@@ -331,17 +335,18 @@ class State(SearchState):
             self._valid = True
             pr.debug("valid: %s", self._valid)
 
-    def up_delta(self, delta):
+    def up_delta(self, state_delta):
+        delta = state_delta
         pr.debug("up : %s", delta)
         if delta.next_szhash:
             self.szhash_stack.append(delta.next_szhash)
             self.cur_srctgt_ids = SrcTgt([], [])
         elif delta.skip_ids:
             pr.debug("restoring leftover ids: %s", delta.skip_ids)
-            for s in delta.skip_ids.src:
-                self.cur_srctgt_ids.src.append(s)
-            for t in delta.skip_ids.tgt:
-                self.cur_srctgt_ids.tgt.append(t)
+            for s_id in delta.skip_ids.src:
+                self.cur_srctgt_ids.src.append(s_id)
+            for t_id in delta.skip_ids.tgt:
+                self.cur_srctgt_ids.tgt.append(t_id)
         elif not delta.final_check:
             self.cur_srctgt_ids.src.append(delta.srctgt_id.src)
             self.cur_srctgt_ids.tgt.append(delta.srctgt_id.tgt)
@@ -460,10 +465,10 @@ class State(SearchState):
             for id1 in ids1:
                 id1_matched = False
                 paths1 = db1.id_to_file(id1).relpaths
-                for p1 in paths1:
+                for path1 in paths1:
                     for id2 in unmt_ids_2:
                         paths2 = db2.id_to_file(id2).relpaths
-                        if p1 in paths2:
+                        if path1 in paths2:
                             mt_ids_1 += [id1]
                             mt_ids_2 += [id2]
                             unmt_ids_1.remove(id1)
@@ -489,10 +494,10 @@ class State(SearchState):
         elif len(src_ids) <= len(tgt_ids):
             res = match_either_way(src_ids, self.dbs.src, tgt_ids, self.dbs.tgt)
         else:
-            def rev(t):
-                return (t[1], t[0])
+            def reverse_pair(pair):
+                return (pair[1], pair[0])
             res = itertools.imap(
-                rev,
+                reverse_pair,
                 match_either_way(tgt_ids, self.dbs.tgt, src_ids, self.dbs.src)
                 )
         return res

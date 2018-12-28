@@ -24,6 +24,7 @@ import fnmatch
 import argparse
 import random
 import sys
+import abc
 from collections import defaultdict
 from sqlite3 import Error as SQLError
 
@@ -63,6 +64,8 @@ def pick_db_basename(dir_path, dbprefix):
             ndigit = 3
             return ("%%0%dd" % ndigit) % random.randint(0, 10*ndigit-1)
         db_basename = "%s%s.db" % (dbprefix, random_digit_str())
+#        import pdb; pdb.set_trace()
+        pr.info("will create '%s'." % db_basename)
     else:
         raise RuntimeError("too many db files in %s" % str(dir_path))
     return db_basename
@@ -88,17 +91,17 @@ class CreateDB(argparse.Action):
                 return FileHashDB(dbpath, mode="offline",
                                   size_as_hash=size_as_hash, maxsize=maxsize)
             else:
-                raise RuntimeError(self, "not a dir or file: %s" % dir_or_db)
+                raise RuntimeError("not a dir or file: %s" % dir_or_db)
         # Not all commands have these options, so default values are set here.
-        d = vars(namespace)
-        size_as_hash = d.get("bysize", False)
-        maxsize = d.get("maxsize", 0)
+        ns_vars = vars(namespace)
+        size_as_hash = ns_vars.get("bysize", False)
+        maxsize = ns_vars.get("maxsize", 0)
         if maxsize == 0:
             maxsize = None
-        if type(values) != list:
-            values = make_online_or_offline_db(values)
-        else:
+        if isinstance(values, list):
             values = map(make_online_or_offline_db, values)
+        else:
+            values = make_online_or_offline_db(values)
         setattr(namespace, self.dest, values) # Store this parameter in the Namespace.
 
 class CreateOnlineDB(CreateDB):
@@ -115,24 +118,24 @@ class CreateOnlineDB(CreateDB):
         if not isinstance(values, list):
             test_path_is_readable_dir(values)
         else:
-            for p in values:
-                test_path_is_readable_dir(p)
+            for path in values:
+                test_path_is_readable_dir(path)
         super(CreateOnlineDB, self).__call__(parser, namespace, values)
 
 class CreateOfflineDB(CreateDB):
     """Create FileHashDB objects given directory.
     """
     def __call__(self, parser, namespace, values, option_string=None):
-        def test_path_is_readable_file_or_none(path):
+        def test_path_is_readable_file(path):
             if os.path.exists(path):
                 if not os.path.isfile(path) or not os.access(path, os.R_OK):
                     msg = "%s is not a readable file" % path
                     parser.error(msg)
         if not isinstance(values, list):
-            test_path_is_readable_file_or_none(values)
+            test_path_is_readable_file(values)
         else:
-            for p in values:
-                test_path_is_readable_file_or_none(p)
+            for path in values:
+                test_path_is_readable_file(path)
         super(CreateOfflineDB, self).__call__(parser, namespace, values)
 
 class SetPrintutilsParam(argparse.Action):
@@ -140,22 +143,15 @@ class SetPrintutilsParam(argparse.Action):
     """
     def __init__(self, nargs=0, **kw): # Override default switch consuming argument following it.
         super(SetPrintutilsParam, self).__init__(nargs=0, **kw)
-#    def __call__(self, parser, namespace, values, option_string=None):
-#        attr_name = "option_%s" % self.dest
-#        prev_value = getattr(pr, attr_name)
-#        if isinstance(prev_value, bool):
-#            new_value = True
-#        elif isinstance(prev_value, int):
-#            new_value = prev_value + 1
-#        else:
-#            raise RuntimeError("unrecognized internal pr attribute: %s" % attr_name)
-#        setattr(namespace, self.dest, new_value) # self.dest is scroll, debug, etc. Disregard values==[].
-#        setattr(pr, attr_name, new_value)
+
+    @abc.abstractmethod
+    def __call__(self, parser, namespace, values, option_string=None):
+        "To be overridden."
+
 
 class IncreaseVerbosity(SetPrintutilsParam):
     def __call__(self, parser, namespace, values, option_string=None):
         pr.option_verbosity += 1
-#        setattr(namespace, self.dest, new_value) # self.dest is scroll, debug, etc. Disregard values==[].
 
 class DecreaseVerbosity(SetPrintutilsParam):
     def __call__(self, parser, namespace, values, option_string=None):
@@ -216,20 +212,20 @@ def do_sync(args):
         with args.targetdir as tgt_db:
             try:
                 matcher = TreePairMatcher(src_db, tgt_db)
-            except ValueError as e:
-                raise RuntimeError, str(e), sys.exc_info()[2]
+            except ValueError as exc:
+                raise RuntimeError, str(exc), sys.exc_info()[2]
             if not matcher.do_match():
                 msg = "match failed"
-                raise RuntimeError(msg)
+                raise RuntimeError, msg, sys.exc_info()[2]
             for cmd in matcher.generate_sync_cmds():
                 if not args.dry_run:
                     try:
                         tgt_db.exec_cmd(cmd)
-                    except OSError as e: # Catches e.g. linking not supported on target.
+                    except OSError: # Catches e.g. linking not supported on target.
                         msg = "could not execute: " + " ".join(cmd)
-                        raise RuntimeError(msg)
+                        raise RuntimeError, msg, sys.exc_info()[2]
                 pr.print(" ".join(cmd))
-            pr.info("lnsync: sync done")
+            pr.info("sync done")
 cmd_handlers["sync"] = do_sync
 
 ## update
@@ -238,9 +234,9 @@ parser_update = cmd_parsers.add_parser('update', \
         help='update hash values for all new and modified files')
 parser_update.add_argument("locations", action=CreateOnlineDB, nargs="*")
 def do_update(args):
-    with FileHashDBs(args.locations) as locations:
-        for db in locations:
-            db.db_update_all()
+    with FileHashDBs(args.locations) as databases:
+        for database in databases:
+            database.db_update_all()
 cmd_handlers["update"] = do_update
 
 ## rehash
@@ -249,17 +245,17 @@ parser_rehash = cmd_parsers.add_parser('rehash', parents=[dbprefix_option_parser
 parser_rehash.add_argument("topdir", action=CreateOnlineDB)
 parser_rehash.add_argument("relfilepaths", type=relative_path, nargs='+')
 def do_rehash(args):
-    with args.topdir as db:
+    with args.topdir as database:
         for relpath in args.relfilepaths:
-            file_obj = db.follow_path(relpath)
+            file_obj = database.follow_path(relpath)
             if file_obj is None or not file_obj.is_file():
-                pr.error("lnsync: not a relative path to a file: %s" % str(relpath))
+                pr.error("not a relative path to a file: %s" % str(relpath))
                 continue
             try:
-                db.do_recompute_file(file_obj)
-            except Exception as e:
-                pr.debug(e)
-                pr.error("lnsync: cannot rehash %s" % db.printable_path(relpath))
+                database.do_recompute_file(file_obj)
+            except Exception as exc:
+                pr.debug(str(exc))
+                pr.error("cannot rehash %s" % database.printable_path(relpath))
                 continue
 cmd_handlers["rehash"] = do_rehash
 
@@ -301,56 +297,57 @@ parser_fdupes = \
         help='find duplicate files')
 parser_fdupes.add_argument("locations", action=CreateDB, nargs="*")
 def do_fdupes(args):
-    """
-    Find duplicates, using file size as well as file hash.
+    """Find duplicates, using file size as well as file hash.
     """
     sizes_seen_once, sizes_seen_twice = set(), set()
     with FileHashDBs(args.locations) as all_dbs:
-        for db in all_dbs:
-            pr.progress("assembling sizes for %s ." % db.printable_path(""))
-            for sz in db.size_to_files():
-                if (sz in sizes_seen_once) or (len(db.size_to_files(sz)) > 1):
-                    sizes_seen_twice.add(sz)
+        for database in all_dbs:
+            pr.progress("assembling sizes for %s ." % database.printable_path(""))
+            for file_sz in database.size_to_files():
+                if (file_sz in sizes_seen_once) \
+                    or (len(database.size_to_files(file_sz)) > 1):
+                    sizes_seen_twice.add(file_sz)
                 if args.hardlinks:
                     # In this case, a size value seen once for an id
                     # with multiple paths is recorded as a dupe.
-                    sz_files = db.size_to_files(sz)
-                    if any(len(sz_file.relpaths) > 1 for sz_file in sz_files):
-                        sizes_seen_twice.add(sz)
-                sizes_seen_once.add(sz)
+                    files_this_sz = database.size_to_files(file_sz)
+                    if any(len(_f.relpaths) > 1 for _f in files_this_sz):
+                        sizes_seen_twice.add(file_sz)
+                sizes_seen_once.add(file_sz)
         del sizes_seen_once
         grouped_repeats = []            # Dupe paths, grouped by common contents.
-        for sz in sizes_seen_twice:
+        for file_sz in sizes_seen_twice:
             hashes_seen_once = set()    # For size sz and all databases.
             hashes_seen_twice = set()
             hash_to_fpaths = {}
-            for db in all_dbs:
-                if sz in db.size_to_files():
-                    for fobj in db.size_to_files(sz):
+            for database in all_dbs:
+                if file_sz in database.size_to_files():
+                    for fobj in database.size_to_files(file_sz):
                         try:
-                            hval = db.db_get_prop(fobj) # Raises RuntimeError on failure.
-                        except Exception as e:
+                            hash_val = database.db_get_prop(fobj) # Raises RuntimeError on failure.
+                        except Exception:
                             msg = "could not hash file id '%d'." % fobj.file_id
                             pr.warning(msg)
                             continue
-                        if hval in hashes_seen_once or \
+                        if hash_val in hashes_seen_once or \
                             (args.hardlinks and len(fobj.relpaths) > 1):
-                            hashes_seen_twice.add(hval)
-                        hashes_seen_once.add(hval)
-                        if not hval in hash_to_fpaths:
-                            hash_to_fpaths[hval] = []
-                        this_file_paths = [db.printable_path(p) for p in fobj.relpaths]
+                            hashes_seen_twice.add(hash_val)
+                        hashes_seen_once.add(hash_val)
+                        if not hash_val in hash_to_fpaths:
+                            hash_to_fpaths[hash_val] = []
+                        this_file_paths = [database.printable_path(_p) for _p in fobj.relpaths]
                         if args.hardlinks:
-                            this_file_paths[1:] = ["= " + p for p in this_file_paths[1:]]
-                        hash_to_fpaths[hval] += this_file_paths
+                            this_file_paths[1:] = ["= " + _p for _p in this_file_paths[1:]]
+                        hash_to_fpaths[hash_val] += this_file_paths
             for rep_hash in hashes_seen_twice: # Unequal sizes correspond to unequal hash values.
                 grouped_repeats.append(hash_to_fpaths[rep_hash])
     output_leading_linebreak = False
-    for gr in grouped_repeats:
+    for repeat_set in grouped_repeats:
         if output_leading_linebreak:
             pr.print(" ")
-        else: output_leading_linebreak = True
-        for fpath in gr:
+        else:
+            output_leading_linebreak = True
+        for fpath in repeat_set:
             pr.print(fpath)
 cmd_handlers["fdupes"] = do_fdupes
 
@@ -369,28 +366,29 @@ def do_onall(args):
         first_db = all_dbs[0]
         other_dbs = all_dbs[1:]
         common_sizes = set(first_db.get_all_sizes())
-        for db in other_dbs:
-            pr.progress("assembling sizes for %s ." % db.printable_path(""))
-            common_sizes.intersection_update(db.get_all_sizes())
-        def size_to_hashes(adb, sz):
+        for database in other_dbs:
+            pr.progress("assembling sizes for %s ." % database.printable_path(""))
+            common_sizes.intersection_update(database.get_all_sizes())
+        def size_to_hashes(a_db, file_sz):
             "Generate all prop values for files of size sz on database adb."
-            for f in adb.size_to_files(sz):
-                yield adb.db_get_prop(f) # Raises RuntimeError on failure.
-        for sz in common_sizes:
-            common_hashes_this_sz = set(size_to_hashes(first_db, sz))
-            for db in other_dbs:
-                hashes_this_db = set(size_to_hashes(db, sz))
+            for file_obj in a_db.size_to_files(file_sz):
+                yield a_db.db_get_prop(file_obj) # Raises RuntimeError on failure.
+        for file_sz in common_sizes:
+            common_hashes_this_sz = set(size_to_hashes(first_db, file_sz))
+            for database in other_dbs:
+                hashes_this_db = set(size_to_hashes(database, file_sz))
                 common_hashes_this_sz.intersection_update(hashes_this_db)
             common_hash_paths = defaultdict(lambda: [])
-            for db in all_dbs:
-                for f in db.size_to_files(sz):
-                    h = db.db_get_prop(f) # Raises RuntimeError on failure.
-                    if h in common_hashes_this_sz:
-                        paths = [db.printable_path(rp) for rp in f.relpaths]
-                        common_hash_paths[h] += paths
-            for h, paths in common_hash_paths.iteritems():
-                for p in paths:
-                    pr.print(p)
+            for database in all_dbs:
+                for file_obj in database.size_to_files(file_sz):
+                    hash_val = database.db_get_prop(file_obj) # Raises RuntimeError on failure.
+                    if hash_val in common_hashes_this_sz:
+                        paths = [database.printable_path(rpath) \
+                                 for rpath in file_obj.relpaths]
+                        common_hash_paths[hash_val] += paths
+            for hash_val, paths in common_hash_paths.iteritems():
+                for path in paths:
+                    pr.print(path)
                 pr.print("\n")
 cmd_handlers['onall'] = do_onall
 
@@ -409,23 +407,24 @@ def do_onfirstonly(args):
     with FileHashDBs(args.locations) as all_dbs:
         first_db = all_dbs[0]
         other_dbs = all_dbs[1:]
-        for sz in first_db.get_all_sizes():
+        for file_sz in first_db.get_all_sizes():
             sz_other_db_hashes = set()
-            for db in other_dbs:
-                if sz in db.size_to_files():
-                    for f in db.size_to_files(sz): # db_get_prop raises RuntimeError.
-                        sz_other_db_hashes.add(db.db_get_prop(f))
-            for f in first_db.size_to_files(sz):
-                if not first_db.db_get_prop(f) in sz_other_db_hashes:
+            for database in other_dbs:
+                if file_sz in database.size_to_files():
+                    for file_obj in database.size_to_files(file_sz):
+                        # db_get_prop raises RuntimeError.
+                        sz_other_db_hashes.add(database.db_get_prop(file_obj))
+            for file_obj in first_db.size_to_files(file_sz):
+                if not first_db.db_get_prop(file_obj) in sz_other_db_hashes:
                             # db_get_prop raises RuntimeError on failure.
-                    paths = f.relpaths
+                    paths = file_obj.relpaths
                     pr.print(paths[0])
                     if not args.hardlinks:
-                        fs = "= %s"
+                        format_str = "= %s"
                     else:
-                        fs = "%s"
-                    for p in paths[1:]:
-                        pr.print(fs, p)
+                        format_str = "%s"
+                    for path in paths[1:]:
+                        pr.print(format_str, path)
 cmd_handlers["onfirstonly"] = do_onfirstonly
 
 ## cmp
@@ -483,14 +482,14 @@ parser_lookup.add_argument("location", action=CreateDB)
 parser_lookup.add_argument("relpath", type=relative_path)
 def do_lookup(args):
     "Handler for looking up a fpath hash in the DB."
-    with args.location as db:
+    with args.location as database:
         fpath = args.relpath
-        fobj = db.follow_path(fpath)
+        fobj = database.follow_path(fpath)
         if fobj is None or not fobj.is_file():
-            pr.error("lnsync: not a file: %s" % str(fpath))
+            pr.error("not a file: %s" % str(fpath))
         else:
-            h = db.db_get_prop(fobj)
-            pr.print(h)
+            hash_val = database.db_get_prop(fobj)
+            pr.print(hash_val)
 cmd_handlers["lookup"] = do_lookup
 
 ## check
@@ -504,24 +503,24 @@ parser_check_files.add_argument("location", action=CreateOnlineDB)
 parser_check_files.add_argument("relpaths", type=relative_path, nargs="*")
 
 def do_check(args):
-    with args.location as db:
-        if db.mode == "offline":
+    with args.location as database:
+        if database.mode == "offline":
             raise ValueError("cannot check files in offline mode")
         which_files_gen = args.relpaths
         if len(which_files_gen) == 0:
             def gen_all_paths():
-                for _obj, _parent, path in db.walk_paths():
+                for _obj, _parent, path in database.walk_paths():
                     yield path
             which_files_gen = gen_all_paths()
         num_changed = 0
         for path in which_files_gen:
             pr.progress("checking: %s" % path)
             try:
-                fobj = db.follow_path(path)
-                res = db.db_check_prop(fobj)
-            except Exception as e:
-                pr.warning("lnsync: error checking %s" % path)
-                pr.warning(e)
+                fobj = database.follow_path(path)
+                res = database.db_check_prop(fobj)
+            except Exception as exc:
+                pr.warning("error while checking %s" % path)
+                pr.warning(str(exc))
             else:
                 if res is False:
                     pr.print(path)
@@ -549,8 +548,10 @@ def do_rsync(args):
     """
     import pipes
     src_dir, tgt_dir = args.sourcedir, args.targetdir
-    if src_dir[-1] != os.sep: src_dir += os.sep # rsync needs trailing / on sourcedir.
-    while tgt_dir[-1] == os.sep: tgt_dir = tgt_dir[:-1]
+    if src_dir[-1] != os.sep:
+        src_dir += os.sep # rsync needs trailing / on sourcedir.
+    while tgt_dir[-1] == os.sep:
+        tgt_dir = tgt_dir[:-1]
     src_dir = pipes.quote(src_dir)
     tgt_dir = pipes.quote(tgt_dir)
     rsync_opts = "-r -t -v -H --progress --delete-before"
@@ -563,8 +564,8 @@ def do_rsync(args):
     if args.execute:
         try:
             os.system(rsync_cmd)
-        except Exception as e:
-            pr.debug(e)
+        except Exception as exc:
+            pr.debug(str(exc))
             msg = "error executing '%s'." % rsync_cmd
             raise RuntimeError, msg, sys.exc_info()[2] # Chain exception.
 cmd_handlers["rsync"] = do_rsync
@@ -597,9 +598,9 @@ parser_rmoffline.add_argument("database", action=CreateOfflineDB)
 def do_rmoffline(args):
     """Clear offline tree info from a database.
     """
-    with args.database as db:
+    with args.database as database:
         pr.info("clearing directory info...")
-        db.db_clear_tree()
+        database.db_clear_tree()
 cmd_handlers["rmoffline"] = do_rmoffline
 
 
@@ -613,8 +614,8 @@ parser_cleandb.add_argument("location", action=CreateOnlineDB)
 def do_cleandb(args):
     """Purge old entries from db.
     """
-    with args.location as db:
-        db.db_purge()
+    with args.location as database:
+        database.db_purge()
 cmd_handlers["cleandb"] = do_cleandb
 
 def main():
@@ -627,24 +628,23 @@ def main():
         handler_fn = cmd_handlers[args.cmdname]
         try:
             handler_fn(args)
-        except Exception as e:
+        except Exception as exc:
             if __debug__:
-                print(type(e), e)
-                import pdb; pdb.set_trace()
-            raise type(e), e, sys.exc_info()[2]
+                print(type(exc), exc)
+            raise type(exc), exc, sys.exc_info()[2]
         sys.exit(0)
     except KeyboardInterrupt:
         raise SystemExit("lnsync: interrupted")
-    except NotImplementedError as e:
-        pr.error("lnsync: not implemented for your system: %s", str(e))
-    except RuntimeError as e: # Includes NotImplementedError
-        pr.error("lnsync: runtime error: %s" % str(e))
-    except SQLError as e:
-        pr.error("lnsync: database error: %s" % str(e))
-    except AssertionError as e:
-        pr.error("lnsync: internal check failed: %s" % str(e))
-    except Exception as e:
-        pr.error("lnsync: general exception: %s" % str(e))
+    except NotImplementedError as exc:
+        pr.error("not implemented on your system: %s", str(exc))
+    except RuntimeError as exc: # Includes NotImplementedError
+        pr.error("runtime error: %s" % str(exc))
+    except SQLError as exc:
+        pr.error("database error: %s" % str(exc))
+    except AssertionError as exc:
+        pr.error("internal check failed: %s" % str(exc))
+    except Exception as exc:
+        pr.error("general exception: %s" % str(exc))
     finally:
         sys.exit(1)
 
