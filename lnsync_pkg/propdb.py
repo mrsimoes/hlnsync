@@ -150,6 +150,18 @@ class FilePropertyDB(FileTree):
         self.sqlmanager.vacuum()
         pr.info("database cleaned")
 
+    def _db_get_prop_from_db(self, f_obj):
+        """Return a file property value from db only, or None if not available.
+
+        Raises RuntimeError in case of a database error."""
+        res = None
+        try:
+            res = self.sqlmanager.get_propvalue_metadata(f_obj.file_id)
+        except Exception:
+            msg = "error reading prop db for file id '%d'." % (f_obj.file_id)
+            raise RuntimeError(msg)
+        return res
+
     def db_get_prop(self, f_obj):
         """Return a file property value, from db if possible, updating db if needed.
 
@@ -159,11 +171,7 @@ class FilePropertyDB(FileTree):
         if f_obj.prop_value is not None:
             return f_obj.prop_value
         else:
-            try:
-                res = self.sqlmanager.get_propvalue_metadata(f_obj.file_id)
-            except Exception:
-                msg = "error reading prop db for file id '%d'." % (f_obj.file_id)
-                raise RuntimeError(msg)
+            res = self._db_get_prop_from_db(f_obj)
             if res is not None:
                 f_obj.prop_value = res[0]
                 f_obj.prop_metadata = res[1]
@@ -248,17 +256,29 @@ class FilePropertyDB(FileTree):
 
         Also, delete from the db all files that could not be read.
         """
+        assert self.mode == "online"
         error_files = set()
+        update_files = set()
         try:
             for fobj, parent, path in self.walk_paths(dirs=False, recurse=True):
                 try:
-                    self.db_get_prop(fobj)
+                    res = self._db_get_prop_from_db(fobj)
                 except Exception as exc:
                     pr.warning("error processing file %s" % path)
                     pr.debug(exc)
                     error_files.add(fobj)
-                for err_fobj in error_files:
-                    self._rm_file(err_fobj)
+                else:
+                    if res is None:
+                        update_files.add(fobj)
+            for err_fobj in error_files:
+                self._rm_file(err_fobj)
+            tot_update_files = len(update_files)
+            try:
+                for index, update_fobj in enumerate(update_files):
+                    pr.PROGRESS_PREFIX = "%d/%d " % (index+1, tot_update_files)
+                    self.db_get_prop(update_fobj)
+            finally:
+                pr.PROGRESS_PREFIX = ""
         finally:
             self.sqlmanager.commit()
 
@@ -305,6 +325,7 @@ class SQLPropDBManager(object):
         """
         if os.path.exists(dbpath):
             raise RuntimeError("file already exists at %s" % dbpath)
+        pr.info("will create '%s'." % dbpath)
         sql_cx = None
         try:
             sql_cx = sqlite3.connect(dbpath)

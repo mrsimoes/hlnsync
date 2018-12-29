@@ -239,6 +239,9 @@ class FileTree(object):
             if skipbasenames is not None and obj_bname in skipbasenames:
                 pr.warning("ignored %s" % obj_abspath)
                 yield (obj_bname, None, OtherObj, None)
+            elif os.path.islink(obj_abspath):
+                pr.warning("ignored softlink %s" % obj_abspath)
+                yield (obj_bname, None, OtherObj, None)
             elif os.path.isdir(obj_abspath):
                 if not os.access(obj_abspath, os.R_OK + os.X_OK):
                     pr.warning("ignored no-rx-access dir %s" % obj_abspath)

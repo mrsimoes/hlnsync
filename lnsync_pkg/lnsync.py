@@ -64,8 +64,6 @@ def pick_db_basename(dir_path, dbprefix):
             ndigit = 3
             return ("%%0%dd" % ndigit) % random.randint(0, 10*ndigit-1)
         db_basename = "%s%s.db" % (dbprefix, random_digit_str())
-#        import pdb; pdb.set_trace()
-        pr.info("will create '%s'." % db_basename)
     else:
         raise RuntimeError("too many db files in %s" % str(dir_path))
     return db_basename

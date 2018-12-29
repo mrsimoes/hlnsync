@@ -25,10 +25,14 @@ import time
 import atexit
 import threading
 
+# Tell pylint not to mistake module variables for constants
+# pylint: disable=C0103
+
 # Set by the module user.
 option_verbosity = 1
 
 APP_PREFIX = ""
+PROGRESS_PREFIX = ""
 
 # How many characters were printed to stdout in the last progress line,
 # or None if last line printed to stdout was not a progress line
@@ -95,7 +99,7 @@ def progress(*args, **kwargs):
         return
 #    _builtin_print("\r", end="")
     tot_chars = 0
-    for pr_item in args:
+    for pr_item in (PROGRESS_PREFIX,) + args:
         pr_item = str(pr_item).replace("\n", "\\n")
         try:
             item_chars = len(pr_item.decode('utf-8'))
