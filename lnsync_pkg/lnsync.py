@@ -34,6 +34,9 @@ from lnsync_pkg.human2bytes import human2bytes
 from lnsync_pkg.hashdb import FileHashDB, FileHashDBs, copy_hashdb
 from lnsync_pkg.matcher import TreePairMatcher
 
+# Tell pylint not to mistake module variables for constants
+# pylint: disable=C0103
+
 DEFAULT_DBPREFIX = "lnsync-"
 
 DESCRIPTION = (
@@ -552,7 +555,8 @@ def do_rsync(args):
         tgt_dir = tgt_dir[:-1]
     src_dir = pipes.quote(src_dir)
     tgt_dir = pipes.quote(tgt_dir)
-    rsync_opts = "-r -t -v -H --progress --delete-before"
+    # Options for rsync: recursive, preserve hardlinks.
+    rsync_opts = "-r -H --progress --delete-before"
     if args.maxsize > 0:
         rsync_opts += " --max-size %d" % args.maxsize
     rsync_opts += " ".join(args.rsyncargs)
