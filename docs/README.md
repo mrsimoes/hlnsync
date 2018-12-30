@@ -2,107 +2,105 @@
 
 ## Introduction
 
-_lnsync_ provides unidirectional local file tree sync by content, with support for hardlinks (multiple pathnames per file).
+_lnsync_ provides unidirectional local file tree sync with rename detection and support for hardlinks.
 
-### Purpose
+### Purpose and Operation
 
-Suppose file trees at local source and target directories are in sync. If files are renamed/moved in the source tree, _lnsync_ syncs by renaming/moving on the target, rather than deleting and recopying from the source. In general, the source hardlink structure is replicated on the target.
+If source and target file trees are in sync and files are renamed/moved within the source, _lnsync_  matches files by size and content and syncs the target solely by renaming, instead of deleting and recopying. Since _lnsync_ never creates or deletes data on the target, it may be used as a preprocessing step for another sync tool, such as _rsync_.
 
-### Operation
+File content is compared using hashes, which _lnsync_ stores in single-file databases at the top-level of each file tree. Using those hashes, _lnsync_ can also find duplicate files (like _fdupes_), compare file trees, and check for changes/bitrot.
 
-_lnsync_ matches files by content (by using a file hash database kept at the root of the file tree) and adds/renames/removes links (pathnames) on the target to replicate the source hardlink structure. No new files are ever created on the target and the last link for a file is never removed on the target. Therefore, _lnsync_ may be used as a preprocessing step for other sync tools, such as _rsync_.
-
-Using those file hashes, _lnsync_ can also quickly finding duplicate files (like _fdupes_), compare file trees, and check files for changes/bitrot.
+On certain file systems (e.g. ext3/4 and btrfs), each file may be associated to more than one file path, which function as equivalent aliases. A new path created for an existing file is a _hardlink_, but all such aliases are on an equal footing, so each may be called a hardlink.
 
 ### Alternative Solutions
 
-Numerous tools already exist for syncing, and some are suitable for the purpose described above:
+Many tools exist for syncing with rename detection:
 
-- Patches for _rsync_ have been published that provide some of this functionality (see --detect-renamed), relying mostly on file size and modification time, or matching files in nearby directories. Unlike _rsync_, _lnsync_ does not offer a network client/server protocol.
+- Patches for _rsync_ have been published (see --detect-renamed), relying on file size and modification time, or matching files in nearby directories. Unlike _rsync_, _lnsync_ does not offer a network protocol.
 
-- [bsync](https://github.com/dooblem/bsync) provides network syncing with moved files detection, but does not seem to handle hardlinks.
+- [bsync](https://github.com/dooblem/bsync) provides network syncing with rename detection, but no support for hardlinks.
 
-- _git_ itself is based on syncing by content, and has been adapted for the above purpose.
+- _git_ itself is based on syncing by content, and has been adapted for syncing.
 
-- Some modern file systems with support for snapshots (e.g. btrfs) may provide a basis for this functionality, while _lnsync_ is meant to be used file systems in common use today, including ext2/3/4, vfat, and ntfs.
+- Support in modern file systems (e.g. btrfs) for snapshots may be adapted for syncing.
 
 ### Hash Databases and Offline File Trees
 
-The hash database file is created at the root of the file tree, by default with a randomly chosen basename matching `lnsync-[0-9]+.db`. Only one such file may exist there. These files are ignored by all _lnsync_ operations, and they should not be copied from source to target when using other sync tools.
+The hash database is a single file at the top directory of any tree processed, with basename matching `lnsync-[0-9]+.db`. (Only one such file should exist at that location.) These files are ignored by _lnsync_ operations, and should not be copied from source to target when syncing with other tools.
 
-_lnsync_ also allows incorporating the file tree structure into the hash database, so that the database file by itself may used as an _offline file tree_, in place of the original directory. For example, a directory may be synced from an offline file tree.
+_lnsync_ also allows incorporating the file tree structure into the hash database, turning into an _offline file tree_, which may be used place of the original directory for certain purposes: a target directory may be synced from a source offline file tree and _lnsync_ may search for files common to an offline file tree and a given local directory.
 
-## Using _lnsync_
+## Installation and Quickstart
 
-All _lnsync_ commands are of the form `lnsync [<global-options>] <command> [<cmd-options>] [<cmd-parameters>]`.
+### Installing
 
-Brief descriptions follow.
+From the test PyPI repository with `pip install --extra-index-url=https://test.pypi.org/simple/ lnsync`.
 
-### Creating and Updating Hash Databases
+Or, download and extract the source files and run `python setup.py install`.
 
-To update the hash database, creating a new database if none exists, and rehashing all new and modified files:
+### Example Usage
 
-- `lnsync update <dir>`
+If you reorganize your photo collection, renaming and moving around files and directories, _lnsync_ will mirror those changes to your backup. Also, if you use hardlinks to organize your photo collection, _lnsync_ will replicate that structure to the backup.
 
-To force rehash of files specified by paths relative to the root `dir`:
+If you have your photo archive at `/home/you/Photos` and your backup is at `/mnt/disk/Photos`, run `lnsync sync /home/you/Photos /mnt/disk/Photos` to sync. For a dry run: `lnsync sync -n /home/you/Photos /mnt/disk/Photos`. Use `-z` to match files by size only.
 
-- `lnsync rehash <dir> [<relpath>]+` 
+To recursively compare source and backup, run `lnsync cmp /home/you/Photos /mnt/disk/Photos`. As before, use `-z` to compare by size only.
 
-To update the hash database at `relsubdir` using any hash value already present in the hash database for `dir`.
+To quickly obtain an _rsync_ command taht will complete syncing, skipping the hash database files, run `lnsync rsync /home/you/Photos /mnt/disk/Photos`. To also run this command, use the `-x` switch. Make sure the `rsync` options provided by this command are suitable for you.
 
-- `lnsync subdir <dir> <relsubdir>` 
+To find duplicate files on the Photos directory, run `lnsync fdupes /home/you/Photos`. Use `-H` to count different hardlinks to the same file as duplicates.
 
-To incorporate file tree structure into the file hash database at the root of `dir`:
+To find all files in Photos which are not in the backup (under any name), run `lnsync onfirstonly /home/you/Photos /mnt/disk/Photos`.
 
-- `lnsync mkoffline <dir>`
 
-To remove file tree structure from a hash database:
-
-- `lnsync rmoffline <databasefile>`
-
-To remove outdated entries and re-compact the database.
-
-- `lnsync cleandb <dir>` 
+## Command Reference
+All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [<cmd-parameters>]`.
 
 ### Syncing
 
-To sync a target dir from a source dir (or offline tree):
+- `lnsync sync [-d] [-M <size>] <source> <target>` to sync a target dir from a source dir (or offline tree).
 
-- `lnsync sync [-d] <source> <target>`.
+First target files are matched to source files. Each matched target file is associated to a single source file. If either file system supports hardlinks, a file may have multiple pathnames. _lnsync_ will not complain if the match is not unique or some files are not matched on either source and/or target.
 
-First target files are matched to source files. Each matched target file is associated to a single source file. If either file system supports hardlinks, a file may have multiple pathnames (hardlinks).
+For each matched target file, its pathnames are set to match those of the corresponding source file, by renaming, deleting, or creating hardlinks. New intermediate subdirectories are created as needed on the target; directories which become empty on the target are not removed. Also, if distinct source files A, B, C are renamed B, C, A on the target, undoing this cycle is currently not supported.
 
-Then for each matched target file, its pathnames are set to match those of the corresponding source file, by
-renaming and deleting its hardlinks, or creating new hardlinks for it. New intermediate subdirectories are created as needed on the target; directories that become empty on the target are not removed. If distinct source files A, B, C are renamed B, C, A on the target, undoing this cycle is currently not supported.
+If the `-z` switch is used, files are matched by size only and hash databases are not created or updated.
 
-To print an rsync command that will sync target dir from source dir or offline tree:
+If the `-M` option is given, only files of size at most `<size>` are considered for matching. Size may be given in human form: `10k`, `2.1M`, `3G`, etc.
 
-- `lnsync rsync <tree> <dir>` .
+Use the `-n` for a dry-run, showing which operations would be executed. 
 
+_lnsync_ will not copy file data from the source or delete file data from the target. To quickly obtain an _rsync_ command which will complete syncing target from source, run `lnsync rsync <source> <target>`. Make sure the `rsync` options given are suitable for your purpose. To also run the rsync command, use the `-x` switch.
+
+- `lnsync rsync <tree> <dir>` to print an rsync command that will sync target dir from source dir or offline tree.
+
+### Creating and Updating Hash Databases
+
+- `lnsync update <dir>` to update the hash database, creating a new database if none exists, and rehashing all new files and those with a changed modification time (mtime).
+
+- `lnsync rehash <dir> [<relpath>]+` to force rehash of files specified by paths relative to the root `dir`.
+
+- `lnsync subdir <dir> <relsubdir>` to update the hash database at `relsubdir` using any hash value already present in the hash database for `dir`.
+
+- `lnsync mkoffline <dir>` to incorporate file tree structure into the file hash database at the root of `dir`.
+
+- `lnsync rmoffline <databasefile>` to remove file tree structure from a hash database.
+
+- `lnsync cleandb <dir>` to remove outdated entries and re-compact the database.
 
 ### Obtaining Information
 
-To get the hash value for files:
+- `lnsync lookup <tree> [<relpath>+]` to lookup the hash value for the files, where `tree` may be a a directory or an offline tree.
 
-- `lnsync lookup <tree> <relpath>` Print the hash value for the given file. `tree` may be a a directory or an offline database.
+- `lnsync cmp <tree1> <tree2>` to recursively compare two file trees.
 
-To compare two file trees:
-
-- `lnsync cmp <tree1> <tree2>`
-
-To check for duplicate files:
-
-- `lnsync fdupes [<tree>]+` Find files files duplicated anywhere on the given trees.
+- `lnsync fdupes [-h] [<tree>]+` Find files files duplicated anywhere on the given trees.
 
 - `lnsync onall [<tree>]+` Find files with at least one copy on each tree.
 
 - `lnsync onfirstonly [<tree>]+` Find files on the first tree which are not duplicated anywhere on any other tree.
 
-For the above commands, the `-h` flag will make _lnsync_ handle hardlinks to the same file as duplicates within each tree.
-
-Finally, _lnsync_ provides for recomputing file hash signatures and comparing to the previously stored signature, to check for changes/bitrot.
-
-- `lnsync check [<tree>] [<path>]*` Print files that exist on the first tree and on no other tree.
+- `lnsync check [<tree>] [<path>]*` Recompute hashes for given files and compare to the hash stored in the dagtabase, to check for changes/bitrot.
 
 ## Limitations and Future Developments
 
@@ -116,24 +114,25 @@ Finally, _lnsync_ provides for recomputing file hash signatures and comparing to
 
 - Filenames are not required to be valid UTF8, to accomodate older archives.
 
-- Bare minimum support for case-insensitive, case- preserving file systems like VFAT. E.g.: if a target file name differs from its source match in casing only, no change is applied.
-
-- mtimes are ignored.
+- Minimum support for case-insensitive, case-preserving file systems like vfat: if a target file name differs from source match in case only, target is not updated.
 
 ### Possible Improvements
 
+- Delete empty directories on the target which match empty directories on the source.
+
 - Take advantage of multiple CPUs to hash multiple files in parallel.
 
-- Matching algorithm works well in simple cases, but could be further developed and optimized.
+- Match algorithm works well in simple cases, but could be further developed and optimized.
 
 - Support for excluding/including files by regexp.
 
-- No support for checking duplicates by actual content, not just hash.
+- Support checking for duplicates by actual content, not just hash.
 
-- Rollback changes to target in case of failure.
+- Update target mtimes from source.
 
 - Sort duplicates, e.g. by name or mtime.
 
-- Support for Python 3.
+- Run on Python 3.
 
-- Detect renamed directories to present a shorter schedule of target sync operations.
+- Detect renamed directories to obtain a more compact sync schedule.
+

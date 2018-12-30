@@ -150,18 +150,6 @@ class FilePropertyDB(FileTree):
         self.sqlmanager.vacuum()
         pr.info("database cleaned")
 
-    def _db_get_prop_from_db(self, f_obj):
-        """Return a file property value from db only, or None if not available.
-
-        Raises RuntimeError in case of a database error."""
-        res = None
-        try:
-            res = self.sqlmanager.get_propvalue_metadata(f_obj.file_id)
-        except Exception:
-            msg = "error reading prop db for file id '%d'." % (f_obj.file_id)
-            raise RuntimeError(msg)
-        return res
-
     def db_get_prop(self, f_obj):
         """Return a file property value, from db if possible, updating db if needed.
 
@@ -171,7 +159,12 @@ class FilePropertyDB(FileTree):
         if f_obj.prop_value is not None:
             return f_obj.prop_value
         else:
-            res = self._db_get_prop_from_db(f_obj)
+            res = None
+            try:
+                res = self.sqlmanager.get_prop_metadata(f_obj.file_id)
+            except Exception:
+                msg = "error reading prop db for file id '%d'." % (f_obj.file_id)
+                raise RuntimeError(msg)
             if res is not None:
                 f_obj.prop_value = res[0]
                 f_obj.prop_metadata = res[1]
@@ -192,7 +185,7 @@ class FilePropertyDB(FileTree):
         f_obj.prop_value = prop_value
         f_obj.prop_metadata = f_obj.file_metadata
         try:
-            self.sqlmanager.insert_propvalue_metadata(
+            self.sqlmanager.set_prop_metadata(
                 f_obj.file_id,
                 prop_value,
                 f_obj.prop_metadata)
@@ -209,7 +202,7 @@ class FilePropertyDB(FileTree):
         """
         assert self.mode == "online" and self.rootdir_obj is not None
         assert file_obj is not None and file_obj.is_file()
-        cached_prop_times = self.sqlmanager.get_propvalue_metadata(file_obj.file_id)
+        cached_prop_times = self.sqlmanager.get_prop_metadata(file_obj.file_id)
         if cached_prop_times is None:
             raise RuntimeError("no prop value cached for %s." % file_obj.relpaths)
         else:
@@ -234,13 +227,13 @@ class FilePropertyDB(FileTree):
                 obj_is_file = 0
                 obj_id = obj.dir_id
                 obj_basename = os.path.basename(path)
-            self.sqlmanager.insert_dir_content(dir_id, obj_basename, obj_id, obj_is_file)
+            self.sqlmanager.set_dir_content(dir_id, obj_basename, obj_id, obj_is_file)
         tot_items = len(self._id_to_file)
         cur_item = 0
         for f_id, f_obj in self._id_to_file.iteritems():
             pr.progress_percentage(cur_item, tot_items, prefix="updating file metadata")
             cur_item += 1
-            self.sqlmanager.insert_metadata(f_id, f_obj.file_metadata)
+            self.sqlmanager.set_metadata(f_id, f_obj.file_metadata)
         self.sqlmanager.commit()
 
     def db_clear_tree(self):
@@ -262,7 +255,7 @@ class FilePropertyDB(FileTree):
         try:
             for fobj, parent, path in self.walk_paths(dirs=False, recurse=True):
                 try:
-                    res = self._db_get_prop_from_db(fobj)
+                    res = self.sqlmanager.get_prop_metadata(fobj.file_id)
                 except Exception as exc:
                     pr.warning("error processing file %s" % path)
                     pr.debug(exc)
@@ -468,7 +461,7 @@ class SQLPropDBManager(object):
         size, mtime, ctime = self._cx.execute(cmd, (file_id,)).fetchone()
         return Metadata(size, mtime, ctime)
 
-    def insert_metadata(self, f_id, metadata):
+    def set_metadata(self, f_id, metadata):
         """Store file metadata in the database.
         """
         cmd = "INSERT INTO metadata VALUES (?, ?, ?, ?);"
@@ -486,23 +479,27 @@ class SQLPropDBManager(object):
             pr.error("error getting contents.")
             raise
 
-    def insert_dir_content(self, dir_id, obj_basename, obj_id, obj_is_file):
+    def set_dir_content(self, dir_id, obj_basename, obj_id, obj_is_file):
         """Store a dir entry into the database.
         """
         obj_basename = obj_basename.replace("'", "''") # Escape single quotes for sqlite3.
         cmd = "INSERT INTO dir_contents VALUES (?, ?, ?, ?);"
         self._cx.cursor().execute(cmd, (dir_id, obj_basename, obj_id, obj_is_file))
 
-    def get_propvalue_metadata(self, file_id):
+    def get_prop_metadata(self, file_id):
         """Return either a (prop_value, metadata) pair or None.
+
+        May raise an SQL error or RuntimeError,
         """
         cmd = "SELECT value, size, mtime, ctime FROM prop WHERE file_id=?;"
         res = self._cx.execute(cmd, (file_id,)).fetchone()
         if res is not None:
+            if not isinstance(res[0], (int, long)):
+                raise RuntimeError("prop value not integer.")
             res = (res[0], Metadata(res[1], res[2], res[3]))
         return res
 
-    def insert_propvalue_metadata(self, file_id, prop_value, metadata):
+    def set_prop_metadata(self, file_id, prop_value, metadata):
         cmd = "INSERT INTO prop VALUES (?, ?, ?, ?, ?);"
         cmd_args = (file_id, prop_value,
                     metadata.size, metadata.mtime, metadata.ctime)

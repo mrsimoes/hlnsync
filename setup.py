@@ -19,6 +19,7 @@ setup(
 	license = metadata.license,
 	long_description = long_description,
 	long_description_content_type = 'text/markdown',
+	keywords = 'sync backup hardlinks',
 	install_requires = ['pyhashxx', 'psutil'],
 	packages = find_packages(exclude=['tests']),
 	entry_points = {
