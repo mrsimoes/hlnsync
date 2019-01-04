@@ -193,6 +193,7 @@ class RandomTree(FileTree):
         Add cp and rm final path to FileTree.
         """
         if cmd[0] == "cp":
+            assert self.writeback, "cannot cp file without writeback"
             fn_from, fn_to = cmd[1:]
             fn_abs_from = self.rel_to_abs(fn_from)
             fn_abs_to = self.rel_to_abs(fn_to)
@@ -200,8 +201,10 @@ class RandomTree(FileTree):
             st = os.stat(fn_abs_to)
             fid = self._id_computer.get_id(fn_to)
             new_f_obj = self.new_file_obj(fid, st)
-            self.add_path_writeback(new_f_obj, fn_to, writeback=False)
+            tr_obj = self._create_dir_if_needed_writeback(os.path.dirname(fn_to))
+            self._add_path(new_f_obj, tr_obj, os.path.basename(fn_to))
         elif cmd[0] == "rm" and cmd[2] is None:
+            assert self.writeback, "cannot rm file without writeback"
             dirname = os.path.dirname(cmd[1])
             bname = os.path.basename(cmd[1])
             d_obj = self.follow_path(dirname)
@@ -225,8 +228,10 @@ class RandomTree(FileTree):
         """
         cmd_name, fn_from, fn_to = cmd
         if cmd_name == "cp":
+            assert self.writeback, "cannot undo cp file without writeback"
             self.exec_cmd(("rm", fn_to, None))
         elif cmd_name == "rm" and fn_to is None:
+            assert self.writeback, "cannot undo rm file without writeback"
             dirname = os.path.dirname(fn_from)
             d_obj = self.follow_path(dirname)
             assert d_obj is not None

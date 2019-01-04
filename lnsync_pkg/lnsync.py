@@ -25,13 +25,14 @@ import argparse
 import random
 import sys
 import abc
+import pipes
 from collections import defaultdict
 from sqlite3 import Error as SQLError
 
 import lnsync_pkg.printutils as pr
 from lnsync_pkg import metadata
 from lnsync_pkg.human2bytes import human2bytes
-from lnsync_pkg.hashdb import FileHashDB, FileHashDBs, copy_hashdb
+from lnsync_pkg.hashdb import FileHashDB, FileHashDBs, copy_db
 from lnsync_pkg.matcher import TreePairMatcher
 
 # Tell pylint not to mistake module variables for constants
@@ -39,12 +40,31 @@ from lnsync_pkg.matcher import TreePairMatcher
 
 DEFAULT_DBPREFIX = "lnsync-"
 
-DESCRIPTION = (
-    "lnsync version "+metadata.version+" Copyright (C) 2018 Miguel Simoes.\n\n"
-    "This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you\n"
-    "are welcome to redistribute it under certain conditions. See the GNU General\n"
-    "Public Licence for details.\n\n"
-    "Sync by content, with hardlink support, using mv, ln, unlink."
+def wrap(text, width):
+    """A word-wrap function that preserves existing line breaks
+    and most spaces in the text. Expects that existing line
+    breaks are posix newlines (\n).
+
+    By Mike Brown, licensed under the PSF.
+    """
+    return reduce(lambda line, word, width=width: '%s%s%s' %
+                  (line,
+                   ' \n'[(len(line)-line.rfind('\n')-1
+                          + len(word.split('\n', 1)[0]
+                               ) >= width)
+                        ],
+                   word,
+                  ),
+                  text.split(' ')
+                 )
+
+
+DESCRIPTION = wrap(
+    ("lnsync version "+metadata.version+" Copyright (C) 2018 Miguel Simoes.\n\n"
+     "This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you\n"
+     "are welcome to redistribute it under certain conditions. See the GNU General\n"
+     "Public Licence for details.") + "\n\n" + metadata.description,
+    80
     )
 
 def pick_db_basename(dir_path, dbprefix):
@@ -204,7 +224,7 @@ parser_sync = \
         parents=[dbprefix_option_parser,
                  bysize_option_parser,
                  maxsize_option_parser],
-        help="sync target (mv and ln on target only, no data copied or deleted)")
+        help="sync target (mv/ln/unlink, no data copied or deleted)")
 parser_sync.add_argument("source", action=CreateDB)
 parser_sync.add_argument("targetdir", action=CreateOnlineDB)
 parser_sync.add_argument("-n", "--dry-run", help="dry run", action="store_true")
@@ -215,24 +235,38 @@ def do_sync(args):
                 matcher = TreePairMatcher(src_db, tgt_db)
             except ValueError as exc:
                 raise RuntimeError, str(exc), sys.exc_info()[2]
+            pr.progress("calculating match")
             if not matcher.do_match():
                 msg = "match failed"
                 raise RuntimeError, msg, sys.exc_info()[2]
+            pr.progress("syncing files")
+            tgt_db.writeback = not args.dry_run
             for cmd in matcher.generate_sync_cmds():
-                if not args.dry_run:
-                    try:
-                        tgt_db.exec_cmd(cmd)
-                    except OSError: # Catches e.g. linking not supported on target.
-                        msg = "could not execute: " + " ".join(cmd)
-                        raise RuntimeError, msg, sys.exc_info()[2]
-                pr.print(" ".join(cmd))
-            pr.info("sync done")
+                pr.print(" ".join(map(pipes.quote, cmd)))
+                try:
+                    tgt_db.exec_cmd(cmd)
+                except OSError: # Catches e.g. linking not supported on target.
+                    msg = "could not execute: " + " ".join(cmd)
+                    raise RuntimeError, msg, sys.exc_info()[2]
+            pr.progress("syncing empty dirs")
+            dirs_to_rm_set = set()
+            dirs_to_rm_list = []
+            for dir_obj, parent_obj, relpath \
+                    in tgt_db.walk_paths(recurse=True, topdown=False, dirs=True, files=False):
+                if all((obj.is_dir() and obj in dirs_to_rm_set) for obj in dir_obj.entries.itervalues()):
+                    if src_db.follow_path(relpath) is None:
+                        dirs_to_rm_set.add(dir_obj)
+                        dirs_to_rm_list.append(dir_obj)
+            for d in dirs_to_rm_list:
+                pr.print("rmdir %s" % (pipes.quote(d.get_relpath()),))
+                tgt_db.rm_dir_writeback(d)
+            pr.info("done")
 cmd_handlers["sync"] = do_sync
 
 ## update
 parser_update = cmd_parsers.add_parser('update', \
         parents=[dbprefix_option_parser, maxsize_option_parser], \
-        help='update hash values for all new and modified files')
+        help='rehash new and modified files')
 parser_update.add_argument("locations", action=CreateOnlineDB, nargs="*")
 def do_update(args):
     with FileHashDBs(args.locations) as databases:
@@ -242,7 +276,7 @@ cmd_handlers["update"] = do_update
 
 ## rehash
 parser_rehash = cmd_parsers.add_parser('rehash', parents=[dbprefix_option_parser], \
-                    help='force hash update for given files')
+                    help='force hash updates')
 parser_rehash.add_argument("topdir", action=CreateOnlineDB)
 parser_rehash.add_argument("relfilepaths", type=relative_path, nargs='+')
 def do_rehash(args):
@@ -259,7 +293,6 @@ def do_rehash(args):
                 pr.error("cannot rehash %s" % database.printable_path(relpath))
                 continue
 cmd_handlers["rehash"] = do_rehash
-
 
 ## subdir
 parser_subdir = \
@@ -282,8 +315,9 @@ def do_subdir(args):
         raise ValueError(msg)
     tgt_db_basename = pick_db_basename(tgt_dir, args.dbprefix)
     tgt_db_path = os.path.join(tgt_dir, tgt_db_basename)
-    copy_hashdb(src_db_path, tgt_db_path)
+    copy_db(src_db_path, tgt_db_path)
     with FileHashDB(tgt_db_path, mode="online") as tgt_db:
+        tgt_db.db_clear_tree()
         tgt_db.db_purge()
 cmd_handlers["subdir"] = do_subdir
 
@@ -338,7 +372,7 @@ def do_fdupes(args):
                             hash_to_fpaths[hash_val] = []
                         this_file_paths = [database.printable_path(_p) for _p in fobj.relpaths]
                         if args.hardlinks:
-                            this_file_paths[1:] = ["= " + _p for _p in this_file_paths[1:]]
+                            this_file_paths[1:] = ["= " + pipes.quote(_p) for _p in this_file_paths[1:]]
                         hash_to_fpaths[hash_val] += this_file_paths
             for rep_hash in hashes_seen_twice: # Unequal sizes correspond to unequal hash values.
                 grouped_repeats.append(hash_to_fpaths[rep_hash])
@@ -389,7 +423,7 @@ def do_onall(args):
                         common_hash_paths[hash_val] += paths
             for hash_val, paths in common_hash_paths.iteritems():
                 for path in paths:
-                    pr.print(path)
+                    pr.print(pipes.quote(path))
                 pr.print("\n")
 cmd_handlers['onall'] = do_onall
 
@@ -402,7 +436,7 @@ parser_onfirstonly = \
                  dbprefix_option_parser,
                  bysize_option_parser,
                  maxsize_option_parser], \
-        help='find files present on first location, but not any other')
+        help='find files on first location, not on any other')
 parser_onfirstonly.add_argument("locations", action=CreateDB, nargs="+")
 def do_onfirstonly(args):
     with FileHashDBs(args.locations) as all_dbs:
@@ -425,7 +459,7 @@ def do_onfirstonly(args):
                     else:
                         format_str = "%s"
                     for path in paths[1:]:
-                        pr.print(format_str, path)
+                        pr.print(format_str, (pipes.quote(path),))
 cmd_handlers["onfirstonly"] = do_onfirstonly
 
 ## cmp
@@ -435,12 +469,12 @@ parser_cmp = \
         parents=[dbprefix_option_parser,
                  bysize_option_parser,
                  maxsize_option_parser],
-        help='compare two dirs by name (recursive)')
+        help='recursively compare two directories')
 parser_cmp.add_argument("leftlocation", action=CreateDB)
 parser_cmp.add_argument("rightlocation", action=CreateDB)
 def do_cmp(args):
     """
-    Compare two directories. Always recursive, by name. Ignore links.
+    Recursively compare files and dirs in two directories.
     """
     with args.leftlocation as left_db:
         with args.rightlocation as right_db:
@@ -451,26 +485,44 @@ def do_cmp(args):
                     left_path = os.path.join(cur_dirpath, basename)
                     right_obj = right_db.follow_path(left_path)
                     if left_obj.is_file():
-                        if right_obj is not None and right_obj.is_file():
+                        if right_obj is None:
+                            pr.print("left only: %s" % (pipes.quote(left_path),))
+                        elif right_obj.is_file():
                                     # NB: db_get_prop raises RuntimeError on failure.
                             if left_db.db_get_prop(left_obj) != right_db.db_get_prop(right_obj):
-                                pr.print("differ: %s" % left_path)
+                                pr.print("files differ: %s" % (pipes.quote(left_path),))
+                        elif right_obj.is_dir():
+                            pr.print("left file vs right dir: %s" % (pipes.quote(left_path),))
                         else:
-                            pr.print("left only: %s" % left_path)
-                    else: # left_obj is dir
-                        if right_obj is not None and right_obj.is_dir():
+                            pr.info("left file vs other: %s" % (pipes.quote(left_path),))
+                    elif left_obj.is_dir():
+                        if right_obj is None:
+                            pr.print("left only: %s" % (pipes.quote(left_path+os.path.sep),))
+                        elif right_obj.is_dir():
                             dirpaths_to_visit.append(left_path)
+                        elif right_obj.is_file():
+                            pr.print("left dir vs right file: %s" % (pipes.quote(left_path),))
                         else:
-                            pr.print("left only: %s%s" % (left_path, os.path.sep))
+                            pr.info("left dir vs other: %s" % (pipes.quote(left_path),))
+                    else:
+                        pr.debug(pipes.quote(left_path),)
+                        raise RuntimeError("do_cmp: unknown object type")
                 for right_obj, basename in right_db.walk_dir_contents(cur_dirpath, dirs=True):
                     right_path = os.path.join(cur_dirpath, basename)
                     left_obj = left_db.follow_path(right_path)
                     if right_obj.is_file():
-                        if left_obj is None or left_obj.is_dir():
-                            pr.print("right only: %s" % right_path)
+                        if left_obj is None:
+                            pr.print("right only: %s" % (pipes.quote(right_path),))
+                        elif not (left_obj.is_file() or left_obj.is_dir()):
+                            pr.info("right file vs left other: %s" % (pipes.quote(right_path),))
+                    elif right_obj.is_dir():
+                        if left_obj is None:
+                            pr.print("right only: %s" % (pipes.quote(right_path+os.path.sep),))
+                        elif not (left_obj.is_file() or left_obj.is_dir()):
+                            pr.info("right dir vs left other: %s" % (pipes.quote(right_path),))
                     else:
-                        if left_obj is None or left_obj.is_file():
-                            pr.print("right only: %s%s" % (right_path, os.path.sep))
+                        pr.debug(pipes.quote(right_path),)
+                        raise RuntimeError("do_cmp: unknown object type")
 cmd_handlers["cmp"] = do_cmp
 
 ## lookup
@@ -478,7 +530,7 @@ parser_lookup = \
     cmd_parsers.add_parser(
         'lookup', \
         parents=[dbprefix_option_parser],
-        help='get a file hash')
+        help='retrieve file hashes')
 parser_lookup.add_argument("location", action=CreateDB)
 parser_lookup.add_argument("relpath", type=relative_path)
 def do_lookup(args):
@@ -487,7 +539,7 @@ def do_lookup(args):
         fpath = args.relpath
         fobj = database.follow_path(fpath)
         if fobj is None or not fobj.is_file():
-            pr.error("not a file: %s" % str(fpath))
+            pr.error("not a file: %s" % (pipes.quote(fpath),))
         else:
             hash_val = database.db_get_prop(fobj)
             pr.print(hash_val)
@@ -497,9 +549,10 @@ cmd_handlers["lookup"] = do_lookup
 parser_check_files = \
     cmd_parsers.add_parser(
         'check', \
-        parents=[dbprefix_option_parser,
+        parents=[bysize_option_parser,
+                 dbprefix_option_parser,
                  maxsize_option_parser], \
-        help='recompute file hash and check against db (all files, if none given)')
+        help='rehash files and compare against database')
 parser_check_files.add_argument("location", action=CreateOnlineDB)
 parser_check_files.add_argument("relpaths", type=relative_path, nargs="*")
 
@@ -508,9 +561,10 @@ def do_check(args):
         if database.mode == "offline":
             raise ValueError("cannot check files in offline mode")
         which_files_gen = args.relpaths
-        if len(which_files_gen) == 0:
+        if not which_files_gen:
             def gen_all_paths():
-                for _obj, _parent, path in database.walk_paths():
+                for _obj, _parent, path \
+                        in database.walk_paths(files=True, dirs=False, recurse=True):
                     yield path
             which_files_gen = gen_all_paths()
         num_changed = 0
@@ -539,8 +593,9 @@ parser_rsync = \
         'rsync',
         parents=[dbprefix_option_parser,
                  maxsize_option_parser],
-        help="print rsync command to sync skipping db files")
+        help="print rsync command to sync (skipping db files)")
 parser_rsync.add_argument("-x", "--execute", action="store_true", help="also execute rsync command")
+parser_rsync.add_argument("-n", "--dry-run", help="dry run", action="store_true")
 parser_rsync.add_argument("sourcedir", type=str)
 parser_rsync.add_argument("targetdir", type=str)
 parser_rsync.add_argument("rsyncargs", type=str, nargs="*")
@@ -556,11 +611,13 @@ def do_rsync(args):
     src_dir = pipes.quote(src_dir)
     tgt_dir = pipes.quote(tgt_dir)
     # Options for rsync: recursive, preserve hardlinks.
-    rsync_opts = "-r -H --progress --delete-before"
+    rsync_opts = "-r -H --size-only --progress --delete-before"
     if args.maxsize > 0:
         rsync_opts += " --max-size %d" % args.maxsize
+    if args.dry_run:
+        rsync_opts += " -n"
     rsync_opts += " ".join(args.rsyncargs)
-    rsync_opts += r"  --exclude %s\*.db" % args.dbprefix
+    rsync_opts += r" --exclude /%s\*.db" % args.dbprefix
     rsync_cmd = "rsync %s %s %s" % (rsync_opts, src_dir, tgt_dir)
     pr.print(rsync_cmd)
     if args.execute:
@@ -611,7 +668,7 @@ parser_cleandb = \
     cmd_parsers.add_parser(
         'cleandb',
         parents=[dbprefix_option_parser],
-        help="clean and defragment the database")
+        help="clean and defragment hash database")
 parser_cleandb.add_argument("location", action=CreateOnlineDB)
 def do_cleandb(args):
     """Purge old entries from db.

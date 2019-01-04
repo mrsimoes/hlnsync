@@ -41,6 +41,7 @@ from __future__ import with_statement, print_function
 import os
 import sys
 import abc
+import pipes
 from collections import namedtuple
 import sqlite3
 
@@ -139,7 +140,7 @@ class FilePropertyDB(FileTree):
         super(FilePropertyDB, self).scan_dir(dir_obj, skipbasenames=skipbasenames)
 
     def db_purge(self):
-        """Purge DB from old entries and perform SQL vacuum
+        """Purge DB from old entries and perform SQL vacuum.
         """
         assert self.mode == "online"
         self.scan_full_tree()
@@ -172,8 +173,9 @@ class FilePropertyDB(FileTree):
                     return f_obj.prop_value
                 else:
                     pr.debug(
-                        "file %s md changed: was %s, is %s",
-                        f_obj.relpaths[0], f_obj.prop_metadata, f_obj.file_metadata)
+                        "file %s md (id %d) changed: was %s, is %s",
+                        f_obj.relpaths[0], f_obj.file_id,
+                        f_obj.prop_metadata, f_obj.file_metadata)
                     self.sqlmanager.delete_ids(f_obj.file_id)
         # Property needs to be computed and, in online mode, stored in the db.
         if self.mode == "offline":
@@ -223,7 +225,7 @@ class FilePropertyDB(FileTree):
                 obj_is_file = 1
                 obj_id = obj.file_id
                 obj_basename = os.path.basename(path)
-            else:
+            elif obj.is_dir():
                 obj_is_file = 0
                 obj_id = obj.dir_id
                 obj_basename = os.path.basename(path)
@@ -239,21 +241,20 @@ class FilePropertyDB(FileTree):
     def db_clear_tree(self):
         """Remove offline tree info from db.
         """
-        assert self.mode == "offline"
-        assert self._use_metadata
         self.sqlmanager.reset_offline_tables()
         self.sqlmanager.vacuum()
 
     def db_update_all(self):
         """Read prop value for every file, forcing updates when needed.
 
-        Also, delete from the db all files that could not be read.
+        Also, delete from the db all files which could not be read.
         """
         assert self.mode == "online"
         error_files = set()
         update_files = set()
         try:
             for fobj, parent, path in self.walk_paths(dirs=False, recurse=True):
+                res = None
                 try:
                     res = self.sqlmanager.get_prop_metadata(fobj.file_id)
                 except Exception as exc:
@@ -267,11 +268,12 @@ class FilePropertyDB(FileTree):
                 self._rm_file(err_fobj)
             tot_update_files = len(update_files)
             try:
+                old_prefix = pr.PROGRESS_PREFIX
                 for index, update_fobj in enumerate(update_files):
                     pr.PROGRESS_PREFIX = "%d/%d " % (index+1, tot_update_files)
                     self.db_get_prop(update_fobj)
             finally:
-                pr.PROGRESS_PREFIX = ""
+                pr.PROGRESS_PREFIX = old_prefix
         finally:
             self.sqlmanager.commit()
 
@@ -284,9 +286,9 @@ class FilePropertyDB(FileTree):
 
     def printable_path(self, rel_path):
         if self.mode == "offline":
-            return "{%s}%s" % (self.dbpath, rel_path)
+            return "{%s}%s" % (pipes.quote(self.dbpath), pipes.quote(rel_path))
         else:
-            return self.rel_to_abs(rel_path)
+            return pipes.quote(self.rel_to_abs(rel_path))
 
     def print_tree(self):
         for fobj, parent, path in self.walk_paths(dirs=False, recurse=True):
@@ -511,6 +513,12 @@ class SQLPropDBManager(object):
 
     def commit(self):
         self._cx.commit()
+
+
+def copy_db(src_db_path, tgt_db_path):
+    """Copy SQL database filtering or mapping of the data.
+    """
+    SQLPropDBManager.copy_db(src_db_path, tgt_db_path)
 
 
 class FilePropertyDBs(object):

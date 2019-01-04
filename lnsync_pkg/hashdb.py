@@ -11,7 +11,7 @@ from __future__ import print_function
 
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.blockhash import hash_file
-from lnsync_pkg.propdb import FilePropertyDB, SQLPropDBManager, FilePropertyDBs
+from lnsync_pkg.propdb import FilePropertyDB, FilePropertyDBs, copy_db
 
 class FileHashDB(FilePropertyDB):
     """A file hash value database.
@@ -49,11 +49,6 @@ class FileHashDB(FilePropertyDB):
         val = hash_file(abspath)
         assert isinstance(val, (int, long)), "prop_from_source: bad property value %s" % (val,)
         return val
-
-def copy_hashdb(src_db_path, tgt_db_path):
-    """Copy SQL database filtering or mapping of the data.
-    """
-    SQLPropDBManager.copy_db(src_db_path, tgt_db_path)
 
 class FileHashDBs(FilePropertyDBs):
     """Another name for setting up a context for multiple HashDB.

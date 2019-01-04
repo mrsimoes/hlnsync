@@ -97,7 +97,6 @@ def progress(*args, **kwargs):
     flush = kwargs.pop("flush", False)
     if option_verbosity < 0 or not _stdout_is_tty:
         return
-#    _builtin_print("\r", end="")
     tot_chars = 0
     for pr_item in (PROGRESS_PREFIX,) + args:
         pr_item = str(pr_item).replace("\n", "\\n")
@@ -108,7 +107,8 @@ def progress(*args, **kwargs):
         if tot_chars + item_chars > _term_cols:
             pr_item = pr_item[:_term_cols - tot_chars]
             item_chars = _term_cols - tot_chars
-        _builtin_print(pr_item, end="")
+        if(len(pr_item) > 0):
+            _builtin_print(pr_item, end="")
         tot_chars += item_chars
     if _last_print_len is None:
         _last_print_len = _term_cols
@@ -136,8 +136,13 @@ def _flusher():
     global _flushing_needed
     while not _flusher_exit_flag.is_set() or _flushing_needed:
         if _flushing_needed:
-            sys.stdout.flush()
-            _flushing_needed = False
+            # Prevent "broken pipe" errors if output files have been closed. 
+            try:
+                sys.stdout.flush()
+            except Exception:
+                pass
+            else:
+                _flushing_needed = False
         _flusher_exit_flag.wait(timeout=FLUSH_INTERVAL_SECS)
 _flusher = threading.Thread(target=_flusher, name="flusher-thread")
 _flusher.daemon = True
@@ -149,11 +154,18 @@ def _exit_func():
     _flushing_needed = True
     _flusher_exit_flag.set()
     _flusher.join()
-atexit.register(_exit_func)
+    # Prevent "broken pipe" errors if output files are closed before atexit activates.
+    try:
+        sys.stdout.close()
+    except Exception:
+        pass
+    try:
+        sys.stderr.flush()
+        sys.stderr.close()
+    except Exception:
+        pass
 
-def _final_progress_linebreak():
-    """Clear last progress line at exit time."""
-    progress("")
+atexit.register(_exit_func)
 
 if __name__ == "__main__":
     for it in sys.argv[1:]:

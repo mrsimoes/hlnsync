@@ -6,9 +6,9 @@ _lnsync_ provides unidirectional local file tree sync with rename detection and 
 
 ### Purpose and Operation
 
-If source and target file trees are in sync and files are renamed/moved within the source, _lnsync_  matches files by size and content and syncs the target solely by renaming, instead of deleting and recopying. Since _lnsync_ never creates or deletes data on the target, it may be used as a preprocessing step for another sync tool, such as _rsync_.
+If files are renamed/moved in the source file tree, _lnsync_  syncs the target solely by renaming, without deleting and recopying. Since _lnsync_ never creates or deletes data on the target, it may be used as a preprocessing step for another sync tool, such as _rsync_.
 
-File content is compared using hashes, which _lnsync_ stores in single-file databases at the top-level of each file tree. Using those hashes, _lnsync_ can also find duplicate files (like _fdupes_), compare file trees, and check for changes/bitrot.
+File content is compared by size and content hash, which _lnsync_ stores in single-file databases at the top-level directory of each file tree. Using those hashes, _lnsync_ can also find duplicate files (like _fdupes_), compare file trees, and check for changes/bitrot.
 
 On certain file systems (e.g. ext3/4 and btrfs), each file may be associated to more than one file path, which function as equivalent aliases. A new path created for an existing file is a _hardlink_, but all such aliases are on an equal footing, so each may be called a hardlink.
 
@@ -34,21 +34,21 @@ _lnsync_ also allows incorporating the file tree structure into the hash databas
 
 ### Installing
 
-From the test PyPI repository with `pip install --extra-index-url=https://test.pypi.org/simple/ lnsync`.
+Install from the test PyPI repository with `pip install --extra-index-url=https://test.pypi.org/simple/ lnsync`.
 
-Or, download and extract the source files and run `python setup.py install`.
+Or, clone the repo with `git clone https://github.com/mrsimoes/lnsync.git` and run `python setup.py install`.
 
 ### Example Usage
 
-If you reorganize your photo collection, renaming and moving around files and directories, _lnsync_ will mirror those changes to your backup. Also, if you use hardlinks to organize your photo collection, _lnsync_ will replicate that structure to the backup.
+If you reorganize your photo collection, renaming and moving around files and directories, _lnsync_ will mirror those changes to your backup. Also, if you use hardlinks to organize your photo collection, _lnsync_ will replicate that structure to the backup. It will also delete directories which have become empty on the target and no longer exist on the source.
 
-If you have your photo archive at `/home/you/Photos` and your backup is at `/mnt/disk/Photos`, run `lnsync sync /home/you/Photos /mnt/disk/Photos` to sync. For a dry run: `lnsync sync -n /home/you/Photos /mnt/disk/Photos`. Use `-z` to match files by size only.
-
-To recursively compare source and backup, run `lnsync cmp /home/you/Photos /mnt/disk/Photos`. As before, use `-z` to compare by size only.
+If you have your photo archive at `/home/you/Photos` and your backup is at `/mnt/disk/Photos`, run `lnsync sync /home/you/Photos /mnt/disk/Photos` to sync. For a dry run: `lnsync sync -n /home/you/Photos /mnt/disk/Photos`.
 
 To quickly obtain an _rsync_ command taht will complete syncing, skipping the hash database files, run `lnsync rsync /home/you/Photos /mnt/disk/Photos`. To also run this command, use the `-x` switch. Make sure the `rsync` options provided by this command are suitable for you.
 
-To find duplicate files on the Photos directory, run `lnsync fdupes /home/you/Photos`. Use `-H` to count different hardlinks to the same file as duplicates.
+Finally, to check target is in-sync, recursively compare source and backup with `lnsync cmp /home/you/Photos /mnt/disk/Photos`.
+
+To find duplicate files on the Photos directory, run `lnsync fdupes /home/you/Photos`. Use `-H` to count different hardlinks to the same file as duplicates. Use `-z` to compare by size only.
 
 To find all files in Photos which are not in the backup (under any name), run `lnsync onfirstonly /home/you/Photos /mnt/disk/Photos`.
 
@@ -117,8 +117,6 @@ _lnsync_ will not copy file data from the source or delete file data from the ta
 - Minimum support for case-insensitive, case-preserving file systems like vfat: if a target file name differs from source match in case only, target is not updated.
 
 ### Possible Improvements
-
-- Delete empty directories on the target which match empty directories on the source.
 
 - Take advantage of multiple CPUs to hash multiple files in parallel.
 
