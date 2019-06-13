@@ -3,72 +3,54 @@
 # Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
 # For conditions of distribution and use, see copyright notice in lnsync.py
 
-"""A representation of a source file tree with support for hardlinks.
-Each object is either a file or a directory. Because file hardlinks
-are supported, files are distinct from file paths.  All paths are
-relative to the root.
+"""
+Manage a file tree in a mounted filesystem, with support for hardlinks.
 
-Each file is assigned a short id number. Files are indexed by file id.
-Each directory is also assigned an id number; the root id is zero.
+A file tree item is either a file or a directory or catch-all "other"
+item.
 
-The source tree is scanned from the source file tree one directory
-at a time, so the representation is built as needed. Each directory
-is scanned at most once. Some files in the source tree may be ignored
-when scanning (i.e. do not assume that if a path does not exist
-in the data structure implies that the same path is absent in the
-source tree).
+Paths relative to the tree root are used throughout. Because file
+hardlinks are supported, files are distinct from file paths. Each file
+has one or more file paths.
 
-An interface is provided for walking entries in a directory or
-in a whole subtree.
+File are assigned a file id (a persistent serial number, e.g. inode)
+and are accessible by file id. Directories are also assigned ids.
+The root has id zero.
 
-Methods are provided for adding and removing specific files and paths,
-writing them back to the source tree. These should only be used on
-directories which have been marked as scanned.
+An in-memory representation is built by scanning the disk file tree.
+Scanning is done a need-to basis and scanned directories are marked.
+While scanning, items of the disk tree may be ignored using glob patters.
 
-(Private methods _add_path and _rm_path are for internal use only.)
+Only readable files and read/exec directories are read as files and
+directories. Other files, other dirs, all symlinks and special files are
+read as 'other object', occupying a position on in-memory tree, but
+skipped on walk iterators. File ownership is ignored.
 
-Optionally, file metadata (size, mtime, and ctime) is also read and
+Optionally, file metadata (file size, mtime, and ctime) is also read and
 recorded. In this case, files are also indexed by size.
 
-By default, the tree is read from a mounted file system. Only readable
-files and read/exec directories are read as such. Other files, dirs,
-symlinks and special files are ignored and read as 'other object'
-occupying a basename, but skipped on walk generators, etc.
-File ownership is ignored.
-
-Use the fileid module to obtain file id. (inode is used if the source
-tree is on a file system supporting a persistent inode number, e.g. ext3.)
-
-Files and directories are represented by FileObj and DirObj instances.
-More complex information may be stored for a file by subclassing FileObj
-and setting _file_type.
-
-Support is provided for path creation/deleting commands: mv, ln, rm.
-All commands are reversible, except those that delete the final path
-for a file. Supports is provided for reversing a sequence of reversible
-commands.
+Commands for manipulating file paths can be executed (moving, renaming,
+linking/unlinking) and optionally written back to the disk tree. All
+commands are reversible, except those that delete a file's only path.
 """
 
 from __future__ import print_function
-
 import os
-
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.fileid import make_id_computer
+from lnsync_pkg.glob_matcher import GlobMatcher
 
-class TreeObj(object):
-    "Abstract base class for all tree objects."
+
+
+
+class TreeItem(object):
+    """Abstract base class for all FileTree items."""
     def is_dir(self):
         return False
     def is_file(self):
         return False
 
-class OtherObj(TreeObj):
-    pass
-
-class FileObj(TreeObj):
-    """File info: id, relpaths, metadata.
-    """
+class FileItem(TreeItem):
     __slots__ = "file_id", "file_metadata", "relpaths"
     def __init__(self, file_id, metadata):
         self.file_id = file_id
@@ -77,29 +59,29 @@ class FileObj(TreeObj):
     def is_file(self):
         return True
 
-class DirObj(TreeObj):
-    """Dir hold lists of files and subdirs contained, own basename, parent dir.
-    """
+class DirItem(TreeItem):
     __slots__ = "dir_id", "parent", "entries", "relpath", "scanned"
     def __init__(self, dir_id):
         self.dir_id = dir_id
-        self.parent = None # A dir object.
-        self.entries = {} # A map basename->obj.
+        self.parent = None # A DirItem.
+        self.entries = {} # basename->TreObj.
         self.relpath = None # Cache.
         self.scanned = False
     def was_scanned(self):
-        """Return True if this directory was scanned."""
+        """Return True if dir was scanned."""
         return self.scanned
     def mark_scanned(self):
-        """Mark this dir as being scanned or fully scanned."""
+        """Mark dir as scanned."""
         self.scanned = True
     def add_entry(self, basename, obj):
-        assert not basename in self.entries, "add_entry: basename already in dir."
+        assert not basename in self.entries, \
+            "add_entry: %s already in dir" %  (basename,)
         self.entries[basename] = obj
         if obj.is_dir():
             obj.parent = self
     def rm_entry(self, basename):
-        assert basename in self.entries, "rm_entry: '%s' not in dir." % (basename,)
+        assert basename in self.entries, \
+            "rm_entry: %s not in dir" % (basename,)
         obj = self.entries[basename]
         del self.entries[basename]
         if obj.is_dir():
@@ -110,14 +92,13 @@ class DirObj(TreeObj):
         else:
             return None
     def iter_subdirs(self):
-        assert self.was_scanned(), "trying to iterate unscanned dir"
+        assert self.scanned, "cannot iterate unscanned dir"
         for obj in self.entries.itervalues():
             if obj.is_dir():
                 yield obj
     def get_relpath(self):
-        """Return the dir's relpath, without a trailing separator.
-        """
-        if self.relpath is None:
+        """Return dir relpath, no trailing os.sep."""
+        if self.relpath is None: # Cache.
             curr_dir = self
             path = None
             while curr_dir.parent is not None:
@@ -136,10 +117,14 @@ class DirObj(TreeObj):
     def is_dir(self):
         return True
 
+class OtherItem(TreeItem):
+    pass
+
 class Metadata(object):
-    """File metadata: size, mtime, and ctime."""
+    """File metadata: size, mtime, and ctime.
+    Metadata are __equal__ if size and mtime are."""
     __slots__ = "size", "mtime", "ctime"
-    __hash__ = None # Since we redefine eq, declare objects not hashable.
+    __hash__ = None # Since we redefine __eq__, declare not hashable.
     def __init__(self, size, mtime, ctime):
         self.size = size
         self.mtime = mtime
@@ -147,145 +132,109 @@ class Metadata(object):
     def __eq__(self, other):
         return self.size == other.size and self.mtime == other.mtime
     def __str__(self):
-        return "[md sz:%d mt:%d ct:%d]" % (self.size, self.mtime, self.ctime)
+        return "md[%d;%d;%d]" % (self.size, self.mtime, self.ctime)
 
 class FileTree(object):
-    """Represent a disk file tree with hardlinks (multiple file paths per file).
+    """A file tree that can read from disk and write back changes.
 
-    Index files by size and serial number.
+    Support files with multiple paths (hard links) and persistent serial number
+    id (inode), dirs, and explicit 'other'.
+    Files are accessible by file id.
+    Optionally, associate metadata (size, ctime, mtime) to files. In this case,
+    files are accessible by size.
+    Files can be excluded by size limit. File paths and dirs can be excluded by
+    glob pattern. Exclude patterns may be set so long as the root dir hasn't
+    been scanned yet.
     """
-    def __init__(self, root_path, maxsize=None, use_metadata=False, writeback=True):
-        assert use_metadata or maxsize is None, "FileTree: maxsize set on no use_metadata."
-        self._maxsize = maxsize
-        self._use_metadata = use_metadata
-        self._file_type = FileObj
-        self.rootdir_path = root_path
-        self._next_free_dir_id = 1
-        self.rootdir_obj = self._make_dir(0)
-        self._size_to_files = {} # Available only once the full tree has been scanned.
-        self._size_to_files_ready = False
-        self._id_to_file = {}    # May be filled on-demand.
-        self._id_computer = make_id_computer(root_path)
-        self.writeback = writeback
-
-    def __enter__(self):
-        if not os.path.isdir(self.rootdir_path):
-            raise RuntimeError("FileTree: not a dir: %s." % (self.rootdir_path,))
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        return False # Do not suppress any exception.
-
-    def _make_dir(self, dir_id=None):
-        """Create and return a new, properly numbered DirObj instance.
-        Its basename will be given when it is inserted into a parent directory.
+    def __init__(self, **kwargs):
+        """Create a root dir object, marked unscanned.
+        Arguments:
+            - root_path: path disk file tree.
+            - exclude_pattern: None or a list of glob patterns for
+                relative paths to ignore when reading from disk.
+            - use_metadata: if True read metadata index files by size
+            - maxsize: ignore files larger than this, is positive and not None
+            - skipempty: ignore zero-length files
+            - writeback: if True, path manipulation methods update the disk.
+            - file_type, dir_type: classes to instantiate.
         """
+        self.root_path = os.path.realpath(kwargs.pop("root_path"))
+        self.writeback = kwargs.pop("writeback", True)
+        self._file_type = kwargs.pop("file_type", FileItem)
+        self._dir_type = kwargs.pop("dir_type", DirItem)
+        self._use_metadata = kwargs.pop("use_metadata", False)
+        if self._use_metadata:
+            self._size_to_files = {} # Available if tree has been fully scanned.
+            self._size_to_files_ready = False
+            maxsize = kwargs.pop("maxsize", -1)
+            if maxsize < 0:
+                self._maxsize = None
+            else:
+                self._maxsize = maxsize
+            skipempty = kwargs.pop("skipempty", False)
+            self._skipempty = skipempty
+        self._id_to_file = {}    # May be filled on-demand.
+        self._id_computer = make_id_computer(self.root_path)
+        self._next_free_dir_id = 1
+        self.rootdir_obj = self._new_dir_obj(0)
+        self._exclude_patterns = []
+        self._exclude_matchers = {}
+        self.add_exclude_patterns(kwargs.pop("exclude_patterns", []))
+
+    def add_exclude_patterns(self, patterns):
+        self._exclude_patterns += patterns
+        if patterns:
+            assert not self.rootdir_obj.was_scanned()
+            root_matcher = GlobMatcher(self._exclude_patterns)
+            self._exclude_matchers = {self.rootdir_obj: root_matcher}
+
+    def printable_path(self, rel_path, pprint=str):
+        """Return a pretty-printed full path from a tree relative path."""
+        return pprint(os.path.join(self.root_path, rel_path))
+
+    def size_to_files(self, size=None):
+        """Return a list of file objects or, if size is None, the internal
+        size->files dict. Trigger a full-tree scan, if needed.
+        """
+        assert self._use_metadata, "size_to_files without metadata."
+        if not self._size_to_files_ready:
+            self.scan_subtree()
+        if size is None:
+            return self._size_to_files
+        elif size in self._size_to_files:
+            return self._size_to_files[size]
+        else:
+            return []
+
+    def get_all_sizes(self):
+        """Return list of all file sizes in the tree."""
+        sz__to_files_map = self.size_to_files()
+        return sz__to_files_map.keys()
+
+    def id_to_file(self, fid):
+        assert fid in self._id_to_file, "id_to_file: unknown fid %d." % fid
+        return self._id_to_file[fid]
+
+    def rel_to_abs(self, rel_path):
+        """Relative to absolute path."""
+        return os.path.join(self.root_path, rel_path)
+
+    def abs_to_rel(self, abs_path):
+        """Absolute to relative path."""
+        return os.path.relpath(abs_path, self.root_path)
+
+    def _new_dir_obj(self, dir_id=None):
+        """Return a new dir object, parent and basename yet undetermined.
+        If dir_id is None, it is autoset."""
         if dir_id is None:
             dir_id = self._next_free_dir_id
             self._next_free_dir_id += 1
-        dir_obj = DirObj(dir_id)
+        dir_obj = self._dir_type(dir_id)
         return dir_obj
 
-    def scan_dir(self, dir_obj, skipbasenames=None):
-        """Scan a directory from source, if it hasn't been scanned before.
-
-        Yield those dir entries which are files.
-        """
-        assert dir_obj is not None, "scan_dir: no dir_obj"
-        if dir_obj.was_scanned():
-            return
-        for (basename, obj_id, obj_type, raw_metadata) in \
-                self._gen_source_dir_entries(dir_obj, skipbasenames=skipbasenames):
-            try:
-                basename.decode('utf-8')
-            except Exception:
-                msg = "not a valid utf-8 filename: '%s'. proceeding."
-                msg = msg % (os.path.join(dir_obj.get_relpath(), basename),)
-                pr.warning(msg)
-            if obj_type == FileObj:
-                if obj_id in self._id_to_file:
-                    file_obj = self._id_to_file[obj_id]
-                else:
-                    file_obj = self.new_file_obj(obj_id, raw_metadata)
-                    if self._use_metadata and self._maxsize is not None \
-                            and file_obj.file_metadata.size > self._maxsize:
-                        obj_abspath = self.rel_to_abs(os.path.join(dir_obj.get_relpath(), basename))
-                        pr.warning("ignored large file '%s'" % obj_abspath)
-                        continue
-                self._add_path(file_obj, dir_obj, basename)
-            elif obj_type == DirObj:
-                self._next_free_dir_id = max(self._next_free_dir_id, obj_id + 1)
-                dir_obj.add_entry(basename, self._make_dir(obj_id))
-            else:
-                dir_obj.add_entry(basename, OtherObj())
-        dir_obj.mark_scanned()
-
-    def scan_full_tree(self, start_dir=None):
-        """Scan full subtree rooted at start_dir, meaning recursively scan all
-        subdirectories not yet scanned.
-        """
-        if start_dir is None:
-            start_dir = self.rootdir_obj
-        self.scan_dir(start_dir)
-        for obj in start_dir.entries.values():
-            if obj.is_dir() and not obj.was_scanned():
-                self.scan_dir(obj)
-                self.scan_full_tree(obj)
-        if start_dir == self.rootdir_obj:
-            self._size_to_files_ready = True
-
-    def _gen_source_dir_entries(self, dir_obj, skipbasenames=None):
-        """Generate source entries for a directory.
-
-        Yield (basename, obj_id, obj_type, rawmetadata), where
-        rawmetadata is some data that may passed on to new_file_obj
-        to help generate file metadata.
-        obj_type is one of DirObj, FileObj or OtherObj.
-
-        This default version reads the source file tree.
-        It may be overridden, perhaps along new_file_obj and other methods.
-        This is called while scanning a directory.
-        (The directory may already have been as scanned.)
-        """
-        dir_relpath = dir_obj.get_relpath()
-        dir_abspath = self.rel_to_abs(dir_relpath)
-        for obj_bname in os.listdir(dir_abspath):
-            obj_abspath = os.path.join(dir_abspath, obj_bname)
-            if skipbasenames is not None and obj_bname in skipbasenames:
-                pr.warning("ignored %s" % obj_abspath)
-                yield (obj_bname, None, OtherObj, None)
-            elif os.path.islink(obj_abspath):
-                pr.warning("ignored softlink %s" % obj_abspath)
-                yield (obj_bname, None, OtherObj, None)
-            elif os.path.isdir(obj_abspath):
-                if not os.access(obj_abspath, os.R_OK + os.X_OK):
-                    pr.warning("ignored no-rx-access dir %s" % obj_abspath)
-                    yield (obj_bname, None, OtherObj, None)
-                else:
-                    dir_id = self._next_free_dir_id
-                    self._next_free_dir_id += 1
-                    yield (obj_bname, dir_id, DirObj, None)
-            elif os.path.isfile(obj_abspath):
-                if not os.access(obj_abspath, os.R_OK):
-                    pr.warning("ignored no-read-access file %s" % obj_abspath)
-                    yield (obj_bname, None, OtherObj, None)
-                else:
-                    obj_relpath = os.path.join(dir_relpath, obj_bname)
-                    pr.progress("%s" % obj_relpath)
-                    stat_data = os.stat(obj_abspath)
-                    fid = self._id_computer.get_id(obj_relpath, stat_data)
-                    yield (obj_bname, fid, FileObj, stat_data)
-            else:
-                pr.warning("ignored special file %s" % obj_abspath)
-                yield (obj_bname, None, OtherObj, None)
-
-
-    def new_file_obj(self, obj_id, rawmetadata):
-        """Create and return a new file object, from id and rawmetadata.
-
-        If self._use_metadata is false, then no metadata is created.
-        In the default version, rawmetadata is os.stat data, with inode.
-        """
+    def _new_file_obj(self, obj_id, rawmetadata):
+        """Return a new file object. obj_is the file id, rawmetadata is a stat
+        record here."""
         stat_data = rawmetadata
         if self._use_metadata:
             metadata = Metadata(stat_data.st_size,
@@ -296,24 +245,127 @@ class FileTree(object):
         file_obj = self._file_type(obj_id, metadata)
         return file_obj
 
-    def size_to_files(self, size=None):
-        """Return either _size_to_files hash (if size is None) or an entry.
+    def scan_dir(self, dir_obj):
+        """Scan a directory from disk, if it hasn't been scanned before."""
+        assert isinstance(dir_obj, DirItem) #is not None, "scan_dir: no dir_obj"
+        if dir_obj.was_scanned():
+            return
+        with pr.ProgressPrefix(
+            "scanning:" + self.printable_path(dir_obj.get_relpath())
+            ):
+            dir_exclude_matcher = self._exclude_matchers.get(dir_obj)
+                # dir_exclude_matcher is None or an entry.
+            for (basename, obj_id, obj_type, raw_metadata) in \
+                    self._gen_dir_entries_from_source(dir_obj,
+                                                      dir_exclude_matcher):
+                try:
+                    basename.decode('utf-8')
+                except Exception:
+                    msg = "not a valid utf-8 filename: '%s'. proceeding."
+                    msg = msg % (os.path.join(dir_obj.get_relpath(), basename),)
+                    pr.warning(msg)
+                if obj_type == FileItem:
+                    self._scan_dir_process_file(
+                        dir_obj, obj_id, basename, raw_metadata)
+                elif obj_type == DirItem:
+                    self._scan_dir_process_dir(
+                        dir_obj, obj_id, dir_exclude_matcher, basename)
+                else:
+                    dir_obj.add_entry(basename, OtherItem())
+            if dir_obj in self._exclude_matchers:
+                del self._exclude_matchers[dir_obj]
+            dir_obj.mark_scanned()
 
-        If _size_to_files might not contain the full index, do a full-tree scan.
-        """
-        assert self._use_metadata, "size_to_files without metadata."
-        if not self._size_to_files_ready:
-            self.scan_full_tree()
-        if size is None:
-            return self._size_to_files
+    def _scan_dir_process_file(self, parent_obj, obj_id, basename, raw_metadata):
+        if obj_id in self._id_to_file:
+            file_obj = self._id_to_file[obj_id]
         else:
-            return self._size_to_files[size]
+            file_obj = self._new_file_obj(obj_id, raw_metadata)
+            if self._use_metadata:
+                if (self._skipempty and file_obj.file_metadata.size == 0):
+                    obj_abspath = \
+                        self.rel_to_abs(os.path.join(
+                            parent_obj.get_relpath(), basename))
+                    pr.warning("ignored empty file '%s'" % obj_abspath)
+                    return
+                elif (self._maxsize is not None and \
+                        file_obj.file_metadata.size > self._maxsize):
+                    obj_abspath = \
+                        self.rel_to_abs(os.path.join(
+                            parent_obj.get_relpath(), basename))
+                    pr.warning("ignored large file '%s'" % obj_abspath)
+                    return
+        self._add_path(file_obj, parent_obj, basename)
+
+    def _scan_dir_process_dir(
+            self, parent_obj, obj_id, parent_excluder, basename):
+        self._next_free_dir_id = max(self._next_free_dir_id, obj_id + 1)
+        subdir_obj = self._new_dir_obj(obj_id)
+        parent_obj.add_entry(basename, subdir_obj)
+        if parent_excluder:
+            subdir_exclude_matcher = parent_excluder.to_subdir(basename)
+            if subdir_exclude_matcher:
+                self._exclude_matchers[subdir_obj] = subdir_exclude_matcher
+
+    def scan_subtree(self, start_dir=None):
+        """Recursively scan subtree rooted at start_dir."""
+        if start_dir is None:
+            start_dir = self.rootdir_obj
+        self.scan_dir(start_dir)
+        for obj in start_dir.entries.values():
+            if obj.is_dir() and not obj.was_scanned():
+                self.scan_dir(obj)
+                self.scan_subtree(obj)
+        if start_dir == self.rootdir_obj:
+            self._size_to_files_ready = True
+
+    def _gen_dir_entries_from_source(self, dir_obj, exclude_matcher=None):
+        """Iterate over the items in a disk file tree.
+        Yield tuples (basename, obj_id, obj_type, rawmetadata), where:
+        - rawmetadata is some data that may passed on to _new_file_obj.__init__
+        - obj_type is one of DirItem, FileItem or OtherItem.
+        """
+        dir_relpath = dir_obj.get_relpath()
+        dir_abspath = self.rel_to_abs(dir_relpath)
+        for obj_bname in os.listdir(dir_abspath):
+            obj_abspath = os.path.join(dir_abspath, obj_bname)
+            if os.path.islink(obj_abspath): # This must be tested for first.
+                pr.warning("ignored symlink %s" % obj_abspath)
+                yield (obj_bname, None, OtherItem, None)
+            elif os.path.isfile(obj_abspath):
+                if exclude_matcher \
+                        and exclude_matcher.match_file_bname(obj_bname):
+                    pr.warning("excluded file %s" % obj_abspath)
+                    yield (obj_bname, None, OtherItem, None)
+                elif not os.access(obj_abspath, os.R_OK):
+                    pr.warning("ignored no-read-access file %s" % obj_abspath)
+                    yield (obj_bname, None, OtherItem, None)
+                else:
+                    obj_relpath = os.path.join(dir_relpath, obj_bname)
+                    pr.progress("%s" % obj_relpath)
+                    stat_data = os.stat(obj_abspath)
+                    fid = self._id_computer.get_id(obj_relpath, stat_data)
+                    yield (obj_bname, fid, FileItem, stat_data)
+            elif os.path.isdir(obj_abspath):
+                if exclude_matcher \
+                        and exclude_matcher.match_dir_bname(obj_bname):
+                    pr.warning("excluded dir %s" % obj_abspath)
+                    yield (obj_bname, None, OtherItem, None)
+                elif not os.access(obj_abspath, os.R_OK + os.X_OK):
+                    pr.warning("ignored no-rx-access dir %s" % obj_abspath)
+                    yield (obj_bname, None, OtherItem, None)
+                else:
+                    dir_id = self._next_free_dir_id
+                    self._next_free_dir_id += 1
+                    yield (obj_bname, dir_id, DirItem, None)
+            else:
+                pr.warning("ignored special file %s" % obj_abspath)
+                yield (obj_bname, None, OtherItem, None)
 
     def _add_path(self, file_obj, dir_obj, fbasename):
-        """Add a new path for a file object, with fbasename at an existing dir.
-
-        If this is the first path, the file is inserted into
-        the tree data structures.
+        """Add a new path to a file object:  fbasename at dir_obj.
+        If this is the first path, the file is registered into
+        the tree indices.
         """
         if file_obj.relpaths == []:
             fid = file_obj.file_id
@@ -329,13 +381,10 @@ class FileTree(object):
         file_obj.relpaths.append(relpath)
 
     def _rm_path(self, file_obj, dir_obj, fbasename):
-        """Remove an existing path for an existing file, with dirname
-        at an existing dir, which has already been scanned in.
-
-        If the last path for a file is removed, the file is removed
-        from all tree data structure, ie from the size and file_id
-        hashes.
-        """
+        """Remove a path from an existing file: fbasename at dir.
+        dir must have already been scanned.
+        If the final path of a file is removed, the file is removed
+        from tree indices."""
         dir_obj.rm_entry(fbasename)
         relpath = os.path.join(dir_obj.get_relpath(), fbasename)
         assert relpath in file_obj.relpaths, "_rm_path: non-existing relpath."
@@ -351,7 +400,7 @@ class FileTree(object):
 
     def _rm_file(self, file_obj):
         """Remove a file, i.e. remove all paths."""
-        paths = list(file_obj.relpaths) # Copy before modifying.
+        paths = list(file_obj.relpaths)
         for path in paths:
             tr_obj = self.follow_path(os.path.dirname(path))
             self._rm_path(file_obj, tr_obj, os.path.basename(path))
@@ -379,12 +428,11 @@ class FileTree(object):
         return curdir_obj
 
     def walk_dir_contents(self, subdir_path, dirs=False):
-        """Yield (obj, basename) for entries (files and possibly dirs) at
-        subdir_path (a relative path).
-
-        Yield only files and possibly directories, skipping other objects.
-        """
-        assert self.rootdir_obj is not None, "walk_dir_contents: no rootdir_obj."
+        """Generate (obj, basename) for each file and dir entry of
+        at a directory given by relative path, which is scanned if needed.
+        Skip 'other' entries."""
+        assert isinstance(subdir_path, str)
+        assert self.rootdir_obj is not None, "walk_dir_contents: no rootdir_obj"
         subdir = self.follow_path(subdir_path)
         assert subdir is not None and subdir.is_dir()
         self.scan_dir(subdir)
@@ -393,19 +441,18 @@ class FileTree(object):
                 yield obj, basename
 
     def walk_paths(self, startdir_path="", recurse=True, dirs=False, files=True, topdown=True):
-        """Generate (obj, parent_obj, relpath) for distinct relpaths,
-        not necessarily distinct tree objects.
-
-        Always skip startdir.
-        If dirs is True, include other dirs.
-        If files is True, include files.
-        If recurse is True, walk the full tree, else just subdir immediate contents.
-        If topdown is True
-        Always skip other objects.
+        """Generate (obj, parent_obj, relpath) for distinct file and dir
+        relpaths.
+        Skip startdir itself, skip other objects.
+         - dirs: include dirs other than startdir.
+         - files: include files.
+         - recurse: walk the full tree, else just subdir immediate contents.
+         - topdown: breadth-first, else depth-first
         """
         assert self.rootdir_obj is not None, "walk_paths: no rootdir_obj."
         startdir_obj = self.follow_path(startdir_path)
-        assert startdir_obj is not None and startdir_obj.is_dir(), "walk_paths: dobj not a dir."
+        assert startdir_obj is not None \
+            and startdir_obj.is_dir(), "walk_paths: dobj not a dir"
         def output_files(dir_obj):
             dir_path = dir_obj.get_relpath()
             for basename, obj in dir_obj.entries.iteritems():
@@ -434,7 +481,8 @@ class FileTree(object):
                     yield k
         else:
             stack = [[None], [startdir_obj]]
-            while stack: # stack[-2:0]=[dirs, unprocessed child_dirs of dirs[-1]].
+            while stack:
+                    # stack[-2:]=[dirs, unprocessed child dirs of dirs[-1]].
                 prevdir_children = stack[-1]
                 if prevdir_children:
                     nextdir = prevdir_children[-1]
@@ -451,56 +499,15 @@ class FileTree(object):
                     for k in output_dir(prevdir):
                         yield k
 
-    def id_to_file(self, fid):
-        assert fid in self._id_to_file, "id_to_file: unknown fid %d." % fid
-        return self._id_to_file[fid]
-
-    def rel_to_abs(self, rel_path):
-        """Prepend the root dir to the path name (file or dir).
-        """
-        return os.path.join(self.rootdir_path, rel_path)
-
-    def abs_to_rel(self, abs_path):
-        """Strip off the root dir from the path name (file or dir).
-        """
-        return os.path.relpath(abs_path, self.rootdir_path)
-
-    def get_all_sizes(self):
-        """Return a set of all file sizes in the tree.
-        """
-        # Obtain the full, up-to-date size to files hash table.
-        sz__to_files_map = self.size_to_files()
-        return set(sz__to_files_map.keys())
-
-    def _create_dir_if_needed_writeback(self, dir_relpath):
-        """Return dir obj corresponding to dir_relpath, creating all needed directories.
-
-        Raise RuntimeError or OSError if directory cannot be created."""
-        tr_obj = self.follow_path(dir_relpath)
-        if tr_obj is None:
-            supdname = os.path.dirname(dir_relpath)
-            dbasename = os.path.basename(dir_relpath)
-            supd = self._create_dir_if_needed_writeback(supdname)
-            newd = self._make_dir(None)
-            newd.mark_scanned()
-            supd.add_entry(dbasename, newd)
-            if self.writeback:
-                os.mkdir(self.rel_to_abs(dir_relpath))
-            return newd
-        elif tr_obj.is_dir():
-            return tr_obj
-        else:
-            raise RuntimeError("cannot create dir at '%s'." % (dir_relpath,))
-
     def add_path_writeback(self, file_obj, relpath):
-        """Add a new hardlink to an existing file, creating intermediate dirs if needed.
-        """
+        """Add a new path to an existing file, creating intermediate dirs if
+        needed."""
         tr_obj = self._create_dir_if_needed_writeback(os.path.dirname(relpath))
         self._add_path(file_obj, tr_obj, os.path.basename(relpath))
         if self.writeback:
             assert file_obj is not None, "add_path_writeback: no file_obj."
             assert file_obj.relpaths, "add_path_writeback: some path must exist."
-            os.link(self.rel_to_abs(file_obj.relpaths[0]),\
+            os.link(self.rel_to_abs(file_obj.relpaths[0]),
                     self.rel_to_abs(relpath))
 
     def rm_path_writeback(self, file_obj, relpath):
@@ -508,17 +515,18 @@ class FileTree(object):
             os.unlink(self.rel_to_abs(relpath))
         tr_obj = self.follow_path(os.path.dirname(relpath))
         assert tr_obj is not None and tr_obj.is_dir(), \
-            "rm_path_writeback: expected a dir at '%s'." % (os.path.dirname(relpath),)
+            "rm_path_writeback: expected a dir at '%s'." \
+                % (os.path.dirname(relpath),)
         self._rm_path(file_obj, tr_obj, os.path.basename(relpath))
 
     def mv_path_writeback(self, file_obj, fn_from, fn_to):
-        """Rename one of the file's paths.
-        """
-        # Cannot be achieved by a combination of adding/removing links
+        """Rename one of the file's paths."""
+        # Cannot be done by adding/removing links
         # on filesystems not supporting hardlinks.
         d_from = self.follow_path(os.path.dirname(fn_from))
         assert d_from is not None and d_from.is_dir(), \
-            "mv_path_writeback: expected a dir at '%s'." % (os.path.dirname(fn_from),)
+            "mv_path_writeback: expected a dir at '%s'." \
+                % (os.path.dirname(fn_from),)
         d_to = self._create_dir_if_needed_writeback(os.path.dirname(fn_to))
         self._add_path(file_obj, d_to, os.path.basename(fn_to))
         self._rm_path(file_obj, d_from, os.path.basename(fn_from))
@@ -534,12 +542,29 @@ class FileTree(object):
         if self.writeback:
             os.rmdir(self.rel_to_abs(relpath))
 
-    def exec_cmds(self, cmds):
-        for command in cmds:
-            self.exec_cmd(command)
+    def _create_dir_if_needed_writeback(self, dir_relpath):
+        """Return dir obj corresponding to dir_relpath, creating all needed
+        directories. May raise RuntimeError or OSError."""
+        tr_obj = self.follow_path(dir_relpath)
+        if tr_obj is None:
+            supdname = os.path.dirname(dir_relpath)
+            dbasename = os.path.basename(dir_relpath)
+            supd = self._create_dir_if_needed_writeback(supdname)
+            newd = self._new_dir_obj()
+            newd.mark_scanned()
+            supd.add_entry(dbasename, newd)
+            if self.writeback:
+                os.mkdir(self.rel_to_abs(dir_relpath))
+            return newd
+        elif tr_obj.is_dir():
+            return tr_obj
+        else:
+            raise RuntimeError("cannot create dir at '%s'." % (dir_relpath,))
 
     def exec_cmd(self, cmd):
-        "Execute a command (which_cmd, arg1, arg2)."
+        """Execute a (cmd, arg1, arg2).
+        cms is one of "mv" ln" "rm"
+        arg1 and arg2 are relative paths."""
         ctype, fn_from, fn_to = cmd
         obj_from = self.follow_path(fn_from)
         assert obj_from is not None and obj_from.is_file(), \
@@ -559,8 +584,12 @@ class FileTree(object):
         else:
             raise RuntimeError("exec_cmd: unknown command %s" % (cmd,))
 
+    def exec_cmds(self, cmds):
+        for command in cmds:
+            self.exec_cmd(command)
+
     def exec_cmd_reverse(self, cmd):
-        "Execute in reverse a command (which_cmd, arg1, arg2)."
+        """Revert a command (cmd, arg1, arg2)."""
         assert len(cmd) == 3, "exec_cmd_reverse: bad cmd: %s" % (cmd,)
         ctype, fn_from, fn_to = cmd
         if ctype == "mv":
@@ -576,11 +605,9 @@ class FileTree(object):
             raise RuntimeError("exec_cmd_reverse: unknown command %s." % (cmd,))
 
     def exec_cmds_reverse(self, cmds):
-        """Assuming a list of commands has been executed, reverse it by
-        undoing each in reverse order.
-        """
+        """Revert a sequence of commands."""
         for cmd in reversed(cmds):
             self.exec_cmd_reverse(cmd)
 
     def __str__(self):
-        return "%s(%s)" % (object.__str__(self), self.rootdir_path)
+        return "%s(%s)" % (object.__str__(self), self.root_path)

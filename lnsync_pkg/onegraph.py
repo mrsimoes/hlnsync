@@ -35,7 +35,8 @@ class OneGraph(object):
         for node_a, node_b in self._arrows.iteritems():
             yield (node_a, node_b)
     def add_arrow(self, node_a, node_b):
-        assert not node_a in self._arrows, "OneGraph.add_arrow: arrow already in."
+        assert not node_a in self._arrows, \
+            "OneGraph.add_arrow: arrow already in"
         self._arrows[node_a] = node_b
         cyc = self._cycle_from(node_b)
         if cyc is not None: # There is a cycle. Is it a new one?
@@ -48,7 +49,8 @@ class OneGraph(object):
             self.add_arrow(node_a, node_b)
     def remove_arrow(self, node_a, node_b):
         assert node_a in self._arrows \
-            and self._arrows[node_a] == node_b, "OneGraph.remove_arrow: arrow not in."
+            and self._arrows[node_a] == node_b, \
+                "OneGraph.remove_arrow: arrow not in"
         del self._arrows[node_a]
         for k in xrange(len(self._cycles)): # Remove at most one cycle.
             if node_a in self._cycles[k]:
@@ -74,7 +76,8 @@ class OneGraph(object):
                 leaves.discard(node)
         return leaves
     def _cycle_from(self, node):
-        """Return a (list) cycle starting at e, if one exists, None otherwise."""
+        """Return a (list) cycle starting at e, if one exists, None otherwise.
+        """
         arrow_gr = self._arrows
         if len(arrow_gr) <= 1:
             return None

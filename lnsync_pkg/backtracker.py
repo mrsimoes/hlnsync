@@ -44,9 +44,9 @@ def do_search(state):
     """
     if not state.is_valid():
         return False
-#    The search stack contains pairs (last_delta_expanded, deltas_to_explore_iter).
-#    A newly created deltas_to_explore_iter is either a non-empty iterator or None.
-#    At an invalid state or when deltas_to_explore is exhausted, backtrack.
+# The search stack contains pairs (last_delta_expanded, deltas_to_explore_iter).
+# A newly created deltas_to_explore_iter is either a non-empty iterator or None.
+# At an invalid state or when deltas_to_explore is exhausted, backtrack.
 
     search_stack = [(None, state.make_delta_iter())]
 
@@ -135,10 +135,11 @@ def _solve_n_queen():
     try:
         assert len(sys.argv) == 2, "Wrong number of arguments."
         board_size = int(sys.argv[1]),
-        assert board_size > 0, "Board size must be >=1."
+        assert board_size > 0, "Board size must be >= 1."
     except Exception as exc:
         print(exc)
-        raise SystemExit("Usage: backtracker <n>\nSolve the n x n queen problem.")
+        raise SystemExit(
+            "Usage: backtracker <n>\nSolve the n x n queen problem.")
     print("Solving the queens problem with board size %d" % board_size)
     board = QueensBoard(board_size)
     if do_search(board):

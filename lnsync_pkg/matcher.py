@@ -35,25 +35,29 @@ class TreePairMatcher(object):
     If source tree is also online, it cannot be a subdir of the target, else
     ValueError is raised.
     """
-    def __init__(self, src_db, tgt_db):
-        assert tgt_db.mode == "online", "TreePairMatcher: not an online db."
+    def __init__(self, src_tree, tgt_tree):
+        assert tgt_tree.db.mode == "online", "TreePairMatcher: not online db."
         # Do not match a tree against a subtree.
         def is_subdir(path, directory):
             relative = os.path.relpath(path, directory)
             return not relative.startswith(os.pardir + os.sep)
-        if src_db.mode == "online" and \
-            (is_subdir(src_db.rootdir_path, tgt_db.rootdir_path) \
-             or is_subdir(tgt_db.rootdir_path, src_db.rootdir_path)):
-            raise ValueError("Source tree cannot be a subdirectory of target tree.")
-        self.dbs = SrcTgt(src_db, tgt_db)
-        self.mt_state = State(self.dbs)
+        if src_tree.db.mode == "online" and \
+            (is_subdir(src_tree.root_path, tgt_tree.root_path) \
+             or is_subdir(tgt_tree.root_path, src_tree.root_path)):
+            raise ValueError("Source tree cannot be a subdirectory of target.")
+        self.trees = SrcTgt(src_tree, tgt_tree)
+        self.mt_state = State(self.trees)
         self._have_match = False
         self._rm_in_advance = None # Used in generating commands.
 
     def do_match(self):
         """Run matching algorithm, return True if match was found.
         """
-        have_match = do_search(self.mt_state)
+        pr.progress("starting match-up")
+        initial_state = self.mt_state
+        pr.progress("completing match-up")
+        have_match = do_search(initial_state)
+        pr.progress("finished match-up")
         self._have_match = have_match
         return have_match
 
@@ -80,12 +84,13 @@ class TreePairMatcher(object):
         ln_map = self.mt_state.total_path_op.ln_map
         for ln_ref_path in ln_map:
             for new_link_path in ln_map[ln_ref_path]:
-                if self.dbs.tgt.follow_path(new_link_path):
+                if self.trees.tgt.follow_path(new_link_path):
                     if new_link_path in self.mt_state.total_path_op.unln_set:
                         self._rm_in_advance.add(new_link_path)
                         yield self._mk_rm_cmd(new_link_path)
                     else:
-                        pr.warning("cannot create hardlink at %s" % new_link_path)
+                        pr.warning("cannot create hardlink at %s" % \
+                            new_link_path)
                         continue
                 yield ("ln", ln_ref_path, new_link_path)
 
@@ -107,7 +112,7 @@ class TreePairMatcher(object):
                 curr_path = new_path
             final_mv_pair = reversed_rel_mv_pairs[-1]
             final_mv_dest = final_mv_pair[1]
-            if self.dbs.tgt.follow_path(final_mv_pair[1]):
+            if self.trees.tgt.follow_path(final_mv_pair[1]):
                 if final_mv_dest in self.mt_state.total_path_op.unln_set:
                     self._rm_in_advance.add(final_mv_dest)
                     yield self._mk_rm_cmd(final_mv_dest)
@@ -132,7 +137,7 @@ class TreePairMatcher(object):
         A rm command includes an alternative path to the same file as its
         second paramater, to allow undoing.
         """
-        f_obj = self.dbs.tgt.follow_path(relpath)
+        f_obj = self.trees.tgt.follow_path(relpath)
         witness_path = f_obj.relpaths[0]
         if witness_path == relpath:
             witness_path = f_obj.relpaths[1]
@@ -198,10 +203,12 @@ class PathOp(object):
         """
         self.mv_graph.add_graph(another_op.mv_graph)
         for tgt_path in another_op.ln_map:
-            assert not tgt_path in self.ln_map, "PathOp.add: tgt_path in ln_map."
+            assert not tgt_path in self.ln_map, \
+                "PathOp.add: tgt_path in ln_map."
             self.ln_map[tgt_path] = another_op.ln_map[tgt_path]
         for tgt_path in another_op.unln_set:
-            assert not tgt_path in self.unln_set, "PathOp.add: tgt_path in unln_set."
+            assert not tgt_path in self.unln_set, \
+                "PathOp.add: tgt_path in unln_set."
             self.unln_set.add(tgt_path)
         return self
 
@@ -210,10 +217,12 @@ class PathOp(object):
         """
         self.mv_graph.remove_graph(another_op.mv_graph)
         for tgt_path in another_op.ln_map:
-            assert tgt_path in self.ln_map, "PathOp.rm: tgt_path not in ln_map."
+            assert tgt_path in self.ln_map, \
+                "PathOp.rm: tgt_path not in ln_map."
             del self.ln_map[tgt_path]
         for tgt_path in another_op.unln_set:
-            assert tgt_path in self.unln_set, "PathOp.rm: tgt_path not in unln_set."
+            assert tgt_path in self.unln_set, \
+                "PathOp.rm: tgt_path not in unln_set."
             self.unln_set.remove(tgt_path)
 
     def is_valid(self):
@@ -223,8 +232,8 @@ class State(SearchState):
     """State for matching using the backtracker.
 
     Implements make_delta_iter, that generates deltas.
-    An delta is the data used by a parent node to generate one of the children node,
-    and again by that child node to revert back to the same parent node.
+    An delta is the data used by a parent node to generate one of the children
+    node, and again by that child node to revert back to the same parent node.
     State data:
         - szhash_stack: stack of pairs of file id lists (src_ids, tgt_ids),
         all identical sizes and hashes in each pair, yet to be matched
@@ -232,19 +241,19 @@ class State(SearchState):
         for the current size-hash values
         - total_path_op: graph of target file operations built so far
     Static data:
-        - dbs: SrcTgt(src_db, tgt_db)
+        - trees: SrcTgt(src_tree, tgt_tree)
         - szhash_to_ids: full {(size, hash) -> [SrcTgtfile_ids pairs]}
     """
 
     __slots__ = "szhash_stack", "cur_srctgt_ids", "total_path_op", \
-                "dbs", "szhash_to_src_ids", "_valid"
+                "trees", "szhash_to_src_ids", "_valid"
 
-    def __init__(self, dbs):
-        """dbs is a SrcTgt pair (src_db, tgt_db).
+    def __init__(self, trees):
+        """trees is a SrcTgt pair (src_tree, tgt_tree).
 
         Init state variables and static data szhash_to_ids.
         """
-        self.dbs = dbs
+        self.trees = trees
         self.total_path_op = PathOp.make_trivial()
         self.szhash_stack = []
         self.szhash_to_ids = {}
@@ -255,51 +264,75 @@ class State(SearchState):
         self.szhash_cur = None
 
     def _init_stack_and_pathop(self):
-        """Create a stack of (size, hash) to match, eliminating common trivial cases."""
-        src_sizes = set(self.dbs.src.get_all_sizes())
-        tgt_sizes = set(self.dbs.tgt.get_all_sizes())
-        common_sizes = set.intersection(src_sizes, tgt_sizes)
+        """Create a stack of (size, hash) to match."""
+        def list_intersection(list1, list2):
+            tmp = set(list1)
+            return [e for e in list2 if e in tmp]
+        common_sizes = list_intersection(self.trees.src.get_all_sizes(),
+                                         self.trees.tgt.get_all_sizes())
+        common_sizes.sort()
         for common_sz in common_sizes:
-            sz_src_files = self.dbs.src.size_to_files(common_sz)
-            sz_tgt_files = self.dbs.tgt.size_to_files(common_sz)
-            src_hashes = [self.dbs.src.db_get_prop(f) for f in sz_src_files]
-            tgt_hashes = [self.dbs.tgt.db_get_prop(f) for f in sz_tgt_files]
-            sz_common_hashes = set.intersection(set(src_hashes), set(tgt_hashes))
-            for hash_val in sz_common_hashes:
-                szhash_fileids_src = \
-                    [f.file_id for f in sz_src_files if self.dbs.src.db_get_prop(f) == hash_val]
-                szhash_fileids_tgt = \
-                    [f.file_id for f in sz_tgt_files if self.dbs.tgt.db_get_prop(f) == hash_val]
-                self.szhash_to_ids[(common_sz, hash_val)] = \
-                    SrcTgt(szhash_fileids_src, szhash_fileids_tgt)
-        szhash_skipped = set()
-        for szhash in self.szhash_to_ids:
-            srctgt_ids = self.szhash_to_ids[szhash]
-            if self._init_eliminated_now(srctgt_ids):
-                szhash_skipped.add(szhash)
-            else:
+            with pr.ProgressPrefix("size %d:" % (common_sz,)):
+                self._init_stack_and_pathop_persize(common_sz)
+
+    def _init_stack_and_pathop_persize(self, file_sz):
+        """Initialize stack, considering only files of a given size,
+        eliminating common trivial cases."""
+        sz_src_files = self.trees.src.size_to_files(file_sz)
+        sz_tgt_files = self.trees.tgt.size_to_files(file_sz)
+        src_hashes = {self.trees.src.get_prop(f) for f in sz_src_files}
+        tgt_hashes = {self.trees.tgt.get_prop(f) for f in sz_tgt_files}
+        sz_common_hashes = set.intersection(src_hashes, tgt_hashes)
+        def commonhash_to_fileids(tree, file_list):
+            """Return table hash -> [fileids] with all files whose hash is one of
+            the values in sz_common_hashes (hashes in common for this file size).
+            """
+            hashfileids_dict = {}
+            for file_obj in file_list:
+                hash_val = tree.get_prop(file_obj)
+                if hash_val in sz_common_hashes:
+                    if hash_val in hashfileids_dict:
+                        hashfileids_dict[hash_val].append(file_obj.file_id)
+                    else:
+                        hashfileids_dict[hash_val] = [file_obj.file_id]
+            return hashfileids_dict
+        src_commonhash_to_fileids = \
+            commonhash_to_fileids(self.trees.src, sz_src_files)
+        tgt_commonhash_to_fileids = \
+            commonhash_to_fileids(self.trees.tgt, sz_tgt_files)
+        for hash_val in sz_common_hashes:
+            pr.trace("stack init for (size,hash)=(%d,%d)", file_sz, hash_val)
+            szhash_fileids_src = src_commonhash_to_fileids[hash_val]
+            szhash_fileids_tgt = tgt_commonhash_to_fileids[hash_val]
+            srctgt_ids = SrcTgt(szhash_fileids_src, szhash_fileids_tgt)
+            szhash = (file_sz, hash_val)
+            if not self._init_eliminated_now(srctgt_ids):
                 self.szhash_stack.append(szhash)
-        for szhash in szhash_skipped:
-            del self.szhash_to_ids[szhash]
+                self.szhash_to_ids[szhash] = srctgt_ids
 
     def _init_eliminated_now(self, srctgt_ids):
-        """Return True if these ids were handled now and need not go to the search stack."""
+        """Return True if these ids were handled now and need not go to the
+        search stack."""
 # Case 1. one id on each side.
         ids = srctgt_ids
         if len(ids.src) == len(ids.tgt) == 1:
-            src_paths = self.dbs.src.id_to_file(ids.src[0]).relpaths
-            tgt_paths = self.dbs.tgt.id_to_file(ids.tgt[0]).relpaths
+            src_paths = self.trees.src.id_to_file(ids.src[0]).relpaths
+            tgt_paths = self.trees.tgt.id_to_file(ids.tgt[0]).relpaths
 # Case 1a. single path for each id.
             if len(src_paths) == len(tgt_paths) == 1:
-                self.total_path_op.add(PathOp.make_mv(SrcTgt(src_paths[0], tgt_paths[0])))
+                self.total_path_op.add(
+                    PathOp.make_mv(SrcTgt(src_paths[0], tgt_paths[0])))
                 return True
 # Case 1b. multiple paths for each id, equal in number and as sets.
             elif set(src_paths) == set(tgt_paths):
                 return True
-# Case 2. same number of ids on each side, each id with a single path, paths match as a set.
+# Case 2. same number of ids on each side, each id with a single path,
+#         paths match as a set.
         elif len(ids.src) == len(ids.tgt):
-            all_src_paths = [self.dbs.src.id_to_file(i).relpaths for i in ids.src]
-            all_tgt_paths = [self.dbs.tgt.id_to_file(i).relpaths for i in ids.tgt]
+            all_src_paths = \
+                [self.trees.src.id_to_file(i).relpaths for i in ids.src]
+            all_tgt_paths = \
+                [self.trees.tgt.id_to_file(i).relpaths for i in ids.tgt]
             if all([len(ps) == 1 for ps in all_src_paths]) \
                     and all([len(ps) == 1 for ps in all_tgt_paths]):
                 all_src_paths = [ps[0] for ps in all_src_paths]
@@ -310,39 +343,40 @@ class State(SearchState):
 
     def down_delta(self, state_delta):
         delta = state_delta
-        pr.debug("down: %s", delta)
+        pr.trace("down: %s", delta)
         if delta.next_szhash:
-            pr.debug("new sz-hash: %s", delta.next_szhash)
+            pr.trace("new sz-hash: %s", delta.next_szhash)
             assert self.szhash_stack[-1] == delta.next_szhash
             self.szhash_cur = self.szhash_stack.pop()
-            self.cur_srctgt_ids = copy.deepcopy(self.szhash_to_ids[delta.next_szhash])
+            self.cur_srctgt_ids = \
+                copy.deepcopy(self.szhash_to_ids[delta.next_szhash])
         elif delta.skip_ids:
-            pr.debug("ignoring leftover ids: %s", delta.skip_ids)
+            pr.trace("ignoring leftover ids: %s", delta.skip_ids)
             for s_id in delta.skip_ids.src:
                 self.cur_srctgt_ids.src.remove(s_id)
             for t_id in delta.skip_ids.tgt:
                 self.cur_srctgt_ids.tgt.remove(t_id)
         elif not delta.final_check:
-            pr.debug("new src-tgt id pair: %s", delta.srctgt_id)
+            pr.trace("new src-tgt id pair: %s", delta.srctgt_id)
             self.cur_srctgt_ids.src.remove(delta.srctgt_id.src)
             self.cur_srctgt_ids.tgt.remove(delta.srctgt_id.tgt)
             self.total_path_op.add(delta.path_op)
             self._valid = self.total_path_op.is_valid()
-            pr.debug("new pathop of size %d", len(str(self.total_path_op)))
+            pr.trace("new pathop of size %d", len(str(self.total_path_op)))
         else:
-            pr.debug("final check.")
+            pr.trace("final check.")
             self._doing_final_check = True
             self._valid = True
-            pr.debug("valid: %s", self._valid)
+            pr.trace("valid: %s", self._valid)
 
     def up_delta(self, state_delta):
         delta = state_delta
-        pr.debug("up : %s", delta)
+        pr.trace("up : %s", delta)
         if delta.next_szhash:
             self.szhash_stack.append(delta.next_szhash)
             self.cur_srctgt_ids = SrcTgt([], [])
         elif delta.skip_ids:
-            pr.debug("restoring leftover ids: %s", delta.skip_ids)
+            pr.trace("restoring leftover ids: %s", delta.skip_ids)
             for s_id in delta.skip_ids.src:
                 self.cur_srctgt_ids.src.append(s_id)
             for t_id in delta.skip_ids.tgt:
@@ -361,19 +395,20 @@ class State(SearchState):
     def make_delta_iter(self):
         """Return a non-empty iterator of deltas from current state, or None.
         """
-        pr.debug("making delta for stack size %d and cur ids: %s", \
-                len(self.szhash_stack), self.cur_srctgt_ids)
-        if len(self.cur_srctgt_ids.src) > 0 and len(self.cur_srctgt_ids.tgt) > 0:
+        pr.trace("making delta for stack size %d and cur ids: %s",
+                 len(self.szhash_stack), self.cur_srctgt_ids)
+        if self.cur_srctgt_ids.src and self.cur_srctgt_ids.tgt:
             src_ids = copy.deepcopy(self.cur_srctgt_ids.src)
             tgt_ids = copy.deepcopy(self.cur_srctgt_ids.tgt)
             def delta_maker():
                 for (sids, tids) in self._gen_id_permutations(src_ids, tgt_ids):
                     for sid, tid in zip(sids, tids):
                         for path_op in self._gen_pathops(sid, tid):
-                            delta = Delta.make_path_op(SrcTgt(sid, tid), path_op)
+                            delta = Delta.make_path_op(
+                                SrcTgt(sid, tid), path_op)
                         yield delta
             return delta_maker()
-        elif len(self.cur_srctgt_ids.src) > 0 or len(self.cur_srctgt_ids.tgt) > 0:
+        elif self.cur_srctgt_ids.src or self.cur_srctgt_ids.tgt:
             src_ids = copy.deepcopy(self.cur_srctgt_ids.src)
             tgt_ids = copy.deepcopy(self.cur_srctgt_ids.tgt)
             return iter([Delta.make_skip_ids(SrcTgt(src_ids, tgt_ids))])
@@ -389,23 +424,24 @@ class State(SearchState):
     def _gen_pathops(self, src_id, tgt_id):
         """Generate PathOps turning the tgt_id pathset into the src_id pathset.
 
-        Each generated PathOp accomplishes that goal using different specific mv/ln/unln
-        elementary operations, with some possibly creating mv cycles when combined with
-        other PathOps for other file ids.
+        Each generated PathOp accomplishes that goal using different specific
+        mv/ln/unln elementary operations, with some possibly creating mv cycles
+        when combined with other PathOps for other file ids.
         """
-        assert isinstance(src_id, (int, long)) and isinstance(tgt_id, (int, long)), \
+        assert isinstance(src_id, (int, long)) \
+            and isinstance(tgt_id, (int, long)), \
             "_gen_pathops: bad ids (%s,%s)." % (src_id, tgt_id)
-        src_paths = self.dbs.src.id_to_file(src_id).relpaths
-        tgt_paths = self.dbs.tgt.id_to_file(tgt_id).relpaths
+        src_paths = self.trees.src.id_to_file(src_id).relpaths
+        tgt_paths = self.trees.tgt.id_to_file(tgt_id).relpaths
         some_tgt_path = tgt_paths[0]
-        common_paths = [p for p in src_paths if p in tgt_paths]
-        src_only_paths = [p for p in src_paths if p not in common_paths]
-        tgt_only_paths = [p for p in tgt_paths if p not in common_paths]
-        if len(src_only_paths) == 0:
-            assert len(common_paths) != 0, "_gen_pathops: no common paths"
+        common_paths = (p for p in src_paths if p in tgt_paths)
+        src_only_paths = (p for p in src_paths if p not in common_paths)
+        tgt_only_paths = (p for p in tgt_paths if p not in common_paths)
+        if not src_only_paths:
+            assert common_paths, "_gen_pathops: no common paths"
             yield PathOp.make_unln(*tgt_only_paths)
-        elif len(tgt_only_paths) == 0:
-            assert len(common_paths) != 0, "_gen_pathops: no common paths"
+        elif not tgt_only_paths:
+            assert common_paths, "_gen_pathops: no common paths"
             yield PathOp.make_ln(some_tgt_path, src_paths)
         elif len(tgt_only_paths) == len(src_only_paths):
             # Just mv paths.
@@ -426,7 +462,8 @@ class State(SearchState):
                 yield mv_op.add(ln_op)
         else:
             # len(tgt_paths) < len(src_paths) need to create new links at target.
-            for src_paths_order in itertools.permutations(src_paths, len(tgt_paths)):
+            for src_paths_order \
+                    in itertools.permutations(src_paths, len(tgt_paths)):
                 mv_ops = [PathOp.make_mv(SrcTgt(a, b)) \
                         for (a, b) in zip(src_paths_order, tgt_paths)]
                 mv_op = PathOp.join(*mv_ops)
@@ -440,8 +477,8 @@ class State(SearchState):
 
         A matchup is a pair of lists (src_ids, tgt_ids) of equal length.
         Return an iterator that will generate matchups.
-        In the non-trivial case, the iterator yields first a restricted range of matchups,
-        where files sharing a full path are always matched.
+        In the non-trivial case, the iterator yields first a restricted range of
+        matchups, where files sharing a full path are always matched.
         """
         if len(src_ids) == 1 and len(tgt_ids) == 1:
             return iter([(src_ids, tgt_ids)])
@@ -455,19 +492,20 @@ class State(SearchState):
         return itertools.chain(bgm, res)
 
     def _best_guess_matches(self, src_ids, tgt_ids):
-        """Return a generator for some matchups of ids1 to ids2. See _gen_id_permutations.
+        """Return a generator for some matchups of ids1 to ids2.
+        See _gen_id_permutations.
         """
-        def match_either_way(ids1, db1, ids2, db2):
+        def match_either_way(ids1, tree1, ids2, tree2):
             # Assume len(ids1) <= len(ids2).
             unmt_ids_1 = copy.copy(ids1)
             unmt_ids_2 = copy.copy(ids2)
             mt_ids_1, mt_ids_2 = [], []
             for id1 in ids1:
                 id1_matched = False
-                paths1 = db1.id_to_file(id1).relpaths
+                paths1 = tree1.id_to_file(id1).relpaths
                 for path1 in paths1:
                     for id2 in unmt_ids_2:
-                        paths2 = db2.id_to_file(id2).relpaths
+                        paths2 = tree2.id_to_file(id2).relpaths
                         if path1 in paths2:
                             mt_ids_1 += [id1]
                             mt_ids_2 += [id2]
@@ -481,24 +519,29 @@ class State(SearchState):
                 # No id in ids1 has a path in common with some path in ids2.
                 return iter([])
             elif len(mt_ids_1) == len(ids1):
-                # Each id in ids1 has a path matching a path for some id2 in ids2.
+                # Each id in ids1 has a path matching a path
+                # for some id2 in ids2.
                 return iter([(mt_ids_1, mt_ids_2)])
             else:
                 return itertools.izip(\
                             itertools.repeat(mt_ids_1 + unmt_ids_1),\
                             itertools.imap(
                                 lambda permtail: mt_ids_2 + list(permtail),
-                                itertools.permutations(unmt_ids_2, len(unmt_ids_1))))
+                                itertools.permutations(
+                                    unmt_ids_2, len(unmt_ids_1))))
         if len(src_ids) == 1 and len(tgt_ids) == 1:
             res = iter([]) # Nothing to add
         elif len(src_ids) <= len(tgt_ids):
-            res = match_either_way(src_ids, self.dbs.src, tgt_ids, self.dbs.tgt)
+            res = match_either_way(
+                src_ids, self.trees.src, tgt_ids, self.trees.tgt
+                )
         else:
             def reverse_pair(pair):
                 return (pair[1], pair[0])
             res = itertools.imap(
                 reverse_pair,
-                match_either_way(tgt_ids, self.dbs.tgt, src_ids, self.dbs.src)
+                match_either_way(
+                    tgt_ids, self.trees.tgt, src_ids, self.trees.src)
                 )
         return res
 
@@ -506,24 +549,26 @@ class Delta(object):
     """State delta for passing to a child node and back.
 
     There are four types of Deltas: a Delta has fields new_szhash, srctgt_id,
-    path_op, skip_ids, final_check, interpreted as follows (going down the search
-    tree to a child node).
-    1.If new_szhash is not None, then it is the value at the top of szhash_stack.
+    path_op, skip_ids, final_check, interpreted as follows (going down the
+    search tree to a child node).
+    1.If new_szhash is not None, then it is the value at the top of szhash
+    stack.
     Action: new_szhash is popped from szhash_stack and cur_srctgt_ids is set.
-    2.If srctgt_id is not None, then srctgt_id.src is in cur_srctgt_ids.src
-    and likewise for tgt. Action: srctgt_id.src removed cur_srctgt_ids.src
+    2.If srctgt_id is not None, then srctgt_id.src is in cur_srctgt_ids.src and
+    likewise for tgt. Action: srctgt_id.src removed cur_srctgt_ids.src
     (likewise for tgt) and path_op for this match is merged into total_path_op.
-    3.If skip_ids is not None, it is a SrcTgt pair of lists that were not matched
-    and are to be disregarded. Action: clear srctgt_id.
-    4.If final_check is not None, then the search stack is empty. Action: the state
-    is flagged as being checked.
+    3.If skip_ids is not None, it is a SrcTgt pair of lists that were not
+    matched and are to be disregarded. Action: clear srctgt_id.
+    4.If final_check is not None, then the search stack is empty.
+    Action: the state is flagged as being checked.
     """
 
     __slots__ = "next_szhash", "srctgt_id", "path_op", "skip_ids", "final_check"
 
     @staticmethod
     def make_next_szhash(next_szhash):
-        """Return a Delta for passing to the next size/hash pair on the stack."""
+        """Return a Delta for passing to the next size/hash pair on the stack.
+        """
         newobj = Delta()
         newobj.next_szhash = next_szhash
         return newobj

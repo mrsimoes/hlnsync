@@ -3,159 +3,131 @@
 # Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
 # For conditions of distribution and use, see copyright notice in lnsync.py
 
-"""Provide printing services with multiple output levels
-    (progress, print, info, warning, debug, error)
-    with these rules:
-    - progress is disabled if sys.stdout is not a tty.
-#    - progress prints normally if option_scrollprogress is True.
-    - progress, print, info each outputs to stdout.
-    - warning, debug, error each outputs to stderr.
-    - default verbosity level is 0.
-    - error outputs when verbosity >= -1.
-    - print, info, warning, debug output when verbosity >= resp 0, 1, 2, 3.
-#    - option_quiet is True, all output is suppressed except for print.
-    - each line output from info, warning, debug, error is preceded by APP_PREFIX.
+"""Provide printing service with verbosity-controlled output levels
+and same-line progress messages.
+print, info, and debug print to stdout at verbosity levels >= 0, 1, and 2.
+error and warning print to stderr and verbosity levels >= 0, 1.
+progress outputs to stdout if it is a tty and verbosity is >= 0.
+Default verbosity is 0.
+(See https://www.xfree86.org/4.8.0/ctlseqs.html for terminal control sequences.)
+A context may be setup during which a prefix is prepended to progress messages.
+These contexts may be nested.
+A prefix may be set for each non-progress message.
 """
 
 from __future__ import print_function
 
 import sys
-import os
-import time
 import atexit
-import threading
+from itertools import chain
 
 # Tell pylint not to mistake module variables for constants
 # pylint: disable=C0103
 
 # Set by the module user.
-option_verbosity = 1
-
-APP_PREFIX = ""
-PROGRESS_PREFIX = ""
-
-# How many characters were printed to stdout in the last progress line,
-# or None if last line printed to stdout was not a progress line
-_last_print_len = None
+option_verbosity = 0
 
 _builtin_print = print
-
 _stdout_is_tty = sys.stdout.isatty()
 _stderr_is_tty = sys.stderr.isatty()
-if _stdout_is_tty or _stderr_is_tty:
-    _tty_size = os.popen('stty size -F /dev/tty', 'r').read().split()
-    if len(_tty_size) == 1:
-        _term_cols = int(_tty_size[0])
-    elif len(_tty_size) == 2:
-        _term_cols = int(_tty_size[1])
-    else:
-        _term_cols = 24
+
+_progress_prefixes = []
+_progress_was_printed = False
+
+_app_prefix = ""
+
+class ProgressPrefix(object):
+    """Set up a context during which a prefix is prepended to progress output.
+    """
+    def __init__(self, prefix):
+        self.prefix = prefix
+    def __enter__(self):
+        global _progress_prefixes
+        _progress_prefixes.append(self.prefix)
+    def __exit__(self, exc_type, exc_value, traceback):
+        global _progress_prefixes
+        assert _progress_prefixes[-1] == self.prefix
+        _progress_prefixes.pop()
+        return False # We never handle exceptions.
+
+def progress(*args):
+    """Print each arg in the same line, without changing to the next line."""
+    global _progress_prefixes
+    global _progress_was_printed
+    global option_verbosity
+    if option_verbosity < 0 or not _stdout_is_tty:
+        return
+    line = "".join(chain(_progress_prefixes, args))
+    line = line.replace("\n", "")
+    _builtin_print('\033[?7l', end="") # Wrap off.
+    _builtin_print(line, end="\033[0K\r") # Erase to end of line.
+    _builtin_print('\033[?7h', end="") # Wrap on.
+    _progress_was_printed = True
+    sys.stdout.flush()
+
+def progress_percentage(par, tot):
+    """Print the percentage correspondint to par out of tot items."""
+    perc = 100 * par // tot
+    progress("%02d%%" % (perc,))
+
+def set_app_prefix(pref):
+    global _app_prefix
+    _app_prefix = pref
 
 def _print_main(*args, **kwargs):
-    global _last_print_len
-    global _flushing_needed
+    global _progress_was_printed
     file = kwargs.pop("file", sys.stdout)
-    prefix = kwargs.pop("prefix", "")
     assert file in (sys.stdout, sys.stderr)
     if file == sys.stdout:
         is_tty = _stdout_is_tty
     else:
         is_tty = _stderr_is_tty
-    if is_tty:
-        progress("", flush=True) # Clear any progress info on screen.
-    for line in " ".join(map(str, args)).splitlines():
-        _builtin_print(prefix + line, file=file, **kwargs)
-    if is_tty:
-        _last_print_len = None
-    _flushing_needed = True
+    if is_tty and _progress_was_printed:
+        _builtin_print("\r\033[2K", end="") # Erase current line.
+    for line in "".join(map(str, args)).splitlines():
+        _builtin_print(line, file=file, **kwargs)
+    _progress_was_printed = False
 
 def print(*args, **kwargs):
     if option_verbosity >= 0:
-        _print_main(*args, file=sys.stdout, prefix="", **kwargs)
+        _print_main(*args, file=sys.stdout, **kwargs)
 
-def info(*args, **kwargs):
+def fatal(*args, **kwargs):
+    if option_verbosity >= -1:
+        _print_main(_app_prefix, "fatal: ", *args, file=sys.stderr, **kwargs)
+
+def error(*args, **kwargs):
+    if option_verbosity >= 0:
+        if _stderr_is_tty:
+            _builtin_print("\033[31m", file=sys.stderr, end="") # Red forgr.
+        _print_main(_app_prefix, "error: ", *args, file=sys.stderr, **kwargs)
+        if _stderr_is_tty:
+            _builtin_print("\033[39m", file=sys.stderr, end="") # Std foreg.
+
+def info(*args, **kwargs): # Default verbosity level is 1.
     if option_verbosity >= 1:
-        _print_main(*args, file=sys.stdout, prefix=APP_PREFIX, **kwargs)
+        _print_main(_app_prefix, *args, file=sys.stdout, **kwargs)
 
 def warning(*args, **kwargs):
     if option_verbosity >= 2:
-        _print_main(*args, file=sys.stderr, prefix=APP_PREFIX+"warning: ", **kwargs)
+        _print_main(_app_prefix, "warning: ", *args, file=sys.stderr, **kwargs)
 
 def debug(template_str, *str_args, **kwargs):
-    if option_verbosity >= 3:
-        _print_main(template_str % str_args, file=sys.stderr, prefix="", **kwargs)
+    """Templace with % placeholders and respective are given separately."""
+    if option_verbosity >= 4:
+        _print_main("debug: ",
+                    template_str % str_args, file=sys.stderr, **kwargs)
 
-def error(*args, **kwargs):
-    if option_verbosity >= -1:
-        _print_main(*args, file=sys.stderr, prefix=APP_PREFIX+"error: ", **kwargs)
-
-def progress(*args, **kwargs):
-    """Print each arg in the same line, erase remainder of last the return carriage.
-    """
-    global _last_print_len # Update these globals.
-    global _flushing_needed
-    flush = kwargs.pop("flush", False)
-    if option_verbosity < 0 or not _stdout_is_tty:
-        return
-    tot_chars = 0
-    for pr_item in (PROGRESS_PREFIX,) + args:
-        pr_item = str(pr_item).replace("\n", "\\n")
-        try:
-            item_chars = len(pr_item.decode('utf-8'))
-        except Exception:
-            item_chars = len(pr_item) # Not really UTF8.
-        if tot_chars + item_chars > _term_cols:
-            pr_item = pr_item[:_term_cols - tot_chars]
-            item_chars = _term_cols - tot_chars
-        if(len(pr_item) > 0):
-            _builtin_print(pr_item, end="")
-        tot_chars += item_chars
-    if _last_print_len is None:
-        _last_print_len = _term_cols
-    _builtin_print(" " * (_last_print_len - tot_chars), end="")
-    _builtin_print("\r", end="") # Carriage return to beg of line.
-    _last_print_len = tot_chars
-    if flush:
-        sys.stdout.flush()
-        _flushing_needed = False
-    else:
-        _flushing_needed = True
-
-_last_progress_percent = None
-def progress_percentage(pos, tot, prefix=""):
-    global _last_progress_percent
-    new_progress_percent = 100*pos//tot
-    if _last_progress_percent != new_progress_percent:
-        _last_progress_percent = new_progress_percent
-        progress("%s%02d%%" % (prefix, new_progress_percent))
-
-FLUSH_INTERVAL_SECS = 1.1
-_flushing_needed = False
-_flusher_exit_flag = threading.Event()
-def _flusher():
-    global _flushing_needed
-    while not _flusher_exit_flag.is_set() or _flushing_needed:
-        if _flushing_needed:
-            # Prevent "broken pipe" errors if output files have been closed. 
-            try:
-                sys.stdout.flush()
-            except Exception:
-                pass
-            else:
-                _flushing_needed = False
-        _flusher_exit_flag.wait(timeout=FLUSH_INTERVAL_SECS)
-_flusher = threading.Thread(target=_flusher, name="flusher-thread")
-_flusher.daemon = True
-_flusher.start()
+def trace(template_str, *str_args, **kwargs):
+    """Templace with % placeholders and respective are given separately."""
+    if option_verbosity >= 5:
+        _print_main("trace: ",
+                    template_str % str_args, file=sys.stderr, **kwargs)
 
 def _exit_func():
-    progress("")
-    global _flushing_needed
-    _flushing_needed = True
-    _flusher_exit_flag.set()
-    _flusher.join()
-    # Prevent "broken pipe" errors if output files are closed before atexit activates.
-    try:
+    _builtin_print("\033[0J", end="") # Clear line.
+    try:     # Prevent "broken pipe" errors if outputs are closed before atexit.
+        sys.stdout.flush()
         sys.stdout.close()
     except Exception:
         pass
@@ -168,6 +140,24 @@ def _exit_func():
 atexit.register(_exit_func)
 
 if __name__ == "__main__":
-    for it in sys.argv[1:]:
-        progress(it)
-        time.sleep(1)
+    import time
+    import random
+    if len(sys.argv) > 1:
+        arg = str(sys.argv[1])
+    else:
+        arg = "TEST"
+    msg = arg + " -- this is "
+    set_app_prefix("myapp")
+    for v in [-1, 0, 1, 2, 3, 4, 5]:
+        option_verbosity = v
+        _builtin_print("\nverbosity %d" % v)
+        error(msg + "error")
+        print(msg + "print")
+        info(msg + "info")
+        warning(msg + " warning")
+        trace("%s debug ", msg)
+        trace("%s trace", msg)
+    for k in range(20):
+        for it in sys.argv[1:]:
+            progress(it * random.randint(1, 5))
+            time.sleep(0.5)

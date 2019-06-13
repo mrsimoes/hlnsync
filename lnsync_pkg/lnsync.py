@@ -20,19 +20,17 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 from __future__ import print_function
 
 import os
-import fnmatch
 import argparse
-import random
 import sys
-import abc
 import pipes
-from collections import defaultdict
 from sqlite3 import Error as SQLError
 
 import lnsync_pkg.printutils as pr
-from lnsync_pkg import metadata
+import lnsync_pkg.fdupes as fdupes
+import lnsync_pkg.metadata as metadata
 from lnsync_pkg.human2bytes import human2bytes
-from lnsync_pkg.hashdb import FileHashDB, FileHashDBs, copy_db
+from lnsync_pkg.sqlpropdb import SQLPropDBManager
+from lnsync_pkg.hashtree import FileHashTree
 from lnsync_pkg.matcher import TreePairMatcher
 
 # Tell pylint not to mistake module variables for constants
@@ -40,199 +38,279 @@ from lnsync_pkg.matcher import TreePairMatcher
 
 DEFAULT_DBPREFIX = "lnsync-"
 
+_quoter = pipes.quote
+
 def wrap(text, width):
     """A word-wrap function that preserves existing line breaks
     and most spaces in the text. Expects that existing line
     breaks are posix newlines (\n).
-
     By Mike Brown, licensed under the PSF.
     """
     return reduce(lambda line, word, width=width: '%s%s%s' %
                   (line,
                    ' \n'[(len(line)-line.rfind('\n')-1
                           + len(word.split('\n', 1)[0]
-                               ) >= width)
-                        ],
-                   word,
-                  ),
-                  text.split(' ')
-                 )
-
+                               ) >= width)],
+                   word,),
+                  text.split(' '),)
 
 DESCRIPTION = wrap(
-    ("lnsync version "+metadata.version+" Copyright (C) 2018 Miguel Simoes.\n\n"
-     "This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you\n"
-     "are welcome to redistribute it under certain conditions. See the GNU General\n"
-     "Public Licence for details.") + "\n\n" + metadata.description,
+    "lnsync version %s Copyright (C) 2018 Miguel Simoes.\n%s\n\n"
+    "This program comes with ABSOLUTELY NO WARRANTY. This is free software, "
+    "and you are welcome to redistribute it under certain conditions. "
+    "See the GNU General\n Public Licence for details.\n"
+    "More information at http://github.com/mrsimoes/lnsync" \
+    % (metadata.version, metadata.description),
     80
     )
 
-def pick_db_basename(dir_path, dbprefix):
-    """Find or create a unique basename matching <dbprefix>[0-9]*.db in the directory.
+# Verbosity subparser and control Action for both -q and -v
+# belong to the main parser, not any command parser.
 
-    Raise RuntimeError if there are too many files matching the database basename pattern
-    or if there are none and the given dir is not writable.
-    """
-    assert os.path.isdir(dir_path), "pick_db_basename: not a directory: %s ." % dir_path
-    if dbprefix.endswith(".db"):
-        dbprefix = dbprefix[:-3]
-    pattern = "%s[0-9]*.db" % dbprefix
-    candidates_base = fnmatch.filter(os.listdir(dir_path), pattern)
-    if len(candidates_base) == 1:
-        db_basename = candidates_base[0]
-    elif candidates_base == []:
-        if not os.access(dir_path, os.W_OK):
-            raise RuntimeError("no write access to %s" % str(dir_path))
-        def random_digit_str():
-            ndigit = 3
-            return ("%%0%dd" % ndigit) % random.randint(0, 10*ndigit-1)
-        db_basename = "%s%s.db" % (dbprefix, random_digit_str())
-    else:
-        raise RuntimeError("too many db files in %s" % str(dir_path))
-    return db_basename
-
-class CreateDB(argparse.Action):
-    """Create FileHashDB object given directory/filename.
-    """
+class SetVerbosityAction(argparse.Action):
+    """Adjust verbosity level of print module."""
+    def __init__(self, nargs=0, **kw):
+        """Ensure this action consumes zero parameters consumed,
+        just like store_true."""
+        # Override default behavior of switch consuming one argument following.
+        super(SetVerbosityAction, self).__init__(nargs=0, **kw)
     def __call__(self, parser, namespace, values, option_string=None):
-        def make_online_or_offline_db(dir_or_db):
-            """
-            Create and return a FileHashDB object.
-            Given a dir: create/open a unique db file in that dir, in online mode.
-            Given a file: open that db in offline mode.
-            """
-            if os.path.isdir(dir_or_db):
-                dbprefix = namespace.dbprefix
-                db_basename = pick_db_basename(dir_or_db, dbprefix)
-                dbpath = os.path.join(dir_or_db, db_basename)
-                return FileHashDB(dbpath, mode="online",
-                                  size_as_hash=size_as_hash, maxsize=maxsize)
-            elif os.path.isfile(dir_or_db):
-                dbpath = dir_or_db
-                return FileHashDB(dbpath, mode="offline",
-                                  size_as_hash=size_as_hash, maxsize=maxsize)
-            else:
-                raise RuntimeError("not a dir or file: %s" % dir_or_db)
-        # Not all commands have these options, so default values are set here.
         ns_vars = vars(namespace)
-        size_as_hash = ns_vars.get("bysize", False)
-        maxsize = ns_vars.get("maxsize", 0)
-        if maxsize == 0:
-            maxsize = None
-        if isinstance(values, list):
-            values = map(make_online_or_offline_db, values)
+        verbosity_delta = ns_vars.pop("verbosity_delta", 0)
+        if "q" in option_string:
+            verbosity_delta -= 1
+        elif  "v" in option_string:
+            verbosity_delta += 1
         else:
-            values = make_online_or_offline_db(values)
-        setattr(namespace, self.dest, values) # Store this parameter in the Namespace.
+            raise RuntimeError("parsing verbosity option")
+        ns_vars["verbosity_delta"] = verbosity_delta
 
-class CreateOnlineDB(CreateDB):
-    """Create FileHashDB object given directory.
+verbosity_options_parser = argparse.ArgumentParser(add_help=False)
+verbosity_options_parser.add_argument(
+    "-q", "--quiet", action=SetVerbosityAction, help="decrease verbosity")
+verbosity_options_parser.add_argument(
+    "-v", "--verbose", action=SetVerbosityAction, help="increase verbosity")
+
+# All options following are shared by multiple command parsers.
+
+# These options are unrelated to tree locations:
+
+hardlinks_option_parser = argparse.ArgumentParser(add_help=False)
+hardlinks_option_parser.add_argument(
+    "-H", "--hardlinks", action="store_true",
+    help="hardlinks are duplicates")
+
+sameline_option_parser = argparse.ArgumentParser(add_help=False)
+sameline_option_parser.add_argument(
+    "-1", "--sameline", action="store_true",
+    help="group files found in the same line (will not signal hard links)")
+
+# All options following apply to tree location arguments.
+
+# --dbprefix affects tree locations placed after it
+# Depends on argparse setting the default value at the outset and then
+# updating it for action="store".)
+
+dbprefix_option_parser = argparse.ArgumentParser(add_help=False)
+dbprefix_option_parser.add_argument(
+    "-p", "--dbprefix", type=str, action="store", default=DEFAULT_DBPREFIX,
+    help="database filename prefix for the locations following")
+
+# Any --exclude option applies to all locations anywhere in the command line.
+# Any --exclude-once option applies only to the next location.
+# Due to an argparse limitation, --exclude-once is not supported where
+# for the elements of a location list (nargs="+"). argparse cannot parse
+# optional arguments interspersed with the elements in a list argument.
+
+# argparse initializes to None
+exclude_option_parser = argparse.ArgumentParser(add_help=False)
+exclude_option_parser.add_argument(
+    "--exclude", type=str, action="append",
+    help="exclude certain files and dirs")
+
+# argparse autochanges option name to "exclude_once":
+excludeonce_option_parser = argparse.ArgumentParser(add_help=False)
+excludeonce_option_parser.add_argument(
+    "--exclude-once", type=str, action="append",
+    help="exclude for the following location only")
+
+# Actions that create a dict with appropritate kwargs to init an
+# instance of an online/offline file tree at a certain location.
+
+def make_treekwargs(location, mandatory_mode, dbprefix=DEFAULT_DBPREFIX):
     """
-    def __call__(self, parser, namespace, values, option_string=None):
-        def test_path_is_readable_dir(path):
-            if not os.path.isdir(path):
-                msg = "not a dir: %s" % path
-                parser.error(msg)
-            elif not os.access(path, os.R_OK):
-                msg = "cannot read dir: %s" % path
-                parser.error(msg)
-        if not isinstance(values, list):
-            test_path_is_readable_dir(values)
-        else:
-            for path in values:
-                test_path_is_readable_dir(path)
-        super(CreateOnlineDB, self).__call__(parser, namespace, values)
-
-class CreateOfflineDB(CreateDB):
-    """Create FileHashDB objects given directory.
+    Return new treekwargs with entries db, root_path.
+    Add also a canonical path _location entry to check for duplicates.
     """
-    def __call__(self, parser, namespace, values, option_string=None):
-        def test_path_is_readable_file(path):
-            if os.path.exists(path):
-                if not os.path.isfile(path) or not os.access(path, os.R_OK):
-                    msg = "%s is not a readable file" % path
-                    parser.error(msg)
-        if not isinstance(values, list):
-            test_path_is_readable_file(values)
-        else:
-            for path in values:
-                test_path_is_readable_file(path)
-        super(CreateOfflineDB, self).__call__(parser, namespace, values)
+    treekwargs = {}
+    treekwargs["_location"] = os.path.realpath(location) # Detect duplicate dbs.
+    treekwargs["root_path"] = os.path.realpath(location)
+    treekwargs["mode"] = SQLPropDBManager.mode_from_location(
+        location, mandatory_mode)
+    treekwargs["db"] = SQLPropDBManager
+    treekwargs["dbkwargs"] = {"prefix":dbprefix} # get mode from tree
+    return treekwargs
 
-class SetPrintutilsParam(argparse.Action):
-    """Set a parameter in the printutils module to True.
+class KwArgsTree(argparse.Action):
+    """Create kwargs to init a FileHashTree from argument and appropriate
+    mandatory mode from subclass.
     """
-    def __init__(self, nargs=0, **kw): # Override default switch consuming argument following it.
-        super(SetPrintutilsParam, self).__init__(nargs=0, **kw)
+    def __init__(self, mandatory_mode=None, **kwargs):
+        self.mandatory_mode = mandatory_mode
+        super(KwArgsTree, self).__init__(**kwargs)
 
-    @abc.abstractmethod
     def __call__(self, parser, namespace, values, option_string=None):
-        "To be overridden."
+        """Set self.dest to a treekwargs dict augmented with any existin
+        --exclude-once arguments, which are consumed.
+        (Global exclude parameters are set once parsing is completed.)"""
+        assert not isinstance(values, list) # Always a single tree argument.
+        location_value = values
+        ns_vars = vars(namespace) # Can be used to modify NameSpace.
+        treekwargs = self._new_treekwargs(ns_vars, location_value)
+        local_exclude = ns_vars.get("exclude_once", None)
+        if local_exclude is not None:
+            treekw = "exclude_patterns"
+            treekwargs[treekw] = list(local_exclude)
+            del ns_vars["exclude_once"]
+        setattr(namespace, self.dest, treekwargs) # Store db spec in Namespace.
 
+    def _new_treekwargs(self, ns_vars, location_value):
+        """Return a treekwargs init dict with "db_mode" "db_location"
+        and "db_prefix" and file tree root directory.
+        Also, check for duplicate tree arguments.
+        """
+        dbprefix = ns_vars["dbprefix"]
+        # Set main options, mode, etc.
+        treekwargs = make_treekwargs(
+            location_value, self.mandatory_mode, dbprefix)
+        # Check for duplicates.
+        all_treekwargs = ns_vars.get("all_treekwargs", [])
+        if any(treekwargs["_location"] == prev_kwargs["_location"] \
+                for prev_kwargs in all_treekwargs):
+            raise ValueError("duplicate location: %s" % (location_value,))
+        all_treekwargs.append(treekwargs)
+        ns_vars["all_treekwargs"] = all_treekwargs
+        return treekwargs
 
-class IncreaseVerbosity(SetPrintutilsParam):
+class KwArgsTreeList(KwArgsTree):
+    """Create a list of one or more treekwargs, mode unspecified."""
     def __call__(self, parser, namespace, values, option_string=None):
-        pr.option_verbosity += 1
+        ns_vars = vars(namespace) # Can be used to modify NameSpace.
+        assert isinstance(values, list)
+        ns_vars[self.dest] = \
+            [self._new_treekwargs(ns_vars, val) for val in values]
 
-class DecreaseVerbosity(SetPrintutilsParam):
-    def __call__(self, parser, namespace, values, option_string=None):
-        pr.option_verbosity -= 1
+class KwArgsTreeOnline(KwArgsTree):
+    def __init__(self, **kwargs):
+        super(KwArgsTreeOnline, self).__init__(
+            mandatory_mode="online", **kwargs)
+
+class KwArgsTreeOffline(KwArgsTree):
+    def __init__(self, **kwargs):
+        super(KwArgsTreeOffline, self).__init__(
+            mandatory_mode="offline", **kwargs)
+
+class KwArgsTreeOnlineList(KwArgsTreeList, KwArgsTreeOnline):
+    pass
+
+# These options apply to all trees: --maxsize and --bysize
+# and are set once parsing is complete.
+
+bysize_option_parser = argparse.ArgumentParser(add_help=False)
+bysize_option_parser.add_argument(
+    "-z", "--bysize", default=False, action="store_true",
+    help="compare files by size only")
+
+maxsize_option_parser = argparse.ArgumentParser(add_help=False)
+maxsize_option_parser.add_argument(
+    "-M", "--maxsize", type=human2bytes, default=-1,
+    help="ignore files larger than MAXSIZE (default is no limit) "
+         "suffixes allowed: K, M, G, etc.")
+
+skipempty_option_parser = argparse.ArgumentParser(add_help=False)
+skipempty_option_parser.add_argument(
+    "-0", "--skipempty", default=False, action="store_true",
+    help="ignore empty files")
+
+def apply_global_options_to_trees(args):
+    """Set global options and update --exclude option patterns on each
+    treekwargs. Called when parsing is complete."""
+    ns_vars = vars(args)
+# argparse sets good defaults, except for --exclude, which may not get set.
+    verbosity_delta = ns_vars.get("verbosity_delta", 0)
+    pr.option_verbosity += verbosity_delta
+    global_excludes = ns_vars.get("exclude", None)
+    for treekwargs in getattr(args, "all_treekwargs", []):
+        if global_excludes is not None:
+            treekw = "exclude_patterns"
+            once_excludes = treekwargs.get(treekw, [])
+            treekwargs[treekw] = global_excludes + once_excludes
+        for arg in "bysize", "maxsize", "skipempty":
+            # argparse argument names may not match FileHashTree _init_ kwargs:
+            treekw = {"bysize":"size_as_hash",
+                      "maxsize":"maxsize",
+                      "skipempty":"skipempty"}[arg]
+            if arg in ns_vars:
+                assert not treekw in treekwargs
+                treekwargs[treekw] = ns_vars[arg]
+
+# Argument check and type coerce functions:
 
 def relative_path(value):
     """Argument type to exclude absolute paths.
     """
     if os.path.isabs(value):
-        raise ValueError("not a relative path: %s." % value)
+        raise argparse.ArgumentTypeError("not a relative path: %s." % value)
     return value
 
-#
-# Create main parser and subcommand parsers.
-#
+def writable_empty_path(path):
+    if os.path.isfile(path):
+        raise argparse.ArgumentTypeError("file already exists at %s" % (path,))
+    try:
+        f = open(path, 'w')
+    except OSError:
+        raise argparse.ArgumentTypeError("cannot write to %s" % (path,))
+    else:
+        f.close()
+        os.remove(path)
+        return path
 
-cmd_handlers = {}  # Register here the handler function for each command.
+# Main parser and subcommand parsers.
 
-dbprefix_option_parser = argparse.ArgumentParser(add_help=False)
-dbprefix_option_parser.add_argument("-p", "--dbprefix", type=str, default=DEFAULT_DBPREFIX, \
-           help="sqlite database name prefix")
+# Register command handler functions here for the main body:
+cmd_handlers = {}  # Commands fully argparsed
+cmd_handlers_extra_args = {} # Commands taking extra non-argparsed arguments.
 
-bysize_option_parser = argparse.ArgumentParser(add_help=False)
-bysize_option_parser.add_argument("-z", "--bysize", action="store_true", \
-           help="compare files by size only")
+HELP_SPACING = 26
 
-maxsize_option_parser = argparse.ArgumentParser(add_help=False)
-maxsize_option_parser.add_argument("-M", "--maxsize", type=human2bytes, default=0, \
-           help="ignore files larger than MAXSIZE (0 for no limit; suffixes allowed: K, M, G, etc)")
-
-find_options_parser = argparse.ArgumentParser(add_help=False)
-find_options_parser.add_argument("-H", "--hardlinks", action="store_true", \
-                           help="hardlinks are duplicates")
-
-top_parser = argparse.ArgumentParser(description=DESCRIPTION,
-                                     formatter_class=argparse.RawTextHelpFormatter)
-top_parser.add_argument("-q", "--quiet", action=DecreaseVerbosity,
-                        help="decrease verbosity")
-top_parser.add_argument("-v", "--verbose", action=IncreaseVerbosity,
-                        help="increase verbosity")
-#top_parser.add_argument("-s", "--scrollprogress", action=SetPrintutilsParam,
-#                        help="scroll progress info")
+top_parser = argparse.ArgumentParser(\
+    description=DESCRIPTION,
+    parents=[verbosity_options_parser],
+    formatter_class=lambda prog: argparse.HelpFormatter(
+        prog, max_help_position=HELP_SPACING))
 cmd_parsers = top_parser.add_subparsers(dest="cmdname", help="sub-command help")
 
 ## sync
-parser_sync = \
-    cmd_parsers.add_parser(
-        'sync',
-        parents=[dbprefix_option_parser,
-                 bysize_option_parser,
-                 maxsize_option_parser],
-        help="sync target (mv/ln/unlink, no data copied or deleted)")
-parser_sync.add_argument("source", action=CreateDB)
-parser_sync.add_argument("targetdir", action=CreateOnlineDB)
+parser_sync = cmd_parsers.add_parser(
+    'sync',
+    parents=[exclude_option_parser,
+             excludeonce_option_parser,
+             bysize_option_parser,
+             maxsize_option_parser,
+             skipempty_option_parser,
+             dbprefix_option_parser,
+            ],
+    help="sync target dir from source by content, by rename and (de)link "
+         "on the target, no file data copied or deleted, like a best-effort "
+         "'rsync source/ target'")
 parser_sync.add_argument("-n", "--dry-run", help="dry run", action="store_true")
+parser_sync.add_argument("source", action=KwArgsTree)
+parser_sync.add_argument("targetdir", action=KwArgsTreeOnline)
 def do_sync(args):
-    with args.source as src_db:
-        with args.targetdir as tgt_db:
+    with FileHashTree(**args.source) as src_tree:
+        with FileHashTree(**args.targetdir) as tgt_tree:
             try:
-                matcher = TreePairMatcher(src_db, tgt_db)
+                matcher = TreePairMatcher(src_tree, tgt_tree)
             except ValueError as exc:
                 raise RuntimeError, str(exc), sys.exc_info()[2]
             pr.progress("calculating match")
@@ -240,57 +318,67 @@ def do_sync(args):
                 msg = "match failed"
                 raise RuntimeError, msg, sys.exc_info()[2]
             pr.progress("syncing files")
-            tgt_db.writeback = not args.dry_run
+            tgt_tree.writeback = not args.dry_run
             for cmd in matcher.generate_sync_cmds():
-                pr.print(" ".join(map(pipes.quote, cmd)))
+                pr.print(" ".join(map(_quoter, cmd)))
                 try:
-                    tgt_db.exec_cmd(cmd)
+                    tgt_tree.exec_cmd(cmd)
                 except OSError: # Catches e.g. linking not supported on target.
                     msg = "could not execute: " + " ".join(cmd)
                     raise RuntimeError, msg, sys.exc_info()[2]
             pr.progress("syncing empty dirs")
             dirs_to_rm_set = set()
             dirs_to_rm_list = []
-            for dir_obj, parent_obj, relpath \
-                    in tgt_db.walk_paths(recurse=True, topdown=False, dirs=True, files=False):
-                if all((obj.is_dir() and obj in dirs_to_rm_set) for obj in dir_obj.entries.itervalues()):
-                    if src_db.follow_path(relpath) is None:
+            for dir_obj, _parent_obj, relpath \
+                    in tgt_tree.walk_paths(
+                            recurse=True, topdown=False, dirs=True, files=False):
+                if all(
+                        (obj.is_dir() and obj in dirs_to_rm_set)
+                        for obj in dir_obj.entries.itervalues()
+                    ):
+                    if src_tree.follow_path(relpath) is None:
                         dirs_to_rm_set.add(dir_obj)
                         dirs_to_rm_list.append(dir_obj)
             for d in dirs_to_rm_list:
-                pr.print("rmdir %s" % (pipes.quote(d.get_relpath()),))
-                tgt_db.rm_dir_writeback(d)
-            pr.info("done")
+                pr.print("rmdir %s" % (_quoter(d.get_relpath()),))
+                tgt_tree.rm_dir_writeback(d)
+            pr.debug("sync done")
 cmd_handlers["sync"] = do_sync
 
 ## update
-parser_update = cmd_parsers.add_parser('update', \
-        parents=[dbprefix_option_parser, maxsize_option_parser], \
-        help='rehash new and modified files')
-parser_update.add_argument("locations", action=CreateOnlineDB, nargs="*")
+parser_update = cmd_parsers.add_parser(
+    'update',
+    parents=[exclude_option_parser,
+             dbprefix_option_parser,
+             skipempty_option_parser,
+             maxsize_option_parser],
+    help='update hashes for new and modified files')
+parser_update.add_argument("dirs", action=KwArgsTreeOnlineList, nargs="+")
 def do_update(args):
-    with FileHashDBs(args.locations) as databases:
-        for database in databases:
-            database.db_update_all()
+    with FileHashTree.listof(args.dirs) as trees:
+        for tree in trees:
+            tree.db_update_all()
 cmd_handlers["update"] = do_update
 
 ## rehash
-parser_rehash = cmd_parsers.add_parser('rehash', parents=[dbprefix_option_parser], \
-                    help='force hash updates')
-parser_rehash.add_argument("topdir", action=CreateOnlineDB)
+parser_rehash = cmd_parsers.add_parser(
+    'rehash', parents=[dbprefix_option_parser],
+    help='force hash updates for given files')
+parser_rehash.add_argument("topdir", action=KwArgsTreeOnline)
 parser_rehash.add_argument("relfilepaths", type=relative_path, nargs='+')
 def do_rehash(args):
-    with args.topdir as database:
+    with FileHashTree(**args.topdir) as tree:
         for relpath in args.relfilepaths:
-            file_obj = database.follow_path(relpath)
+            file_obj = tree.follow_path(relpath)
             if file_obj is None or not file_obj.is_file():
                 pr.error("not a relative path to a file: %s" % str(relpath))
                 continue
             try:
-                database.do_recompute_file(file_obj)
+                tree.db_recompute_prop(file_obj)
             except Exception as exc:
                 pr.debug(str(exc))
-                pr.error("cannot rehash %s" % database.printable_path(relpath))
+                pr.error("cannot rehash %s" % tree.printable_path(
+                    relpath, pprint=_quoter))
                 continue
 cmd_handlers["rehash"] = do_rehash
 
@@ -299,394 +387,461 @@ parser_subdir = \
     cmd_parsers.add_parser(
         'subdir',
         parents=[dbprefix_option_parser],
-        help='copy hash database to a relative subdir')
+        help='copy hashes to new database at subdir')
 parser_subdir.add_argument("topdir", type=str)
 parser_subdir.add_argument("relativesubdir", type=relative_path)
 def do_subdir(args):
     src_dir = args.topdir
-    src_db_basename = pick_db_basename(src_dir, args.dbprefix)
-    src_db_path = os.path.join(src_dir, src_db_basename)
-    if not os.path.isfile(src_db_path):
-        msg = "no database at: %s." % (src_dir,)
-        raise ValueError(msg)
     tgt_dir = os.path.join(src_dir, args.relativesubdir)
     if not os.path.isdir(tgt_dir):
-        msg = "not a subdir: %s.", (tgt_dir,)
-        raise ValueError(msg)
-    tgt_db_basename = pick_db_basename(tgt_dir, args.dbprefix)
-    tgt_db_path = os.path.join(tgt_dir, tgt_db_basename)
-    copy_db(src_db_path, tgt_db_path)
-    with FileHashDB(tgt_db_path, mode="online") as tgt_db:
-        tgt_db.db_clear_tree()
-        tgt_db.db_purge()
+        raise ValueError("not a subdir: %s." % (tgt_dir,))
+    with SQLPropDBManager(src_dir) as src_db:
+        with SQLPropDBManager(tgt_dir) as tgt_db:
+            src_db.merge_prop_values(tgt_db)
+    import pdb; pdb.set_trace()
+    with FileHashTree(**make_treekwargs(tgt_dir, "online")) as tgt_tree:
+        tgt_tree.db_purge_old_entries()
+        tgt_tree.db.compact()
 cmd_handlers["subdir"] = do_subdir
 
-## fdupes
-parser_fdupes = \
-    cmd_parsers.add_parser(
-        'fdupes',
-        parents=[find_options_parser,
-                 dbprefix_option_parser,
-                 bysize_option_parser,
-                 maxsize_option_parser],
-        help='find duplicate files')
-parser_fdupes.add_argument("locations", action=CreateDB, nargs="*")
-def do_fdupes(args):
-    """Find duplicates, using file size as well as file hash.
-    """
-    sizes_seen_once, sizes_seen_twice = set(), set()
-    with FileHashDBs(args.locations) as all_dbs:
-        for database in all_dbs:
-            pr.progress("assembling sizes for %s ." % database.printable_path(""))
-            for file_sz in database.size_to_files():
-                if (file_sz in sizes_seen_once) \
-                    or (len(database.size_to_files(file_sz)) > 1):
-                    sizes_seen_twice.add(file_sz)
-                if args.hardlinks:
-                    # In this case, a size value seen once for an id
-                    # with multiple paths is recorded as a dupe.
-                    files_this_sz = database.size_to_files(file_sz)
-                    if any(len(_f.relpaths) > 1 for _f in files_this_sz):
-                        sizes_seen_twice.add(file_sz)
-                sizes_seen_once.add(file_sz)
-        del sizes_seen_once
-        grouped_repeats = []            # Dupe paths, grouped by common contents.
-        for file_sz in sizes_seen_twice:
-            hashes_seen_once = set()    # For size sz and all databases.
-            hashes_seen_twice = set()
-            hash_to_fpaths = {}
-            for database in all_dbs:
-                if file_sz in database.size_to_files():
-                    for fobj in database.size_to_files(file_sz):
-                        try:
-                            hash_val = database.db_get_prop(fobj) # Raises RuntimeError on failure.
-                        except Exception:
-                            msg = "could not hash file id '%d'." % fobj.file_id
-                            pr.warning(msg)
-                            continue
-                        if hash_val in hashes_seen_once or \
-                            (args.hardlinks and len(fobj.relpaths) > 1):
-                            hashes_seen_twice.add(hash_val)
-                        hashes_seen_once.add(hash_val)
-                        if not hash_val in hash_to_fpaths:
-                            hash_to_fpaths[hash_val] = []
-                        this_file_paths = [database.printable_path(_p) for _p in fobj.relpaths]
-                        if args.hardlinks:
-                            this_file_paths[1:] = ["= " + pipes.quote(_p) for _p in this_file_paths[1:]]
-                        hash_to_fpaths[hash_val] += this_file_paths
-            for rep_hash in hashes_seen_twice: # Unequal sizes correspond to unequal hash values.
-                grouped_repeats.append(hash_to_fpaths[rep_hash])
-    output_leading_linebreak = False
-    for repeat_set in grouped_repeats:
-        if output_leading_linebreak:
-            pr.print(" ")
+# The next few commands print out list of file paths.
+class GroupedFileListPrinter(object):
+    """Output filepaths in groups separated by a blank line."""
+    def __init__(self, hardlinks, sameline):
+        self.hardlinks = hardlinks
+        self.sameline = sameline
+        self._output_group_linebreak = False
+    def start_group(self):
+        if self.sameline:
+            self._output_line = ""
         else:
-            output_leading_linebreak = True
-        for fpath in repeat_set:
-            pr.print(fpath)
+            if self._output_group_linebreak:
+                pr.print("\n")
+            else:
+                self._output_group_linebreak = True
+    def end_group(self):
+        if self.sameline:
+            pr.print(self._output_line)
+    def print_located_files(self, located_files):
+        for tree, fobjs in located_files.iteritems():
+            for fobj in fobjs:
+                self.print_file(tree, fobj)
+    def print_file(self, tree, fobj):
+        if self.sameline:
+            if self._output_line != "":
+                self._output_line += " "
+            for k, relpath in enumerate(fobj.relpaths):
+                if k == 0:
+                    include, prefix = True, ""
+                elif self.hardlinks:
+                    include, prefix = True, " "
+                else:
+                    include = False
+                if include:
+                    pr_path = tree.printable_path(relpath)
+                    # Escape single backslashes.
+                    pr_path = pr_path.replace("\\", "\\\\")
+                    pr_path = pr_path.replace(" ", "\ ")
+                    self._output_line += prefix + pr_path
+        else:
+            for k, relpath in enumerate(fobj.relpaths):
+                if k == 0:
+                    include, prefix = True, ""
+                elif self.hardlinks:
+                    include, prefix = True, "= "
+                else:
+                    include = False
+                if include:
+                    pr_path = tree.printable_path(relpath)
+                    pr.print(prefix, pr_path)
+
+
+## fdupes
+parser_fdupes = cmd_parsers.add_parser(
+    'fdupes',
+    parents=[exclude_option_parser,
+             hardlinks_option_parser,
+             bysize_option_parser,
+             maxsize_option_parser,
+             skipempty_option_parser,
+             dbprefix_option_parser,
+             sameline_option_parser],
+    help='find duplicate files')
+parser_fdupes.add_argument("locations", action=KwArgsTreeList, nargs="+")
+def do_fdupes(args):
+    """Find duplicate files, using file size as well as file hash.
+    """
+    with FileHashTree.listof(args.locations) as all_trees:
+        grouper = GroupedFileListPrinter(args.hardlinks, args.sameline)
+        for file_sz in fdupes.sizes_repeated(all_trees, args.hardlinks):
+            with pr.ProgressPrefix("size %d:" % (file_sz,)):
+                for _hash, located_files in \
+                    fdupes.located_files_repeated_of_size(
+                            all_trees, file_sz, args.hardlinks):
+                    grouper.start_group()
+                    grouper.print_located_files(located_files)
+                    grouper.end_group()
 cmd_handlers["fdupes"] = do_fdupes
 
 ## onall
-parser_onall = \
-    cmd_parsers.add_parser(
-        'onall',
-        parents=[find_options_parser,
-                 dbprefix_option_parser, \
-                 bysize_option_parser,
-                 maxsize_option_parser], \
-        help='find files common to all locations')
-parser_onall.add_argument("locations", action=CreateDB, nargs="+")
+parser_onall = cmd_parsers.add_parser(
+    'onall',
+    parents=[exclude_option_parser,
+             hardlinks_option_parser,
+             bysize_option_parser,
+             maxsize_option_parser,
+             skipempty_option_parser,
+             dbprefix_option_parser,
+             sameline_option_parser],
+    help='find files common to all locations')
+parser_onall.add_argument("locations", action=KwArgsTreeList, nargs="+")
 def do_onall(args):
-    with FileHashDBs(args.locations) as all_dbs:
-        first_db = all_dbs[0]
-        other_dbs = all_dbs[1:]
-        common_sizes = set(first_db.get_all_sizes())
-        for database in other_dbs:
-            pr.progress("assembling sizes for %s ." % database.printable_path(""))
-            common_sizes.intersection_update(database.get_all_sizes())
-        def size_to_hashes(a_db, file_sz):
-            "Generate all prop values for files of size sz on database adb."
-            for file_obj in a_db.size_to_files(file_sz):
-                yield a_db.db_get_prop(file_obj) # Raises RuntimeError on failure.
-        for file_sz in common_sizes:
-            common_hashes_this_sz = set(size_to_hashes(first_db, file_sz))
-            for database in other_dbs:
-                hashes_this_db = set(size_to_hashes(database, file_sz))
-                common_hashes_this_sz.intersection_update(hashes_this_db)
-            common_hash_paths = defaultdict(lambda: [])
-            for database in all_dbs:
-                for file_obj in database.size_to_files(file_sz):
-                    hash_val = database.db_get_prop(file_obj) # Raises RuntimeError on failure.
-                    if hash_val in common_hashes_this_sz:
-                        paths = [database.printable_path(rpath) \
-                                 for rpath in file_obj.relpaths]
-                        common_hash_paths[hash_val] += paths
-            for hash_val, paths in common_hash_paths.iteritems():
-                for path in paths:
-                    pr.print(pipes.quote(path))
-                pr.print("\n")
-cmd_handlers['onall'] = do_onall
-
+    with FileHashTree.listof(args.locations) as all_trees:
+        grouper = GroupedFileListPrinter(args.hardlinks, args.sameline)
+        for file_sz in fdupes.sizes_onall(all_trees):
+            with pr.ProgressPrefix("size %d:" % (file_sz,)):
+                for _hash, located_files in \
+                        fdupes.located_files_onall_of_size(all_trees, file_sz):
+                    grouper.start_group()
+                    grouper.print_located_files(located_files)
+                    grouper.end_group()
+cmd_handlers["onall"] = do_onall
 
 ## onfirstonly
-parser_onfirstonly = \
-    cmd_parsers.add_parser(
-        'onfirstonly',
-        parents=[find_options_parser,
-                 dbprefix_option_parser,
-                 bysize_option_parser,
-                 maxsize_option_parser], \
-        help='find files on first location, not on any other')
-parser_onfirstonly.add_argument("locations", action=CreateDB, nargs="+")
+parser_onfirstonly = cmd_parsers.add_parser(
+    'onfirstonly',
+    parents=[exclude_option_parser,
+             hardlinks_option_parser,
+             bysize_option_parser,
+             maxsize_option_parser,
+             skipempty_option_parser,
+             dbprefix_option_parser,
+             sameline_option_parser],
+    help='find files on first location, not on any other')
+parser_onfirstonly.add_argument("locations", action=KwArgsTreeList, nargs="+")
 def do_onfirstonly(args):
-    with FileHashDBs(args.locations) as all_dbs:
-        first_db = all_dbs[0]
-        other_dbs = all_dbs[1:]
-        for file_sz in first_db.get_all_sizes():
-            sz_other_db_hashes = set()
-            for database in other_dbs:
-                if file_sz in database.size_to_files():
-                    for file_obj in database.size_to_files(file_sz):
-                        # db_get_prop raises RuntimeError.
-                        sz_other_db_hashes.add(database.db_get_prop(file_obj))
-            for file_obj in first_db.size_to_files(file_sz):
-                if not first_db.db_get_prop(file_obj) in sz_other_db_hashes:
-                            # db_get_prop raises RuntimeError on failure.
-                    paths = file_obj.relpaths
-                    pr.print(paths[0])
-                    if not args.hardlinks:
-                        format_str = "= %s"
-                    else:
-                        format_str = "%s"
-                    for path in paths[1:]:
-                        pr.print(format_str, (pipes.quote(path),))
+    with FileHashTree.listof(args.locations) as all_trees:
+        grouper = GroupedFileListPrinter(args.hardlinks, args.sameline)
+        for file_sz in fdupes.sizes_onfirstonly(all_trees):
+            with pr.ProgressPrefix("size %d:" % (file_sz,)):
+                for _hash, located_files in \
+                        fdupes.located_files_onfirstonly_of_size(
+                                all_trees, file_sz):
+                    grouper.start_group()
+                    grouper.print_located_files(located_files)
+                    grouper.end_group()
 cmd_handlers["onfirstonly"] = do_onfirstonly
 
+## onlastonly
+parser_onlastonly = cmd_parsers.add_parser(
+    'onlastonly',
+    parents=[exclude_option_parser,
+             hardlinks_option_parser,
+             bysize_option_parser,
+             maxsize_option_parser,
+             skipempty_option_parser,
+             dbprefix_option_parser],
+    help='find files on last location, not on any other')
+parser_onlastonly.add_argument("locations", action=KwArgsTreeList, nargs="+")
+def do_onlastonly(args):
+    locs = args.locations
+    locs[0], locs[-1] = locs[-1], locs[0]
+    do_onfirstonly(args)
+cmd_handlers["onlastonly"] = do_onlastonly
+
 ## cmp
-parser_cmp = \
-    cmd_parsers.add_parser(
-        'cmp',
-        parents=[dbprefix_option_parser,
-                 bysize_option_parser,
-                 maxsize_option_parser],
-        help='recursively compare two directories')
-parser_cmp.add_argument("leftlocation", action=CreateDB)
-parser_cmp.add_argument("rightlocation", action=CreateDB)
+parser_cmp = cmd_parsers.add_parser(
+    'cmp',
+    parents=[exclude_option_parser,
+             excludeonce_option_parser,
+             bysize_option_parser,
+             maxsize_option_parser,
+             skipempty_option_parser,
+             dbprefix_option_parser,
+            ],
+    help='recursively compare two locations')
+parser_cmp.add_argument("leftlocation", action=KwArgsTree)
+parser_cmp.add_argument("rightlocation", action=KwArgsTree)
 def do_cmp(args):
+    """Recursively compare files and dirs in two directories.
     """
-    Recursively compare files and dirs in two directories.
-    """
-    with args.leftlocation as left_db:
-        with args.rightlocation as right_db:
+    def cmp_files(path, left_obj, right_obj):
+        # NB: get_prop raises RuntimeError on failure.
+        left_prop, right_prop = None, None
+        try:
+            left_prop = left_tree.get_prop(left_obj)
+            right_prop = right_tree.get_prop(right_obj)
+        except:
+            if left_prop is None:
+                err_path = left_tree.printable_path(path, pprint=_quoter)
+            else:
+                err_path = right_tree.printable_path(path, pprint=_quoter)
+            pr.error("reading %s, ignoring" % (err_path,))
+        else:
+            if left_prop != right_prop:
+                pr.print("files differ: %s" % (path,))
+    def cmp_subdir(cur_dirpath):
+        for left_obj, basename in \
+                left_tree.walk_dir_contents(cur_dirpath, dirs=True):
+            left_path = os.path.join(cur_dirpath, basename)
+            right_obj = right_tree.follow_path(left_path)
+            if right_obj is None:
+                if left_obj.is_file():
+                    left_path_printable = \
+                        left_tree.printable_path(left_path, pprint=_quoter)
+                    pr.print("left only: %s" % (left_path_printable,))
+                elif left_obj.is_dir():
+                    left_path_printable_dir = \
+                        left_tree.printable_path(
+                            left_path+os.path.sep, pprint=_quoter)
+                    pr.print("left only: %s" % (left_path_printable_dir,))
+                else:
+                    raise RuntimeError("unexpected left object: " + left_path)
+            elif left_obj.is_file():
+                if  right_obj.is_file():
+                    cmp_files(left_path, left_obj, right_obj)
+                elif right_obj.is_dir():
+                    pr.print("left file vs right dir: %s" % (left_path,))
+                else:
+                    pr.print("left file vs other: %s" % (left_path,))
+            elif left_obj.is_dir():
+                if right_obj.is_dir():
+                    dirpaths_to_visit.append(left_path)
+                elif right_obj.is_file():
+                    pr.print("left dir vs right file: %s" % (left_path,))
+                else:
+                    pr.print("left dir vs other: %s" % (left_path,))
+            else:
+                raise RuntimeError("unexpected left object: " + left_path)
+        for right_obj, basename in \
+                right_tree.walk_dir_contents(cur_dirpath, dirs=True):
+            right_path = os.path.join(cur_dirpath, basename)
+            left_obj = left_tree.follow_path(right_path)
+            if left_obj is None:
+                if right_obj.is_file():
+                    right_path_printable = \
+                        right_tree.printable_path(right_path, pprint=_quoter)
+                    pr.print("right only: %s" % (right_path_printable,))
+                elif right_obj.is_dir():
+                    right_path_printable_dir = \
+                        right_tree.printable_path(
+                            right_path+os.path.sep, pprint=_quoter)
+                    pr.print("right only: %s" % (right_path_printable_dir,))
+                else:
+                    raise RuntimeError("unexpected right object: " + right_path)
+            elif right_obj.is_file():
+                if not left_obj.is_file() and not left_obj.is_dir():
+                    pr.info("left other vs right file: %s" % (right_path,))
+            elif right_obj.is_dir():
+                if not left_obj.is_file() and not left_obj.is_dir():
+                    pr.info("left other vs right dir: %s" % (right_path,))
+            else:
+                raise RuntimeError("unexpected right object: " + right_path)
+    with FileHashTree(**args.leftlocation) as left_tree:
+        with FileHashTree(**args.rightlocation) as right_tree:
             dirpaths_to_visit = [""]
             while dirpaths_to_visit:
                 cur_dirpath = dirpaths_to_visit.pop()
-                for left_obj, basename in left_db.walk_dir_contents(cur_dirpath, dirs=True):
-                    left_path = os.path.join(cur_dirpath, basename)
-                    right_obj = right_db.follow_path(left_path)
-                    if left_obj.is_file():
-                        if right_obj is None:
-                            pr.print("left only: %s" % (pipes.quote(left_path),))
-                        elif right_obj.is_file():
-                                    # NB: db_get_prop raises RuntimeError on failure.
-                            if left_db.db_get_prop(left_obj) != right_db.db_get_prop(right_obj):
-                                pr.print("files differ: %s" % (pipes.quote(left_path),))
-                        elif right_obj.is_dir():
-                            pr.print("left file vs right dir: %s" % (pipes.quote(left_path),))
-                        else:
-                            pr.info("left file vs other: %s" % (pipes.quote(left_path),))
-                    elif left_obj.is_dir():
-                        if right_obj is None:
-                            pr.print("left only: %s" % (pipes.quote(left_path+os.path.sep),))
-                        elif right_obj.is_dir():
-                            dirpaths_to_visit.append(left_path)
-                        elif right_obj.is_file():
-                            pr.print("left dir vs right file: %s" % (pipes.quote(left_path),))
-                        else:
-                            pr.info("left dir vs other: %s" % (pipes.quote(left_path),))
-                    else:
-                        pr.debug(pipes.quote(left_path),)
-                        raise RuntimeError("do_cmp: unknown object type")
-                for right_obj, basename in right_db.walk_dir_contents(cur_dirpath, dirs=True):
-                    right_path = os.path.join(cur_dirpath, basename)
-                    left_obj = left_db.follow_path(right_path)
-                    if right_obj.is_file():
-                        if left_obj is None:
-                            pr.print("right only: %s" % (pipes.quote(right_path),))
-                        elif not (left_obj.is_file() or left_obj.is_dir()):
-                            pr.info("right file vs left other: %s" % (pipes.quote(right_path),))
-                    elif right_obj.is_dir():
-                        if left_obj is None:
-                            pr.print("right only: %s" % (pipes.quote(right_path+os.path.sep),))
-                        elif not (left_obj.is_file() or left_obj.is_dir()):
-                            pr.info("right dir vs left other: %s" % (pipes.quote(right_path),))
-                    else:
-                        pr.debug(pipes.quote(right_path),)
-                        raise RuntimeError("do_cmp: unknown object type")
+                cmp_subdir(cur_dirpath)
 cmd_handlers["cmp"] = do_cmp
 
 ## lookup
 parser_lookup = \
     cmd_parsers.add_parser(
-        'lookup', \
-        parents=[dbprefix_option_parser],
-        help='retrieve file hashes')
-parser_lookup.add_argument("location", action=CreateDB)
+        'lookup', parents=[dbprefix_option_parser],
+        help='retrieve file hash')
+parser_lookup.add_argument("location", action=KwArgsTree)
 parser_lookup.add_argument("relpath", type=relative_path)
 def do_lookup(args):
-    "Handler for looking up a fpath hash in the DB."
-    with args.location as database:
+    "Handler for looking up a fpath hash in the tree."
+    with FileHashTree(**args.location) as tree:
         fpath = args.relpath
-        fobj = database.follow_path(fpath)
+        fobj = tree.follow_path(fpath)
         if fobj is None or not fobj.is_file():
-            pr.error("not a file: %s" % (pipes.quote(fpath),))
+            pr.warning("not a file: %s" % (tree.printable_path(
+                fpath, pprint=_quoter),))
         else:
-            hash_val = database.db_get_prop(fobj)
+            hash_val = tree.get_prop(fobj)
             pr.print(hash_val)
 cmd_handlers["lookup"] = do_lookup
 
 ## check
-parser_check_files = \
-    cmd_parsers.add_parser(
-        'check', \
-        parents=[bysize_option_parser,
-                 dbprefix_option_parser,
-                 maxsize_option_parser], \
-        help='rehash files and compare against database')
-parser_check_files.add_argument("location", action=CreateOnlineDB)
+parser_check_files = cmd_parsers.add_parser(
+    'check',
+    parents=[exclude_option_parser,
+             hardlinks_option_parser,
+             bysize_option_parser,
+             maxsize_option_parser,
+             skipempty_option_parser,
+             dbprefix_option_parser],
+    help='rehash files and compare against stored value')
+parser_check_files.add_argument("location", action=KwArgsTreeOnline)
 parser_check_files.add_argument("relpaths", type=relative_path, nargs="*")
 
 def do_check(args):
-    with args.location as database:
-        if database.mode == "offline":
-            raise ValueError("cannot check files in offline mode")
+    with FileHashTree(**args.location) as tree:
+        assert tree.db.mode == "online"
         which_files_gen = args.relpaths
         if not which_files_gen:
             def gen_all_paths():
-                for _obj, _parent, path \
-                        in database.walk_paths(files=True, dirs=False, recurse=True):
+                for _obj, _parent, path in tree.walk_paths(
+                        files=True, dirs=False, recurse=True):
                     yield path
             which_files_gen = gen_all_paths()
-        num_changed = 0
-        for path in which_files_gen:
-            pr.progress("checking: %s" % path)
-            try:
-                fobj = database.follow_path(path)
-                res = database.db_check_prop(fobj)
-            except Exception as exc:
-                pr.warning("error while checking %s" % path)
-                pr.warning(str(exc))
+        file_objs_checked_ok = set()
+        file_objs_checked_bad = set()
+        try:
+            for path in which_files_gen:
+                pr.progress("checking: %s" % path)
+                fobj = tree.follow_path(path)
+                if fobj in file_objs_checked_ok:
+                    continue
+                if fobj in file_objs_checked_bad and not args.hardlinks:
+                    continue
+                try:
+                    res = tree.db_check_prop(fobj)
+                except Exception as exc:
+                    pr.error("while checking %s: %s" % (path, str(exc)))
+                    continue
+                if res:
+                    file_objs_checked_ok.add(fobj)
+                else:
+                    pr.info("failed check: %s" % path)
+                    file_objs_checked_bad.add(fobj)
+        finally:
+            tot_files_checked = len(file_objs_checked_ok) \
+                              + len(file_objs_checked_bad)
+            tot_files_failed = len(file_objs_checked_bad)
+            msg_out_tail = "out of %d files checked" % (tot_files_checked,)
+            if tot_files_failed > 0:
+                pr.info("%d file(s) failed %s" % \
+                    (tot_files_failed, msg_out_tail))
+                for p in file_objs_checked_bad:
+                    pr.print(p.relpaths[0])
             else:
-                if res is False:
-                    pr.print(path)
-                    num_changed += 1
-        if num_changed > 0:
-            pr.print("%d file(s) failed check" % num_changed)
-        else:
-            pr.info("no files failed check")
+                pr.info("no files failed %s" % (msg_out_tail,))
 
 cmd_handlers["check"] = do_check
 
-## rsync
-parser_rsync = \
-    cmd_parsers.add_parser(
-        'rsync',
-        parents=[dbprefix_option_parser,
-                 maxsize_option_parser],
-        help="print rsync command to sync (skipping db files)")
-parser_rsync.add_argument("-x", "--execute", action="store_true", help="also execute rsync command")
-parser_rsync.add_argument("-n", "--dry-run", help="dry run", action="store_true")
+parser_rsync = cmd_parsers.add_parser(
+    'rsync',
+    parents=[exclude_option_parser,
+             dbprefix_option_parser,
+             maxsize_option_parser
+             ],
+    help="print rsync command (skipping hash database file)")
+parser_rsync.add_argument(
+    "-x", "--execute", action="store_true", help="also execute rsync command")
+parser_rsync.add_argument(
+    "-n", "--dry-run", help="dry run", action="store_true")
 parser_rsync.add_argument("sourcedir", type=str)
 parser_rsync.add_argument("targetdir", type=str)
-parser_rsync.add_argument("rsyncargs", type=str, nargs="*")
-def do_rsync(args):
+
+def do_rsync(sysargv, args, more_args):
     """Print suitable rsync command.
     """
-    import pipes
+    if more_args and more_args != sysargv[-len(more_args):]:
+        top_parser.parse_args()
+        assert False, "internal error"
+    else:
+        rsyncargs = more_args
     src_dir, tgt_dir = args.sourcedir, args.targetdir
     if src_dir[-1] != os.sep:
         src_dir += os.sep # rsync needs trailing / on sourcedir.
     while tgt_dir[-1] == os.sep:
         tgt_dir = tgt_dir[:-1]
-    src_dir = pipes.quote(src_dir)
-    tgt_dir = pipes.quote(tgt_dir)
+    src_dir = _quoter(src_dir)
+    tgt_dir = _quoter(tgt_dir)
     # Options for rsync: recursive, preserve hardlinks.
-    rsync_opts = "-r -H --size-only --progress --delete-before"
+    rsync_opts = " -r -H --size-only --progress"
     if args.maxsize > 0:
-        rsync_opts += " --max-size %d" % args.maxsize
+        rsync_opts += " --max-size=%d" % args.maxsize
     if args.dry_run:
         rsync_opts += " -n"
-    rsync_opts += " ".join(args.rsyncargs)
-    rsync_opts += r" --exclude /%s\*.db" % args.dbprefix
+    exclude_patterns = args.exclude
+    if exclude_patterns:
+        for p in exclude_patterns:
+            rsync_opts += ' --exclude="%s"' % p
+    # Exclude databases at both ends.
+    rsync_opts += r' --exclude="/%s[0-9]*.db"' % args.dbprefix
+    if rsyncargs:
+        rsync_opts += " " + " ".join(rsyncargs)
     rsync_cmd = "rsync %s %s %s" % (rsync_opts, src_dir, tgt_dir)
     pr.print(rsync_cmd)
     if args.execute:
         try:
             os.system(rsync_cmd)
         except Exception as exc:
-            pr.debug(str(exc))
-            msg = "error executing '%s'." % rsync_cmd
+            msg = "executing '%s': %s" % (rsync_cmd, str(exc))
+            pr.debug(msg)
             raise RuntimeError, msg, sys.exc_info()[2] # Chain exception.
-cmd_handlers["rsync"] = do_rsync
+cmd_handlers_extra_args["rsync"] = do_rsync
 
 ## mkoffline
-parser_mkoffline = \
-    cmd_parsers.add_parser(
-        'mkoffline',
-        parents=[dbprefix_option_parser,
-                 maxsize_option_parser],
-        help="incorporate offline tree structure into db")
-parser_mkoffline.add_argument("sourcedir", action=CreateOnlineDB)
+parser_mkoffline = cmd_parsers.add_parser(
+    'mkoffline',
+    parents=[exclude_option_parser,
+             maxsize_option_parser,
+             skipempty_option_parser,
+             dbprefix_option_parser],
+    help="create offline file tree from source dir")
+parser_mkoffline.add_argument("sourcedir", action=KwArgsTreeOnline)
+parser_mkoffline.add_argument("outputpath", type=writable_empty_path)
+
 def do_mkoffline(args):
-    """Prepare an existing db for offline use, by inserting file tree directory
-    structure and file metadata.
+    """Create an offline db by updating an online tree, copying it to
+    the provided output filename and inserting file tree directory
+    structure and file metadata into the outputm, offline db.
+    Overwrites any file at the output.
     """
-    with args.sourcedir as src_db:
-        pr.info("updating all hashes...")
-        src_db.db_update_all()
-        pr.info("saving directory info...")
-        src_db.db_store_tree()
+    with FileHashTree(**args.sourcedir) as src_tree:
+        src_tree.db_update_all()
+        with SQLPropDBManager(args.outputpath, mode="offline") as tgt_db:
+            with pr.ProgressPrefix("saving: "):
+                src_tree.db.copy_prop_values(tgt_db)
+                src_tree.db_store_tree_offline(tgt_db)
+            tgt_db.compact()
 cmd_handlers["mkoffline"] = do_mkoffline
-
-## rmoffline
-parser_rmoffline = \
-    cmd_parsers.add_parser(
-        'rmoffline',
-        help="remove offline tree structure from db")
-parser_rmoffline.add_argument("database", action=CreateOfflineDB)
-def do_rmoffline(args):
-    """Clear offline tree info from a database.
-    """
-    with args.database as database:
-        pr.info("clearing directory info...")
-        database.db_clear_tree()
-cmd_handlers["rmoffline"] = do_rmoffline
-
 
 ## cleandb
 parser_cleandb = \
     cmd_parsers.add_parser(
         'cleandb',
         parents=[dbprefix_option_parser],
-        help="clean and defragment hash database")
-parser_cleandb.add_argument("location", action=CreateOnlineDB)
+        help="clean and defragment the hash database at dir")
+parser_cleandb.add_argument("location", action=KwArgsTreeOnline)
 def do_cleandb(args):
-    """Purge old entries from db.
+    """Purge old entries from db and compact it.
     """
-    with args.location as database:
-        database.db_purge()
+    with FileHashTree(**args.location) as tree:
+        tree.db.reset_offline_tree()
+        tree.db_purge_old_entries()
+        tree.db.compact()
 cmd_handlers["cleandb"] = do_cleandb
 
 def main():
     if len(sys.argv) == 1:
         top_parser.print_help(sys.stderr)
         sys.exit(1)
-    pr.APP_PREFIX = "lnsync: "
+    pr.set_app_prefix("lnsync: ")
     try:
-        args = top_parser.parse_args()
-        handler_fn = cmd_handlers[args.cmdname]
+        args, extra_args = top_parser.parse_known_args()
+        cmd = args.cmdname
+        if cmd in cmd_handlers:
+            args = top_parser.parse_args()
+            apply_global_options_to_trees(args)
+            handler_fn = lambda: cmd_handlers[cmd](args)
+        elif cmd in cmd_handlers_extra_args:
+            args, extra_args = top_parser.parse_known_args()
+            apply_global_options_to_trees(args)
+            handler_fn = \
+                lambda: cmd_handlers_extra_args[cmd](
+                    sys.argv[1:], args, extra_args)
+        else:
+            args = top_parser.parse_args()
+            assert False, "error: error expected"
         try:
-            handler_fn(args)
+            handler_fn()
         except Exception as exc:
             if __debug__:
                 print(type(exc), exc)
@@ -702,10 +857,12 @@ def main():
         pr.error("database error: %s" % str(exc))
     except AssertionError as exc:
         pr.error("internal check failed: %s" % str(exc))
+    except ValueError as exc:
+        pr.error("bad argument: %s" % str(exc))
     except Exception as exc:
         pr.error("general exception: %s" % str(exc))
     finally:
-        sys.exit(1)
+        sys.exit(2)
 
 if __name__ == "__main__":
     main()
