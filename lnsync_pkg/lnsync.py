@@ -398,7 +398,6 @@ def do_subdir(args):
     with SQLPropDBManager(src_dir) as src_db:
         with SQLPropDBManager(tgt_dir) as tgt_db:
             src_db.merge_prop_values(tgt_db)
-    import pdb; pdb.set_trace()
     with FileHashTree(**make_treekwargs(tgt_dir, "online")) as tgt_tree:
         tgt_tree.db_purge_old_entries()
         tgt_tree.db.compact()

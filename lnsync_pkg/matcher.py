@@ -434,9 +434,9 @@ class State(SearchState):
         src_paths = self.trees.src.id_to_file(src_id).relpaths
         tgt_paths = self.trees.tgt.id_to_file(tgt_id).relpaths
         some_tgt_path = tgt_paths[0]
-        common_paths = (p for p in src_paths if p in tgt_paths)
-        src_only_paths = (p for p in src_paths if p not in common_paths)
-        tgt_only_paths = (p for p in tgt_paths if p not in common_paths)
+        common_paths = [p for p in src_paths if p in tgt_paths]
+        src_only_paths = [p for p in src_paths if p not in common_paths]
+        tgt_only_paths = [p for p in tgt_paths if p not in common_paths]
         if not src_only_paths:
             assert common_paths, "_gen_pathops: no common paths"
             yield PathOp.make_unln(*tgt_only_paths)
