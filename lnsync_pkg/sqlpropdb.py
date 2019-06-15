@@ -27,7 +27,7 @@ CUR_DB_FORMAT_VERSION = 1
 
 ONLINE_DB_PREFIX = "prop-"
 
-def set_online_prefix(prefix):
+def set_default_sqldb_prefix(prefix):
     global ONLINE_DB_PREFIX
     ONLINE_DB_PREFIX = prefix
 
@@ -238,9 +238,6 @@ class SQLPropDBManagerOffline(SQLPropDBManager):
     FilePropTree using SQLite3.
     """
 
-#    def __init__(self, location, **kwargs):
-#        super(SQLPropDBManagerOffline, self).__init__(location, **kwargs)
-#
     def _all_tables(self):
         return SQLPropDBManager._tables_prop \
              + SQLPropDBManagerOffline._tables_offline
@@ -283,7 +280,8 @@ class SQLPropDBManagerOnline(SQLPropDBManager):
         super(SQLPropDBManagerOnline, self).__init__(location, *args, **kwargs)
 
     def get_exclude_patterns(self):
-        return ["/"+os.path.basename(self.dbpath)]
+        """Exclude the SQLite3 main database and -journal, -wal and other tmp files."""
+        return ["/"+os.path.basename(self.dbpath), "/"+os.path.basename(self.dbpath)+"-*"]
 
     def delete_ids(self, file_ids):
         """Remove single file_id, or list or set of file_ids from property
@@ -319,31 +317,45 @@ class SQLPropDBManagerOnline(SQLPropDBManager):
         self.delete_ids(ids_to_delete)
 
     def copy_prop_values(self, tgt_db, remap_fn=None):
-        """Copy prop values to target db."""
+        """Copy prop values to target db, applying remap_fn to each fileid, if given."""
         tgt_cx = tgt_db._cx
+        prop_tab = self._tables_prop[0]
+        tab_name = prop_tab[0]
         if remap_fn is None:
             tgt_cx.cursor().execute("ATTACH ? AS SOURCE;", (self.dbpath,))
-            for tab in self._all_tables():
-                cmd = "INSERT INTO %s SELECT * FROM SOURCE.%s ;" % (tab[0], tab[0])
-                tgt_cx.cursor().execute(cmd)
-            tgt_db.compact()
+            xfer_cmd = "INSERT INTO %s SELECT * FROM SOURCE.%s;" % (tab_name, tab_name)
+            tgt_cx.cursor().execute(xfer_cmd)
         else:
-            raise NotImplementedError("no remapping on copying a db yet")
+            get_cmd = "SELECT * FROM %s;" % (tab_name,)
+            put_cmd = "INSERT INTO %s VALUES (?, ?, ?, ?, ?);" % (tab_name,)
+            for res in self._cx.execute(get_cmd).fetchall():
+                resout = (remap_dn(res[0]), res[1], res[2], res[3], res[4]) # Apply map to fileid.
+                tgt_cx.execute(put_cmd, resout)
+        tgt_db.compact()
 
     def merge_prop_values(self, tgt_db, remap_fn=None):
         """Update db at target with prop values from source, overwriting if
         necessary."""
         tgt_cx = tgt_db._cx
         if remap_fn is None:
+            prop_tab = self._tables_prop[0]
+            tab_name = prop_tab[0]
             tgt_cx.cursor().execute("ATTACH ? AS SOURCE;", (self.dbpath,))
-            for tab in self._all_tables():
-                cmd = ("DELETE FROM %s "
-                       "WHERE file_id IN (SELECT file_id FROM SOURCE.%s) ;") \
-                        % (tab[0], tab[0])
-                tgt_cx.cursor().execute(cmd)
-            for tab in self._all_tables():
-                cmd = "INSERT INTO %s SELECT * FROM SOURCE.%s ;" % (tab[0], tab[0])
-                tgt_cx.cursor().execute(cmd)
-            tgt_db.compact()
+            cmd = ("DELETE FROM %s "
+                   "WHERE file_id IN (SELECT file_id FROM SOURCE.%s) ;") \
+                    % (tab_name, tab_name)
+            tgt_cx.cursor().execute(cmd)
+            cmd = "INSERT INTO %s SELECT * FROM SOURCE.%s ;" \
+                  % (tab_name, tab_name)
+            tgt_cx.cursor().execute(cmd)
         else:
-            raise NotImplementedError("no remapping on merging a db yet")
+            get_cmd = "SELECT * FROM %s;" % (tab_name,)
+            get_cursor = self._cx.cursor()
+            test_cursor = tgt_cx.cursor()
+            put_cursor = tgt_cx.cursor()
+            for res in get_cursor.execute(get_cmd).fetchall():
+                resout = (remap_dn(res[0]), res[1], res[2], res[3], res[4]) # Apply map to fileid.
+                if test_cursor.execute("SELECT * FROM prop WHERE file_id=?;", (resout[0],)):
+                    test_cursor.execute("DELETE FROM prop WHERE file_id=?;", (resout[0],))
+                put_cursor.execute("INSERT INTO %s VALUES (?, ?, ?, ?, ?);", resout)
+        tgt_db.compact()

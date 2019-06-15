@@ -29,7 +29,7 @@ import lnsync_pkg.printutils as pr
 import lnsync_pkg.fdupes as fdupes
 import lnsync_pkg.metadata as metadata
 from lnsync_pkg.human2bytes import human2bytes
-from lnsync_pkg.sqlpropdb import SQLPropDBManager
+from lnsync_pkg.sqlpropdb import SQLPropDBManager, set_default_sqldb_prefix
 from lnsync_pkg.hashtree import FileHashTree
 from lnsync_pkg.matcher import TreePairMatcher
 
@@ -103,7 +103,7 @@ hardlinks_option_parser.add_argument(
 sameline_option_parser = argparse.ArgumentParser(add_help=False)
 sameline_option_parser.add_argument(
     "-1", "--sameline", action="store_true",
-    help="group files found in the same line (will not signal hard links)")
+    help="print each group of identical files in the same line")
 
 # All options following apply to tree location arguments.
 
@@ -125,7 +125,7 @@ dbprefix_option_parser.add_argument(
 # argparse initializes to None
 exclude_option_parser = argparse.ArgumentParser(add_help=False)
 exclude_option_parser.add_argument(
-    "--exclude", type=str, action="append",
+    "--exclude", metavar="GLOBPATTERN", type=str, action="append",
     help="exclude certain files and dirs")
 
 # argparse autochanges option name to "exclude_once":
@@ -539,7 +539,8 @@ parser_onlastonly = cmd_parsers.add_parser(
              bysize_option_parser,
              maxsize_option_parser,
              skipempty_option_parser,
-             dbprefix_option_parser],
+             dbprefix_option_parser,
+             sameline_option_parser],
     help='find files on last location, not on any other')
 parser_onlastonly.add_argument("locations", action=KwArgsTreeList, nargs="+")
 def do_onlastonly(args):
@@ -588,12 +589,12 @@ def do_cmp(args):
                 if left_obj.is_file():
                     left_path_printable = \
                         left_tree.printable_path(left_path, pprint=_quoter)
-                    pr.print("left only: %s" % (left_path_printable,))
+                    pr.print("left file only: %s" % (left_path_printable,))
                 elif left_obj.is_dir():
                     left_path_printable_dir = \
                         left_tree.printable_path(
                             left_path+os.path.sep, pprint=_quoter)
-                    pr.print("left only: %s" % (left_path_printable_dir,))
+                    pr.print("left dir only: %s" % (left_path_printable_dir,))
                 else:
                     raise RuntimeError("unexpected left object: " + left_path)
             elif left_obj.is_file():
@@ -620,12 +621,12 @@ def do_cmp(args):
                 if right_obj.is_file():
                     right_path_printable = \
                         right_tree.printable_path(right_path, pprint=_quoter)
-                    pr.print("right only: %s" % (right_path_printable,))
+                    pr.print("right file only: %s" % (right_path_printable,))
                 elif right_obj.is_dir():
                     right_path_printable_dir = \
                         right_tree.printable_path(
                             right_path+os.path.sep, pprint=_quoter)
-                    pr.print("right only: %s" % (right_path_printable_dir,))
+                    pr.print("right dir only: %s" % (right_path_printable_dir,))
                 else:
                     raise RuntimeError("unexpected right object: " + right_path)
             elif right_obj.is_file():
@@ -823,6 +824,7 @@ def main():
         top_parser.print_help(sys.stderr)
         sys.exit(1)
     pr.set_app_prefix("lnsync: ")
+    set_default_sqldb_prefix(DEFAULT_DBPREFIX)
     try:
         args, extra_args = top_parser.parse_known_args()
         cmd = args.cmdname

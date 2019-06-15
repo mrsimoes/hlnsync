@@ -125,7 +125,8 @@ def trace(template_str, *str_args, **kwargs):
                     template_str % str_args, file=sys.stderr, **kwargs)
 
 def _exit_func():
-    _builtin_print("\033[0J", end="") # Clear line.
+    if _stdout_is_tty:
+        _builtin_print("\033[0J", end="") # Clear line.
     try:     # Prevent "broken pipe" errors if outputs are closed before atexit.
         sys.stdout.flush()
         sys.stdout.close()
