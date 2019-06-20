@@ -147,10 +147,11 @@ class FilePropTree(OnOffObject):
         res = self.db_get_stored_prop(f_obj)
         if res is None:
             return None
-        f_obj.prop_value = res[0]
-        f_obj.prop_metadata = res[1]
-        if f_obj.prop_metadata == f_obj.file_metadata:
-            return f_obj.prop_value
+        prop_val, prop_md = res
+        if prop_md == f_obj.file_metadata:
+            f_obj.prop_value = prop_val
+            f_obj.prop_metadata = prop_md
+            return prop_val
         else:
             pr.debug(
                 "file %s md (id %d) changed from %s to %s, update_db: %s",
