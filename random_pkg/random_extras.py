@@ -4,6 +4,8 @@
 Some functions for sampling useful random distributions.
 """
 
+from six import integer_types
+
 import sys
 import random
 import math
@@ -78,7 +80,7 @@ def dirichlet_vec_rv(n, T=1.0):
     X[n-1] is D(n-1,T), X[n-2] is D(n-2,T-X[n-1]), down to X[1] is D(1,T-(X[2]+...+X[n-1]))
     and X[0] is the remainder.
     """
-    assert T >= 0 and isinstance(n, (int, long))
+    assert T >= 0 and isinstance(n, integer_types)
     result = [0]*n
     sum_computed = 0
     for k in range(n-1, 0, -1):
@@ -93,7 +95,7 @@ def dirichlet_vec_discrete_rv(n, T):
     Return a list of equally distributed n random non-negative integer values
     x1,...,xn summing to T, a positive integer.
     """
-    assert isinstance(n, (int, long)) and isinstance(T, (int, long)) and T >= 0
+    assert isinstance(n, integer_types) and isinstance(T, integer_types) and T >= 0
     res = [int(xi) for xi in dirichlet_vec_rv(n, T)]
     while sum(res) < T:
         p = random.randint(0, n-1)

@@ -20,7 +20,8 @@ And for FileItem:
 
 from collections import defaultdict
 
-from lnsync_pkg.proptree import FileItem
+from lnsync_pkg.p23compat import fstr
+from lnsync_pkg.proptree import FileItem, TreeError
 import lnsync_pkg.printutils as pr
 
 def _get_prop(tree, fobj):
@@ -28,7 +29,7 @@ def _get_prop(tree, fobj):
     assert isinstance(fobj, FileItem)
     try:
         prop = tree.get_prop(fobj)
-    except RuntimeError as exc:
+    except TreeError as exc:
         pr.error("processing file id %d, ignored: %s" % (fobj.file_id, str(exc)))
         return None
     else:
@@ -102,7 +103,7 @@ def sizes_onall(all_trees):
         pr.progress("sorting sizes")
         trees_sizescounts.sort(key=lambda ts: ts[1])
         first_tree = trees_sizescounts[0][0]
-        other_trees = (ts[0] for ts in trees_sizescounts[1:])
+        other_trees = [ts[0] for ts in trees_sizescounts[1:]]
         candidate_sizes = list(first_tree.get_all_sizes())
         candidate_sizes.sort()
         for file_sz in candidate_sizes:
@@ -120,14 +121,14 @@ def _props_onall_of_size(trees, file_sz):
     """
     good_props = set()
     first_tree = trees[0]
-    pr.progress("scanning: ", first_tree.printable_path(""))
+    pr.progress("scanning: ", first_tree.printable_path(fstr("")))
     for fobj in first_tree.size_to_files(file_sz):
         prop = _get_prop(first_tree, fobj)
         if prop is None:
             continue
         good_props.add(prop)
     for tree in trees[1:]:
-        pr.progress("scanning: ", tree.printable_path(""))
+        pr.progress("scanning: ", tree.printable_path(fstr("")))
         this_tree_props = set()
         for fobj in tree.size_to_files(file_sz):
             prop = _get_prop(tree, fobj)
@@ -156,27 +157,6 @@ def located_files_onall_of_size(all_trees, file_sz):
     if len(all_trees) >= 1:
         for prop in _props_onall_of_size(all_trees, file_sz):
             yield prop, _located_files_by_prop_of_size(all_trees, prop, file_sz)
-
-def sizes_onfirstonly(all_trees):
-    """Iterate over all file sizes for which a file exists on each of all_trees.
-    """
-    if len(all_trees) >= 1:
-        pr.progress("gathering file sizes")
-        good_sizes = list(all_trees[0].get_all_sizes())
-        good_sizes.sort()
-        pr.progress("sorting file sizes")
-        other_trees_sizescounts = \
-            [(tree, len(tree.get_all_sizes())) for tree in all_trees[1:]]
-        other_trees_sizescounts.sort(key=lambda ts: ts[1], reverse=True)
-        pr.progress("intersecting sizes")
-        for file_sz in good_sizes:
-            size_is_good = True
-            for tree, _sizescount in other_trees_sizescounts:
-                if tree.size_to_files(file_sz):
-                    size_is_good = False
-                    break
-            if size_is_good:
-                yield file_sz
 
 def _props_onfirstonly_of_size(trees, file_sz):
     """Considering only files of the given size, iterate over all props with

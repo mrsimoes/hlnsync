@@ -1,18 +1,20 @@
 #!/usr/bin/env python
 
 from __future__ import print_function
+from __future__ import absolute_import
+
+from random_pkg.random_extras import dirichlet_vec_discrete_rv, randint_intv_avg, randint_avg
 
 import random
 import tempfile
 import os
 import shutil
 
-from random_pkg.random_extras import dirichlet_vec_discrete_rv, randint_intv_avg, randint_avg
-
+from lnsync_pkg.p23compat import fstr
 from lnsync_pkg.filetree import FileTree
 
-DIR_PREFIX = "d-"
-FILE_PREFIX = "f-"
+DIR_PREFIX = fstr("d-")
+FILE_PREFIX = fstr("f-")
 
 class FileTreeCreator(FileTree):
     """
@@ -30,7 +32,7 @@ class FileTreeCreator(FileTree):
             content_maker = lambda n: ("content for file %d" % n)
         self._content_maker = content_maker
         if basename_maker is None:
-            basename_maker = lambda n: ("f-%03d" % n)
+            basename_maker = lambda n: fstr("f-%03d" % n)
         root_path = kwargs.pop("root_path")
         self._basename_maker = basename_maker
         self._all_dirs = []
@@ -69,7 +71,7 @@ class FileTreeCreator(FileTree):
         Create a subdir at dir_obj, return the new subdir obj.
         """
         reldir = dir_obj.get_relpath()
-        dname = "%s%d" % (DIR_PREFIX, len(self._all_dirs))
+        dname = fstr("%s%d" % (DIR_PREFIX, len(self._all_dirs)))
         new_rel_subdir = os.path.join(reldir, dname)
         os.makedirs(self.rel_to_abs(new_rel_subdir))
         newd_obj = self._new_dir_obj(None)
@@ -181,7 +183,7 @@ class RandomTree(FileTreeCreator):
         return random.choice(self._all_dirs)
 
     def pick_random_file(self):
-        rand_fid = random.choice(self._id_to_file.keys())
+        rand_fid = random.choice(list(self._id_to_file))
         return self._id_to_file[rand_fid]
 
     def pick_random_path(self, file_obj=None):
@@ -198,7 +200,7 @@ class RandomTree(FileTreeCreator):
         dir_obj = self.pick_random_dir()
         dir_relpath = dir_obj.get_relpath()
         while True:
-            bname = "%s%03d" % (FILE_PREFIX, random.randint(0, 999))
+            bname = fstr("%s%03d" % (FILE_PREFIX, random.randint(0, 999)))
             if bname in dir_obj.entries:
                 continue
             free_relpath = os.path.join(dir_relpath, bname)
@@ -265,10 +267,11 @@ class RandomTree(FileTreeCreator):
 
 class TmpTree(FileTree):
     def __init__(self, group_dir=None, **kwargs):
-        """The new random tree will be rooted in a subdir of group_dir."""
-        self._group_dir = group_dir
+        """The new random tree will be rooted in a subdir of group_dir.
+        """
+        self._group_dir = fstr(group_dir)
         self._temp_dir = None
-        self._temp_dir = tempfile.mkdtemp(prefix="tr-", dir=group_dir)
+        self._temp_dir = fstr(tempfile.mkdtemp(prefix=fstr("tr-"), dir=group_dir))
         super(TmpTree, self).__init__(root_path=self._temp_dir, **kwargs)
 
     def __enter__(self):

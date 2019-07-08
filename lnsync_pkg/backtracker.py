@@ -13,6 +13,7 @@ On backtracking, the extension is undone by applying the delta 'up'.
 from __future__ import print_function
 
 import abc
+import six
 
 import lnsync_pkg.printutils as pr
 
@@ -57,7 +58,7 @@ def do_search(state):
             pr.debug("backtracker: success")
             return True # Found a valid leaf.
         try:
-            next_delta = down_deltas_iter.next()
+            next_delta = six.next(down_deltas_iter)
         except StopIteration:
             # No more children: backtrack, if possible.
             if originating_delta is None:
@@ -81,7 +82,7 @@ class QueensBoard(SearchState):
     __slots__ = "n", "board", "next_row", "valid"
     def __init__(self, board_size):
         self.board_size = board_size
-        self.board = [[0,]*board_size for _ in xrange(board_size)]
+        self.board = [[0,]*board_size for _ in range(board_size)]
         self.next_row = 0
         self.valid = True
 
@@ -89,14 +90,14 @@ class QueensBoard(SearchState):
         if self.next_row == self.board_size:
             return None
         else:
-            return iter(xrange(self.board_size))
+            return iter(range(self.board_size))
 
     def down_delta(self, state_delta):
         col = state_delta
         row = self.next_row
         self.board[row][col] = 1
         bd_size = self.board_size
-        for delta in xrange(bd_size):
+        for delta in range(bd_size):
             for row_sign in (-1, 0, 1):
                 for col_sign in (-1, 0, 1):
                     (oth_r, oth_c) = (row+row_sign*delta, col+col_sign*delta)

@@ -9,6 +9,8 @@ A one-graph is a directed graph with at most one arrow out of each node.
 Operations include finding root nodes and checking for cycles.
 """
 
+from six import iteritems
+
 class OneGraph(object):
     """A (directed) 1-graph - at most one arrow out of each node.
 
@@ -32,7 +34,7 @@ class OneGraph(object):
         """Return True if a cycle exists, else False."""
         return len(self._cycles) > 0
     def iterarrows(self):
-        for node_a, node_b in self._arrows.iteritems():
+        for node_a, node_b in iteritems(self._arrows):
             yield (node_a, node_b)
     def add_arrow(self, node_a, node_b):
         assert not node_a in self._arrows, \
@@ -52,8 +54,8 @@ class OneGraph(object):
             and self._arrows[node_a] == node_b, \
                 "OneGraph.remove_arrow: arrow not in"
         del self._arrows[node_a]
-        for k in xrange(len(self._cycles)): # Remove at most one cycle.
-            if node_a in self._cycles[k]:
+        for k, cycle in enumerate(self._cycles): # Remove at most one cycle.
+            if node_a in cycle:
                 del self._cycles[k]
                 break
     def remove_graph(self, other_one_g):
@@ -62,8 +64,8 @@ class OneGraph(object):
             self.remove_arrow(node_a, node_b)
     def get_all_roots(self):
         """Return the set of all roots (minimal elements)."""
-        roots = set(self._arrows.keys())
-        for _, node_to in self._arrows.iteritems():
+        roots = set(self._arrows)
+        for _, node_to in iteritems(self._arrows):
             if node_to in self._arrows:
                 roots.discard(node_to)
         return roots

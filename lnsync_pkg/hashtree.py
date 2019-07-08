@@ -12,12 +12,13 @@ __init accepts new size_as_hash kw argument.
 
 from __future__ import print_function
 
-import sys
+from six import integer_types, raise_from
 
+from lnsync_pkg.p23compat import fstr2str
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.blockhash import hash_file
 from lnsync_pkg.onlineoffline import OnOffObject
-from lnsync_pkg.proptree import FilePropTree, PropDBManager
+from lnsync_pkg.proptree import FilePropTree, PropDBManager, TreeError
 
 class EmptyDBManager(OnOffObject):
     _onoff_super = PropDBManager
@@ -35,13 +36,12 @@ class FileHashTree(OnOffObject):
         if size_as_hash:
             self.get_prop = self._get_prop_as_size
         super(FileHashTree, self).__init__(**kwargs)
+        self._print_progress = None
 
     def set_dbmanager(self, db):
         super(FileHashTree, self).set_dbmanager(db)
         if db.mode == "offline" or  not self._size_as_hash:
-            self._print_progress = "%s [%s]" % (self.db.dbpath, db.mode)
-        else:
-            self._print_progress = None
+            self._print_progress = "%s [%s]" % (fstr2str(self.db.dbpath), db.mode)
 
     def __enter__(self):
         """Open a database only in online mode and when not using s"""
@@ -51,7 +51,7 @@ class FileHashTree(OnOffObject):
         return super(FileHashTree, self).__enter__()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.db is not None:
+        if self._print_progress is not None:
             pr.info("closing %s" % (self._print_progress,))
         return super(FileHashTree, self).__exit__(exc_type, exc_val, exc_tb)
 
@@ -73,13 +73,17 @@ class FileHashTreeOnline(FileHashTree):
     def prop_from_source(self, file_obj):
         """Recompute and return prop for source file at relpath. (Online mode
         only.)
+        Raise RuntimeError if something goes wrong.
         """
         relpath = file_obj.relpaths[0]
         abspath = self.rel_to_abs(relpath)
         pr.progress("hashing %s" % self.printable_path(relpath))
-        val = hash_file(abspath)
-        assert isinstance(val, (int, long)), \
-            "prop_from_source: bad property value %s" % (val,)
+        try:
+            val = hash_file(abspath)
+        except OSError as exc:
+            raise_from(RuntimeError("hashing"), exc)
+        if not isinstance(val, integer_types):
+            raise  RuntimeError("bad property value %s" % (val,))
         return val
 
 class ListContextManager(object):
@@ -93,15 +97,10 @@ class ListContextManager(object):
         self.objs_entered = []
 
     def __enter__(self):
-        try:
-            for kwargs in self.init_args_list:
-                obj = self.classref(**kwargs)
-                obj.__enter__()
-                self.objs_entered.append(obj)
-        except Exception as exc:
-            traceback = sys.exc_info()[2]
-            if not self.__exit__(type(exc), exc, traceback):
-                raise type(exc), exc, traceback
+        for kwargs in self.init_args_list:
+            obj = self.classref(**kwargs)
+            obj.__enter__()
+            self.objs_entered.append(obj)
         return self.objs_entered
 
     def __exit__(self, exc_type, exc_value, traceback):

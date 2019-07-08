@@ -51,8 +51,8 @@ The implementation is rudimentary and ugly. On the plus side, it works.
 """
 
 _MODE_TO_SUFFIX = {"online":"Online", "offline":"Offline"}
-_MODES = _MODE_TO_SUFFIX.keys()
-_SUFFIXES = _MODE_TO_SUFFIX.values()
+_MODES = list(_MODE_TO_SUFFIX)
+_SUFFIXES = list(_MODE_TO_SUFFIX.values())
 
 def _is_managed_main(cls):
     if not hasattr(cls, "_onoff_super"):

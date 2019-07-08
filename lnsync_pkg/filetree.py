@@ -35,13 +35,17 @@ commands are reversible, except those that delete a file's only path.
 """
 
 from __future__ import print_function
+
 import os
+from six import iteritems
+
+from lnsync_pkg.p23compat import fstr, isfstr, fstr2str
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.fileid import make_id_computer
 from lnsync_pkg.glob_matcher import GlobMatcher
 
-
-
+class TreeError(Exception):
+    pass
 
 class TreeItem(object):
     """Abstract base class for all FileTree items."""
@@ -75,13 +79,13 @@ class DirItem(TreeItem):
         self.scanned = True
     def add_entry(self, basename, obj):
         assert not basename in self.entries, \
-            "add_entry: %s already in dir" %  (basename,)
+            "add_entry: %s already in dir" %  (fstr2str(basename),)
         self.entries[basename] = obj
         if obj.is_dir():
             obj.parent = self
     def rm_entry(self, basename):
         assert basename in self.entries, \
-            "rm_entry: %s not in dir" % (basename,)
+            "rm_entry: %s not in dir" % (fstr2str(basename),)
         obj = self.entries[basename]
         del self.entries[basename]
         if obj.is_dir():
@@ -93,7 +97,7 @@ class DirItem(TreeItem):
             return None
     def iter_subdirs(self):
         assert self.scanned, "cannot iterate unscanned dir"
-        for obj in self.entries.itervalues():
+        for obj in self.entries.values():
             if obj.is_dir():
                 yield obj
     def get_relpath(self):
@@ -102,7 +106,7 @@ class DirItem(TreeItem):
             curr_dir = self
             path = None
             while curr_dir.parent is not None:
-                for entryname, obj in curr_dir.parent.entries.iteritems():
+                for entryname, obj in iteritems(curr_dir.parent.entries):
                     if obj is curr_dir:
                         if path is None:
                             path = entryname
@@ -111,7 +115,7 @@ class DirItem(TreeItem):
                         break
                 curr_dir = curr_dir.parent
             if path is None:
-                path = ""
+                path = fstr("")
             self.relpath = path
         return self.relpath
     def is_dir(self):
@@ -149,7 +153,8 @@ class FileTree(object):
     def __init__(self, **kwargs):
         """Create a root dir object, marked unscanned.
         Arguments:
-            - root_path: path disk file tree.
+            - root_path: path disk file tree (may be None if FileTree is somehow
+                virtual).
             - exclude_pattern: None or a list of glob patterns for
                 relative paths to ignore when reading from disk.
             - use_metadata: if True read metadata index files by size
@@ -158,7 +163,10 @@ class FileTree(object):
             - writeback: if True, path manipulation methods update the disk.
             - file_type, dir_type: classes to instantiate.
         """
-        self.root_path = os.path.realpath(kwargs.pop("root_path"))
+        self.root_path = kwargs.pop("root_path")
+        if self.root_path is not None:
+            self.root_path = os.path.realpath(self.root_path)
+            self._id_computer = make_id_computer(self.root_path)
         self.writeback = kwargs.pop("writeback", True)
         self._file_type = kwargs.pop("file_type", FileItem)
         self._dir_type = kwargs.pop("dir_type", DirItem)
@@ -174,7 +182,6 @@ class FileTree(object):
             skipempty = kwargs.pop("skipempty", False)
             self._skipempty = skipempty
         self._id_to_file = {}    # May be filled on-demand.
-        self._id_computer = make_id_computer(self.root_path)
         self._next_free_dir_id = 1
         self.rootdir_obj = self._new_dir_obj(0)
         self._exclude_patterns = []
@@ -190,7 +197,7 @@ class FileTree(object):
 
     def printable_path(self, rel_path, pprint=str):
         """Return a pretty-printed full path from a tree relative path."""
-        return pprint(os.path.join(self.root_path, rel_path))
+        return pprint(fstr2str(os.path.join(self.root_path, rel_path)))
 
     def size_to_files(self, size=None):
         """Return a list of file objects or, if size is None, the internal
@@ -251,19 +258,20 @@ class FileTree(object):
         if dir_obj.was_scanned():
             return
         with pr.ProgressPrefix(
-            "scanning:" + self.printable_path(dir_obj.get_relpath())
+            "scanning: " + self.printable_path(dir_obj.get_relpath())
             ):
             dir_exclude_matcher = self._exclude_matchers.get(dir_obj)
                 # dir_exclude_matcher is None or an entry.
             for (basename, obj_id, obj_type, raw_metadata) in \
-                    self._gen_dir_entries_from_source(dir_obj,
-                                                      dir_exclude_matcher):
-                try:
-                    basename.decode('utf-8')
-                except Exception:
-                    msg = "not a valid utf-8 filename: '%s'. proceeding."
-                    msg = msg % (os.path.join(dir_obj.get_relpath(), basename),)
-                    pr.warning(msg)
+                    self._gen_dir_entries_from_source(
+                            dir_obj,
+                            dir_exclude_matcher):
+#                try:
+#                    basename.decode('utf-8')
+#                except Exception:
+#                    msg = "not a valid utf-8 filename: '%s'. proceeding."
+#                    msg = msg % (os.path.join(dir_obj.get_relpath(), basename),)
+#                    pr.warning(msg)
                 if obj_type == FileItem:
                     self._scan_dir_process_file(
                         dir_obj, obj_id, basename, raw_metadata)
@@ -276,7 +284,8 @@ class FileTree(object):
                 del self._exclude_matchers[dir_obj]
             dir_obj.mark_scanned()
 
-    def _scan_dir_process_file(self, parent_obj, obj_id, basename, raw_metadata):
+    def _scan_dir_process_file(self, parent_obj, obj_id,
+                               basename, raw_metadata):
         if obj_id in self._id_to_file:
             file_obj = self._id_to_file[obj_id]
         else:
@@ -286,14 +295,14 @@ class FileTree(object):
                     obj_abspath = \
                         self.rel_to_abs(os.path.join(
                             parent_obj.get_relpath(), basename))
-                    pr.warning("ignored empty file '%s'" % obj_abspath)
+                    pr.warning("ignored empty file %s" % fstr2str(obj_abspath))
                     return
                 elif (self._maxsize is not None and \
                         file_obj.file_metadata.size > self._maxsize):
                     obj_abspath = \
                         self.rel_to_abs(os.path.join(
                             parent_obj.get_relpath(), basename))
-                    pr.warning("ignored large file '%s'" % obj_abspath)
+                    pr.warning("ignored large file %s" % fstr2str(obj_abspath))
                     return
         self._add_path(file_obj, parent_obj, basename)
 
@@ -322,6 +331,7 @@ class FileTree(object):
     def _gen_dir_entries_from_source(self, dir_obj, exclude_matcher=None):
         """Iterate over the items in a disk file tree.
         Yield tuples (basename, obj_id, obj_type, rawmetadata), where:
+        - basename is str (Python2) or binary string (Python3)
         - rawmetadata is some data that may passed on to _new_file_obj.__init__
         - obj_type is one of DirItem, FileItem or OtherItem.
         """
@@ -330,36 +340,38 @@ class FileTree(object):
         for obj_bname in os.listdir(dir_abspath):
             obj_abspath = os.path.join(dir_abspath, obj_bname)
             if os.path.islink(obj_abspath): # This must be tested for first.
-                pr.warning("ignored symlink %s" % obj_abspath)
+                pr.warning("ignored symlink %s" % fstr2str(obj_abspath))
                 yield (obj_bname, None, OtherItem, None)
             elif os.path.isfile(obj_abspath):
                 if exclude_matcher \
                         and exclude_matcher.match_file_bname(obj_bname):
-                    pr.warning("excluded file %s" % obj_abspath)
+                    pr.warning("excluded file %s" % fstr2str(obj_abspath))
                     yield (obj_bname, None, OtherItem, None)
                 elif not os.access(obj_abspath, os.R_OK):
-                    pr.warning("ignored no-read-access file %s" % obj_abspath)
+                    pr.warning("ignored no-read-access file %s" \
+                               % fstr2str(obj_abspath))
                     yield (obj_bname, None, OtherItem, None)
                 else:
                     obj_relpath = os.path.join(dir_relpath, obj_bname)
-                    pr.progress("%s" % obj_relpath)
+                    pr.progress("%s" % fstr2str(obj_relpath))
                     stat_data = os.stat(obj_abspath)
                     fid = self._id_computer.get_id(obj_relpath, stat_data)
                     yield (obj_bname, fid, FileItem, stat_data)
             elif os.path.isdir(obj_abspath):
                 if exclude_matcher \
                         and exclude_matcher.match_dir_bname(obj_bname):
-                    pr.warning("excluded dir %s" % obj_abspath)
+                    pr.warning("excluded dir %s" % fstr2str(obj_abspath))
                     yield (obj_bname, None, OtherItem, None)
                 elif not os.access(obj_abspath, os.R_OK + os.X_OK):
-                    pr.warning("ignored no-rx-access dir %s" % obj_abspath)
+                    pr.warning("ignored no-rx-access dir %s" \
+                               % fstr2str(obj_abspath))
                     yield (obj_bname, None, OtherItem, None)
                 else:
                     dir_id = self._next_free_dir_id
                     self._next_free_dir_id += 1
                     yield (obj_bname, dir_id, DirItem, None)
             else:
-                pr.warning("ignored special file %s" % obj_abspath)
+                pr.warning("ignored special file %s" % fstr2str(obj_abspath))
                 yield (obj_bname, None, OtherItem, None)
 
     def _add_path(self, file_obj, dir_obj, fbasename):
@@ -412,9 +424,9 @@ class FileTree(object):
         """
         assert self.rootdir_obj is not None, "follow_path: no rootdir_obj."
         curdir_obj = self.rootdir_obj
-        if relpath == "." or relpath == "":
+        if relpath == fstr(".") or relpath == fstr(""):
             return curdir_obj
-        components = relpath.split(os.sep)
+        components = relpath.split(fstr(os.sep))
         while components and curdir_obj:
             comp = components[0]
             components = components[1:]
@@ -431,16 +443,17 @@ class FileTree(object):
         """Generate (obj, basename) for each file and dir entry of
         at a directory given by relative path, which is scanned if needed.
         Skip 'other' entries."""
-        assert isinstance(subdir_path, str)
+        assert isfstr(subdir_path)
         assert self.rootdir_obj is not None, "walk_dir_contents: no rootdir_obj"
         subdir = self.follow_path(subdir_path)
         assert subdir is not None and subdir.is_dir()
         self.scan_dir(subdir)
-        for basename, obj in subdir.entries.iteritems():
+        for basename, obj in iteritems(subdir.entries):
             if obj.is_file() or (dirs and obj.is_dir()):
                 yield obj, basename
 
-    def walk_paths(self, startdir_path="", recurse=True, dirs=False, files=True, topdown=True):
+    def walk_paths(self, startdir_path=None, recurse=True,
+                   dirs=False, files=True, topdown=True):
         """Generate (obj, parent_obj, relpath) for distinct file and dir
         relpaths.
         Skip startdir itself, skip other objects.
@@ -450,12 +463,14 @@ class FileTree(object):
          - topdown: breadth-first, else depth-first
         """
         assert self.rootdir_obj is not None, "walk_paths: no rootdir_obj."
+        if startdir_path is None:
+            startdir_path = fstr("")
         startdir_obj = self.follow_path(startdir_path)
         assert startdir_obj is not None \
             and startdir_obj.is_dir(), "walk_paths: dobj not a dir"
         def output_files(dir_obj):
             dir_path = dir_obj.get_relpath()
-            for basename, obj in dir_obj.entries.iteritems():
+            for basename, obj in iteritems(dir_obj.entries):
                 if (files and obj.is_file()):
                     yield obj, dir_obj, os.path.join(dir_path, basename)
         def output_dir(dir_obj):
@@ -506,7 +521,7 @@ class FileTree(object):
         self._add_path(file_obj, tr_obj, os.path.basename(relpath))
         if self.writeback:
             assert file_obj is not None, "add_path_writeback: no file_obj."
-            assert file_obj.relpaths, "add_path_writeback: some path must exist."
+            assert file_obj.relpaths, "add_path_writeback: no path exists."
             os.link(self.rel_to_abs(file_obj.relpaths[0]),
                     self.rel_to_abs(relpath))
 
@@ -516,7 +531,7 @@ class FileTree(object):
         tr_obj = self.follow_path(os.path.dirname(relpath))
         assert tr_obj is not None and tr_obj.is_dir(), \
             "rm_path_writeback: expected a dir at '%s'." \
-                % (os.path.dirname(relpath),)
+                % fstr2str(os.path.dirname(relpath),)
         self._rm_path(file_obj, tr_obj, os.path.basename(relpath))
 
     def mv_path_writeback(self, file_obj, fn_from, fn_to):
@@ -526,7 +541,7 @@ class FileTree(object):
         d_from = self.follow_path(os.path.dirname(fn_from))
         assert d_from is not None and d_from.is_dir(), \
             "mv_path_writeback: expected a dir at '%s'." \
-                % (os.path.dirname(fn_from),)
+                % fstr2str(os.path.dirname(fn_from),)
         d_to = self._create_dir_if_needed_writeback(os.path.dirname(fn_to))
         self._add_path(file_obj, d_to, os.path.basename(fn_to))
         self._rm_path(file_obj, d_from, os.path.basename(fn_from))
@@ -544,7 +559,7 @@ class FileTree(object):
 
     def _create_dir_if_needed_writeback(self, dir_relpath):
         """Return dir obj corresponding to dir_relpath, creating all needed
-        directories. May raise RuntimeError or OSError."""
+        directories. May raise TreeError."""
         tr_obj = self.follow_path(dir_relpath)
         if tr_obj is None:
             supdname = os.path.dirname(dir_relpath)
@@ -559,16 +574,16 @@ class FileTree(object):
         elif tr_obj.is_dir():
             return tr_obj
         else:
-            raise RuntimeError("cannot create dir at '%s'." % (dir_relpath,))
+            raise TreeError("cannot create dir %s" % (fstr2str(dir_relpath),))
 
     def exec_cmd(self, cmd):
         """Execute a (cmd, arg1, arg2).
         cms is one of "mv" ln" "rm"
-        arg1 and arg2 are relative paths."""
+        arg1 and arg2 are relative paths, of fstr type."""
         ctype, fn_from, fn_to = cmd
         obj_from = self.follow_path(fn_from)
         assert obj_from is not None and obj_from.is_file(), \
-            "exec_cmd: expected a file at '%s'." % (fn_from,)
+            "exec_cmd: expected a file at '%s'." % (fstr2str(fn_from),)
         if fn_to is not None:
             obj_to = self.follow_path(fn_to)
         else:
@@ -582,7 +597,7 @@ class FileTree(object):
         elif ctype == "rm":
             self.rm_path_writeback(obj_from, fn_from)
         else:
-            raise RuntimeError("exec_cmd: unknown command %s" % (cmd,))
+            raise TreeError("exec_cmd: unknown command %s" % (cmd,))
 
     def exec_cmds(self, cmds):
         for command in cmds:
@@ -599,10 +614,10 @@ class FileTree(object):
         elif ctype == "rm":
             witness_obj = self.follow_path(fn_to)
             if witness_obj is None or not witness_obj.is_file():
-                raise RuntimeError("exec_cmd_reverse: cannot undo this rm cmd.")
+                raise TreeError("exec_cmd_reverse: cannot undo this rm cmd")
             self.exec_cmd(("ln", fn_to, fn_from)) # Recover link from witness.
         else:
-            raise RuntimeError("exec_cmd_reverse: unknown command %s." % (cmd,))
+            raise TreeError("exec_cmd_reverse: unknown command %s" % (cmd,))
 
     def exec_cmds_reverse(self, cmds):
         """Revert a sequence of commands."""
@@ -610,4 +625,4 @@ class FileTree(object):
             self.exec_cmd_reverse(cmd)
 
     def __str__(self):
-        return "%s(%s)" % (object.__str__(self), self.root_path)
+        return "%s(%s)" % (object.__str__(self), fstr2str(self.root_path))

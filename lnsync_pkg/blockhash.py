@@ -21,7 +21,7 @@ def hash_file(fpath):
         hasher = pyhashxx.Hashxx() # Seed is optional.
         while True:
             datab = infile.read(BLOCK_SIZE) # Yields here to other threads.
-            if datab == "":
+            if not datab:
                 break
             hasher.update(datab)
     return hasher.digest()

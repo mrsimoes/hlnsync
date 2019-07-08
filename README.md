@@ -56,7 +56,7 @@ To quickly obtain an _rsync_ command that will complete syncing, skipping `lnsyn
 
 Finally, to check the target is in-sync by recursively comparing it to source, run `lnsync cmp /home/you/Photos /mnt/disk/Photos`.
 
-To find duplicate files on the Photos directory, run `lnsync fdupes /home/you/Photos`. Use `-H` to count different hardlinks to the same file as duplicates. Use `-z` to compare by size only.
+To find duplicate files on the Photos directory, run `lnsync fdupes /home/you/Photos`. Use `-z` to compare by size only. Use `-H` to count different hardlinks to the same file as distinct files. If this option is not given, for each multiple-linked with other duplicates, a path is arbitrarily picked and printed.
 
 To find all files in Photos which are not in the backup (under any name), run `lnsync onfirstonly /home/you/Photos /mnt/disk/Photos`.
 
@@ -104,29 +104,35 @@ Options:
 
 - `lnsync fdupes [-h] [<tree>]+` Find files duplicated anywhere on the given trees.
 
-- `lnsync onall [<tree>]+`, `lnsync onfirstonly [<tree>]+`, `lnsync onlastonly [<tree>]+` Find files as advertised. Some options: `-M` prunes by maximum size; `-0` prunes empty files; `-1` prints each group of files in a single line, separated by spaces and with escaped backslashes and spaces, like `fdupes`.
+- `lnsync onall [<tree>]+`, `lnsync onfirstonly [<tree>]+`, `lnsync onlastonly [<tree>]+` Find files as advertised. Some options: `-M` prunes by maximum size; `-0` prunes empty files; `-1` prints each group of files in a single line, separated by spaces and with escaped backslashes and spaces, like `fdupes`. Use `-H` to consider multiple links to the same file as distinct files; if this option is not used, print a single, arbitrarily picked path for each multiple-linked file found to satisfy the condition of the command.
 
 - `lnsync check [<tree>] [<path>]*` Recompute hashes for given files and compare to the hash stored in the database, to check for changes/bitrot.
 
 ## Release Notes
 
-## Version 0.3.0
+### Version 0.3.3
+
+- Python 3 support.
+
+### Version 0.3.2
+
+- New --root option to allow reading and updating a root tree database when querying subtrees.
+
+### Version 0.3.0
 
 - Exclude files by glob pattern in sync and other commands.
 
 - Better terminal output.
 
-- Many minor improvements.
-
 - Major code overhaul.
 
-## Version 0.1.9
+### Version 0.1.9
 
 - Improved sync algorithm.
 
 - Remove directories left empty after sync.
 
-## Version 0.1
+### Version 0.1
 
 - Initial version.
 
@@ -134,21 +140,21 @@ Options:
 
 ### Caveats and Limitations
 
-- Tested only on Linux
+- Depends on mtime to detect file content changes.
 
 - Works only on locally mounted directories.
 
-- If source files A, B, C (with pairwise distinct contents) are renamed C, A, B on the target, undoing this cycle is currently not supported.
+- If source files A, B, C (with pairwise distinct contents) are renamed on target in a cycle to C, A, B, sync is currently not supported.
 
-- Considers only readable files and readable+accessible directories. Also, symlinks, pipes, special devices are ignored.
+- Only readable files and readable+accessible directories are read. Other files and dirs, as well as symlinks, pipes, special devices are ignored.
 
-- Filenames are not required to be valid UTF8, to accommodate older archives.
+- Minimal support for case-insensitive but case-preserving file systems like vfat: if a target file name differs from source match in case only, target is not updated.
 
-- Minimal support for case-insensitive, case-preserving file systems like vfat: if a target file name differs from source match in case only, target is not updated.
+- Supports Linux only.
 
 ### Possible Improvements
 
-- Port to Python 3.
+- Filenames are NOT converted to Unicode. To allow using offline database across systems, conversion is required.
 
 - Detect renamed directories to obtain a more compact sync schedule.
 
@@ -156,7 +162,7 @@ Options:
 
 - Support partial hashes for quicker comparison of same-size files.
 
-- Further optimizations to sync algorithm. Currently, it's straightforward, but has worked well in most cases.
+- Further optimizations to the sync algorithm. It's straightforward, but has been working well in practice.
 
 - Support for checking for duplicates by actual content, not just hash.
 

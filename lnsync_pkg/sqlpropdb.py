@@ -4,63 +4,56 @@
 # For conditions of distribution and use, see copyright notice in lnsync.py
 
 """
-Implement an online and offline file property cache databases for FilePropDB
-as an SQLite3 datase.
+Implement an SQLite3 database suited  to FileProp, with "online" and "offline"
+modes.
 
-An online database is stored in a file at the root of the FileTree rootdir.
+In offline mode, stores a file tree.
 
-An offline database is stores in a single file located anywhere.
+Open/close is achieved by managing a context. This is mandatory.
+
+Instances are created with the actual SQLite3 database path (plus the mode
+argument, to select online/offline).
+
+In online mode, a root kw argument is accepted, so that the correct exclude
+patterns are returned to make database files invisible to the tree. This
+defaults to the directory containing the database file.
 
 All databases are EXCLUSIVE lock, i.e. lock on read.
+
+Raise PropDBError if something goes wrong.
+
+TODO DROP vs TRUNCATE
 """
 
 import os
-import fnmatch
-import random
 import sqlite3
+import abc
+
+from six import integer_types, raise_from
+
+from lnsync_pkg.p23compat import fstr, fstr2str
+from lnsync_pkg.p23compat import sql_text_factory as p23_text_factory
+from lnsync_pkg.p23compat import sql_text_storer as p23_text_storer
+
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.filetree import Metadata
 from lnsync_pkg.onlineoffline import OnOffObject
-from lnsync_pkg.proptree import PropDBManager
+from lnsync_pkg.proptree import PropDBManager, PropDBError
 
 CUR_DB_FORMAT_VERSION = 1
 
-ONLINE_DB_PREFIX = "prop-"
-
-def set_default_sqldb_prefix(prefix):
-    global ONLINE_DB_PREFIX
-    ONLINE_DB_PREFIX = prefix
-
-def pick_db_basename(dir_path, dbprefix):
-    """Find or create a unique basename matching <dbprefix>[0-9]*.db in the
-    directory. Raise RuntimeError if there are too many files matching the
-    database basename pattern or if there are none and the given dir is not
-    writable.
-    """
-    assert os.path.isdir(dir_path), \
-            "pick_db_basename: not a directory: %s ." % dir_path
-    if dbprefix.endswith(".db"):
-        dbprefix = dbprefix[:-3]
-    pattern = "%s[0-9]*.db" % dbprefix
-    candidates_base = fnmatch.filter(os.listdir(dir_path), pattern)
-    if len(candidates_base) == 1:
-        db_basename = candidates_base[0]
-    elif candidates_base == []:
-        if not os.access(dir_path, os.W_OK):
-            raise RuntimeError("no write access to %s" % str(dir_path))
-        def random_digit_str(ndigit=3):
-            """Return a random string of digits of length ndigit."""
-            return ("%%0%dd" % ndigit) % random.randint(0, 10**ndigit-1)
-        db_basename = "%s%s.db" % (dbprefix, random_digit_str())
-    else:
-        raise RuntimeError("too many db files in %s" % str(dir_path))
-    return db_basename
-
 class SQLPropDBManager(OnOffObject):
     """Manage the file property database for FilePropertyTree using SQLite3,
-    common abstract superclass to online and offline databases.
+    methods common to online and offline modes.
     """
     _onoff_super = PropDBManager
+
+    def __init__(self, dbpath, mode=None, **kwargs):
+        """dbpath is the actual sqlite3 database filename."""
+        self._cx = None
+        self._enter_count = 0
+        self.dbpath = dbpath
+        super(SQLPropDBManager, self).__init__(dbpath, **kwargs)
 
     # (table_name, fields_including_key, optional_index)
     _tables_prop = \
@@ -81,37 +74,26 @@ class SQLPropDBManager(OnOffObject):
           "PRIMARY KEY (file_id)",
           None)]
 
-    def __init__(self, location, **kwargs):
-        """Always called from a subclass. Location is the actual sqlite3 db
-        filename."""
-        self._cx = None
-        self._enter_count = 0
-        self.dbpath = location
-        super(SQLPropDBManager, self).__init__(location, **kwargs)
-
-    def _all_tables(self):
-        return SQLPropDBManager._tables_prop
-
     def __enter__(self):
         self._enter_count += 1
         if self._enter_count == 1: # First entered.
             sql_db_path = self.dbpath
             if not os.path.isfile(sql_db_path):
-                self.create_empty()
+                self._create_empty()
             ver = self.which_db_version()
             if ver is None:
-                raise RuntimeError("unreadable DB at %s" % sql_db_path)
+                raise PropDBError("unreadable DB at %s" % fstr2str(sql_db_path))
             elif ver < CUR_DB_FORMAT_VERSION:
-                msg = "outdated db version=%d at %s" % (ver, sql_db_path)
-                raise RuntimeError(msg)
+                msg = "outdated db version=%d at %s" % (ver, fstr2str(sql_db_path))
+                raise PropDBError(msg)
             try:
-                self._cx = sqlite3.connect(sql_db_path)
-                def fac(text):
-                    return text
-                self._cx.text_factory = fac
-            except sqlite3.Error:
-                pr.error("cannot open DB at %s", sql_db_path)
-                raise
+                self._cx = sqlite3.connect(fstr2str(sql_db_path))
+                def factory(x):
+                    return p23_text_factory(x)
+                self._cx.text_factory = factory
+            except sqlite3.Error as exc:
+                msg = "cannot open DB at %s" % fstr2str(sql_db_path)
+                raise_from(PropDBError(msg), exc)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -133,34 +115,36 @@ class SQLPropDBManager(OnOffObject):
         cmd = "SELECT value, size, mtime, ctime FROM prop WHERE file_id=?;"
         res = self._cx.execute(cmd, (file_id,)).fetchone()
         if res is not None:
-            if not isinstance(res[0], (int, long)):
-                raise RuntimeError("prop value not integer.")
+            if not isinstance(res[0], integer_types):
+                raise PropDBError("prop value not integer")
             res = (res[0], Metadata(res[1], res[2], res[3]))
         return res
 
-    def reset_all_tables(self):
-        for table_info in self._all_tables():
-            SQLPropDBManager._reset_db_table(self._cx, table_info)
-
-    def create_empty(self):
+    def _create_empty(self):
         """Create a new SQL database file and close it."""
-        location = self.dbpath
-        assert not os.path.exists(location)
+        dbpath = self.dbpath
+        assert not os.path.exists(dbpath)
+        pr.progress("Creating new database %s ..." % (fstr2str(dbpath)))
         temp_cx = None
         try:
-            temp_cx = sqlite3.connect(location)
+            temp_cx = sqlite3.connect(fstr2str(dbpath))
             SQLPropDBManager._reset_db_tables(temp_cx, self._all_tables())
-#            self.reset_all_tables()
             temp_cx.execute(
                 "PRAGMA user_version=%d;" % int(CUR_DB_FORMAT_VERSION))
-            temp_cx.execute(
-                "PRAGMA locking_mode=EXCLUSIVE;")
-        except sqlite3.Error:
-            pr.error("cannot create database at %s", location)
-            raise
+            temp_cx.execute("PRAGMA locking_mode=EXCLUSIVE;")
+            temp_cx.execute("PRAGMA foreign_keys=ON;")
+        except sqlite3.Error as exc:
+            msg = "cannot create database at %s", fstr2str(dbpath)
+            pr.error(msg)
+            raise_from(PropDBError(msg), exc)
         finally:
             if temp_cx is not None:
+                temp_cx.commit()
                 temp_cx.close()
+
+    @abc.abstractmethod
+    def _all_tables(self):
+        pass
 
     def which_db_version(self):
         """Return db version number or None if not recognized."""
@@ -168,7 +152,7 @@ class SQLPropDBManager(OnOffObject):
         sql_cx = None
         db_ver = None
         try:
-            sql_cx = sqlite3.connect(db_path)
+            sql_cx = sqlite3.connect(fstr2str(db_path))
             db_ver_rec = sql_cx.execute("PRAGMA user_version;").fetchone()
             if db_ver_rec is not None:
                 db_ver = db_ver_rec[0]
@@ -179,9 +163,9 @@ class SQLPropDBManager(OnOffObject):
                 sql_cx.close()
         return db_ver
 
-    def reset_offline_tree(self):
+    def rm_offline_tree(self):
+        """Remove offline tree (even in online mode)."""
         SQLPropDBManager._reset_db_tables(self._cx, self._tables_offline)
-        self._cx.execute("PRAGMA foreign_keys = ON;")
         self._cx.commit()
 
     @staticmethod
@@ -200,36 +184,11 @@ class SQLPropDBManager(OnOffObject):
             sql_cx.execute(cmd)
         sql_cx.commit()
 
-    @staticmethod
-    def mode_from_location(location, mandatory_mode=None):
-        """Given a location path, decide if it could be an offline database or
-        just a root dir or can't tell (eg empty path)."""
-        if mandatory_mode is None:
-            if os.path.isdir(location):
-                mandatory_mode = "online"
-            elif os.path.isfile(location):
-                mandatory_mode = "offline"
-            else:
-                raise ValueError("expected file or dir: %s" % (location,))
-        if mandatory_mode == "online":
-            if not os.path.isdir(location):
-                raise ValueError("expected db rootdir: %s" % (location,))
-            elif not os.access(location, os.R_OK):
-                raise RuntimeError("cannot read from: %s" % (location,))
-            mode = "online"
-        elif mandatory_mode == "offline":
-            if os.path.exists(location):
-                if not os.path.isfile(location):
-                    raise ValueError("expected db file: %s" % (location,))
-                elif not os.access(location, os.R_OK):
-                    raise RuntimeError("cannot read from: %s" % (location,))
-            mode = "offline"
-        return mode
-
     def commit(self):
         self._cx.commit()
 
     def compact(self):
+        self._cx.commit()
         self._cx.execute("VACUUM;")
 
 
@@ -257,10 +216,12 @@ class SQLPropDBManagerOffline(SQLPropDBManager):
     def set_dir_content(self, dir_id, obj_basename, obj_id, obj_is_file):
         """Store a dir entry into the database-stores file tree."""
         # Escape single quotes for sqlite3.
-        obj_basename = obj_basename.replace("'", "''")
+        def storer(x):
+            x.replace(fstr("'"), fstr("''"))
+            return p23_text_storer(x)
         cmd = "INSERT INTO dir_contents VALUES (?, ?, ?, ?);"
         self._cx.cursor().execute(
-            cmd, (dir_id, obj_basename, obj_id, obj_is_file))
+            cmd, (dir_id, storer(obj_basename), obj_id, obj_is_file))
 
     def get_dir_contents(self, dir_id):
         """Generate dir entries from the database-stored file tree."""
@@ -268,33 +229,49 @@ class SQLPropDBManagerOffline(SQLPropDBManager):
               "FROM dir_contents WHERE parent_id=?;"
         cur = self._cx.execute(cmd, (dir_id,))
         for db_rec in cur.fetchall():
-            yield db_rec
+#            yield db_rec
+            yield (p23_text_factory(db_rec[0]), db_rec[1], db_rec[2]) #TODO FIX HACK
 
 class SQLPropDBManagerOnline(SQLPropDBManager):
     """Manage an online database (read and updated) for FilePropTree using
     SQLite3.
     """
-    def __init__(self, location, *args, **kwargs):
-        prefix = kwargs.get("prefix", ONLINE_DB_PREFIX)
-        location = os.path.join(location, pick_db_basename(location, prefix))
-        super(SQLPropDBManagerOnline, self).__init__(location, *args, **kwargs)
+    def __init__(self, dbpath, root=None, mode=None, **kwargs):
+        self.treeroot = root
+        super(SQLPropDBManagerOnline, self).__init__(
+            dbpath, root=root, **kwargs)
 
     def get_exclude_patterns(self):
-        """Exclude the SQLite3 main database and -journal, -wal and other tmp files."""
-        return ["/"+os.path.basename(self.dbpath), "/"+os.path.basename(self.dbpath)+"-*"]
+        """Exclude the SQLite3 main database and -journal, -wal and other tmp
+        files. The database may be located anywhere, even away from the tree
+        root."""
+        def is_subdir(path, directory):
+            "Test if path is under directory."
+            relative = os.path.relpath(path, directory)
+            return not relative.startswith(fstr(os.pardir + os.sep))
+        if self.treeroot and is_subdir(self.dbpath, self.treeroot):
+            relpath = os.path.relpath(self.dbpath, self.treeroot)
+            return [fstr("/") + relpath, fstr("/") + relpath + fstr("-*")]
+        else:
+            pr.warning("not excluding: ", fstr2str(self.dbpath))
+            return []
+
+    def _all_tables(self):
+        return SQLPropDBManager._tables_prop
 
     def delete_ids(self, file_ids):
         """Remove single file_id, or list or set of file_ids from property
         table.
         """
-        if isinstance(file_ids, (long, int)):
+        if isinstance(file_ids, integer_types):
             file_ids = (file_ids,)
         try:
             del_prop_cmd = "DELETE FROM prop WHERE file_id=?;"
             self._cx.executemany(del_prop_cmd, [(fid,) for fid in file_ids])
-        except Exception:
-            pr.error("could not delete ids")
-            raise
+        except sqlite3.Error as exc:
+            ms = "could not delete ids"
+            pr.error(msg)
+            raise_from(PropDBError(msg), exc)
 
     def delete_ids_except(self, file_ids_to_keep):
         """Delete from the db all ids, except those given. Expensive.
@@ -316,30 +293,13 @@ class SQLPropDBManagerOnline(SQLPropDBManager):
                     ids_to_delete.add(this_id)
         self.delete_ids(ids_to_delete)
 
-    def copy_prop_values(self, tgt_db, remap_fn=None):
-        """Copy prop values to target db, applying remap_fn to each fileid, if given."""
+    def merge_prop_values(self, tgt_db, remap_id_fn=None):
+        """Update db at target with prop values from source, overwriting if
+        necessary. """
         tgt_cx = tgt_db._cx
         prop_tab = self._tables_prop[0]
         tab_name = prop_tab[0]
-        if remap_fn is None:
-            tgt_cx.cursor().execute("ATTACH ? AS SOURCE;", (self.dbpath,))
-            xfer_cmd = "INSERT INTO %s SELECT * FROM SOURCE.%s;" % (tab_name, tab_name)
-            tgt_cx.cursor().execute(xfer_cmd)
-        else:
-            get_cmd = "SELECT * FROM %s;" % (tab_name,)
-            put_cmd = "INSERT INTO %s VALUES (?, ?, ?, ?, ?);" % (tab_name,)
-            for res in self._cx.execute(get_cmd).fetchall():
-                resout = (remap_dn(res[0]), res[1], res[2], res[3], res[4]) # Apply map to fileid.
-                tgt_cx.execute(put_cmd, resout)
-        tgt_db.compact()
-
-    def merge_prop_values(self, tgt_db, remap_fn=None):
-        """Update db at target with prop values from source, overwriting if
-        necessary."""
-        tgt_cx = tgt_db._cx
-        if remap_fn is None:
-            prop_tab = self._tables_prop[0]
-            tab_name = prop_tab[0]
+        if remap_id_fn is None:
             tgt_cx.cursor().execute("ATTACH ? AS SOURCE;", (self.dbpath,))
             cmd = ("DELETE FROM %s "
                    "WHERE file_id IN (SELECT file_id FROM SOURCE.%s) ;") \
@@ -353,9 +313,14 @@ class SQLPropDBManagerOnline(SQLPropDBManager):
             get_cursor = self._cx.cursor()
             test_cursor = tgt_cx.cursor()
             put_cursor = tgt_cx.cursor()
+            cmd_test_if = "SELECT * FROM %s WHERE file_id=?;" % tab_name
+            cmd_delete = "DELETE FROM %s WHERE file_id=?;" % tab_name
+            cmd_insert = "INSERT INTO %s VALUES (?, ?, ?, ?, ?);" % tab_name
             for res in get_cursor.execute(get_cmd).fetchall():
-                resout = (remap_dn(res[0]), res[1], res[2], res[3], res[4]) # Apply map to fileid.
-                if test_cursor.execute("SELECT * FROM prop WHERE file_id=?;", (resout[0],)):
-                    test_cursor.execute("DELETE FROM prop WHERE file_id=?;", (resout[0],))
-                put_cursor.execute("INSERT INTO %s VALUES (?, ?, ?, ?, ?);", resout)
+                # Apply map to fileid.
+                resout = (remap_id_fn(res[0]), res[1], res[2], res[3], res[4])
+                test_cursor.execute(cmd_test_if, (resout[0],))
+                if test_cursor.fetchall():
+                    test_cursor.execute(cmd_delete, (resout[0],))
+                put_cursor.execute(cmd_insert, resout)
         tgt_db.compact()

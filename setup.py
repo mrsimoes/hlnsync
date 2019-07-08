@@ -3,9 +3,10 @@
 import os
 from setuptools import setup, find_packages
 from lnsync_pkg import metadata
+
 cwd = os.path.abspath(os.path.dirname(__file__))
 
-with open(os.path.join("docs/README.md")) as readme_file:
+with open(os.path.join("README.md")) as readme_file:
     long_description = readme_file.read()
 
 setup(
@@ -32,6 +33,7 @@ setup(
        'Environment :: Console',
        'Operating System :: POSIX :: Linux',
        'Programming Language :: Python :: 2.7',
+       'Programming Language :: Python :: 3.6',
        'License :: OSI Approved :: GNU General Public License v3 (GPLv3)',
        'Topic :: System :: Archiving :: Backup',
        'Topic :: Utilities',

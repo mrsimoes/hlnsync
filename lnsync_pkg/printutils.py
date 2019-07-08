@@ -21,13 +21,15 @@ import sys
 import atexit
 from itertools import chain
 
+from lnsync_pkg.p23compat import isfstr
+
 # Tell pylint not to mistake module variables for constants
 # pylint: disable=C0103
 
 # Set by the module user.
 option_verbosity = 0
 
-_builtin_print = print
+_print = print
 _stdout_is_tty = sys.stdout.isatty()
 _stderr_is_tty = sys.stderr.isatty()
 
@@ -59,9 +61,9 @@ def progress(*args):
         return
     line = "".join(chain(_progress_prefixes, args))
     line = line.replace("\n", "")
-    _builtin_print('\033[?7l', end="") # Wrap off.
-    _builtin_print(line, end="\033[0K\r") # Erase to end of line.
-    _builtin_print('\033[?7h', end="") # Wrap on.
+    _print('\033[?7l', end="") # Wrap off.
+    _print(line, end="\033[0K\r") # Erase to end of line.
+    _print('\033[?7h', end="") # Wrap on.
     _progress_was_printed = True
     sys.stdout.flush()
 
@@ -77,15 +79,24 @@ def set_app_prefix(pref):
 def _print_main(*args, **kwargs):
     global _progress_was_printed
     file = kwargs.pop("file", sys.stdout)
+    end = kwargs.pop("end", "\n")
+    assert not kwargs
     assert file in (sys.stdout, sys.stderr)
     if file == sys.stdout:
         is_tty = _stdout_is_tty
     else:
         is_tty = _stderr_is_tty
     if is_tty and _progress_was_printed:
-        _builtin_print("\r\033[2K", end="") # Erase current line.
-    for line in "".join(map(str, args)).splitlines():
-        _builtin_print(line, file=file, **kwargs)
+        _print("\r\033[2K", end="") # Erase current line.
+#    for line in "".join(map(str, args)).splitlines():
+#        _print(line, file=file, **kwargs)
+    for arg in args:
+        if True or not isfstr(arg):
+            arg = str(arg)
+        file.write(arg)
+    if end:
+        file.write(end)
+    file.flush()
     _progress_was_printed = False
 
 def print(*args, **kwargs):
@@ -98,15 +109,19 @@ def fatal(*args, **kwargs):
 
 def error(*args, **kwargs):
     if option_verbosity >= 0:
-        if _stderr_is_tty:
-            _builtin_print("\033[31m", file=sys.stderr, end="") # Red forgr.
-        _print_main(_app_prefix, "error: ", *args, file=sys.stderr, **kwargs)
-        if _stderr_is_tty:
-            _builtin_print("\033[39m", file=sys.stderr, end="") # Std foreg.
+        try:
+            if _stderr_is_tty:
+                _print("\033[31m", file=sys.stderr, end="") # Red forgr.
+            _print_main(_app_prefix,
+                        "error: ", *args, file=sys.stderr, **kwargs)
+        finally:
+            if _stderr_is_tty:
+                _print("\033[39m", file=sys.stderr, end="") # Std foreg.
+                sys.stderr.flush()
 
 def info(*args, **kwargs): # Default verbosity level is 1.
     if option_verbosity >= 1:
-        _print_main(_app_prefix, *args, file=sys.stdout, **kwargs)
+        _print_main(*args, file=sys.stdout, **kwargs)
 
 def warning(*args, **kwargs):
     if option_verbosity >= 2:
@@ -126,7 +141,7 @@ def trace(template_str, *str_args, **kwargs):
 
 def _exit_func():
     if _stdout_is_tty:
-        _builtin_print("\033[0J", end="") # Clear line.
+        _print("\033[0J", end="") # Clear line.
     try:     # Prevent "broken pipe" errors if outputs are closed before atexit.
         sys.stdout.flush()
         sys.stdout.close()
@@ -151,9 +166,9 @@ if __name__ == "__main__":
     set_app_prefix("myapp")
     for v in [-1, 0, 1, 2, 3, 4, 5]:
         option_verbosity = v
-        _builtin_print("\nverbosity %d" % v)
+        _print("\nverbosity %d" % v)
         error(msg + "error")
-        print(msg + "print")
+        _print(msg + "print")
         info(msg + "info")
         warning(msg + " warning")
         trace("%s debug ", msg)

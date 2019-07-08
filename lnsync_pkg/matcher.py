@@ -22,6 +22,9 @@ import itertools
 import copy
 from collections import namedtuple
 
+from six import integer_types
+
+from lnsync_pkg.p23compat import fstr, zip, imap
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.onegraph import OneGraph
 from lnsync_pkg.backtracker import SearchState, do_search
@@ -39,8 +42,9 @@ class TreePairMatcher(object):
         assert tgt_tree.db.mode == "online", "TreePairMatcher: not online db."
         # Do not match a tree against a subtree.
         def is_subdir(path, directory):
+            "Test if path is under directory."
             relative = os.path.relpath(path, directory)
-            return not relative.startswith(os.pardir + os.sep)
+            return not relative.startswith(fstr(os.pardir + os.sep))
         if src_tree.db.mode == "online" and \
             (is_subdir(src_tree.root_path, tgt_tree.root_path) \
              or is_subdir(tgt_tree.root_path, src_tree.root_path)):
@@ -284,8 +288,9 @@ class State(SearchState):
         tgt_hashes = {self.trees.tgt.get_prop(f) for f in sz_tgt_files}
         sz_common_hashes = set.intersection(src_hashes, tgt_hashes)
         def commonhash_to_fileids(tree, file_list):
-            """Return table hash -> [fileids] with all files whose hash is one of
-            the values in sz_common_hashes (hashes in common for this file size).
+            """Return table hash -> [fileids] with all files whose hash is one
+            of the values in sz_common_hashes (hashes in common for this file
+            size).
             """
             hashfileids_dict = {}
             for file_obj in file_list:
@@ -333,8 +338,8 @@ class State(SearchState):
                 [self.trees.src.id_to_file(i).relpaths for i in ids.src]
             all_tgt_paths = \
                 [self.trees.tgt.id_to_file(i).relpaths for i in ids.tgt]
-            if all([len(ps) == 1 for ps in all_src_paths]) \
-                    and all([len(ps) == 1 for ps in all_tgt_paths]):
+            if all(len(ps) == 1 for ps in all_src_paths) \
+                    and all(len(ps) == 1 for ps in all_tgt_paths):
                 all_src_paths = [ps[0] for ps in all_src_paths]
                 all_tgt_paths = [ps[0] for ps in all_tgt_paths]
                 if set(all_src_paths) == set(all_tgt_paths):
@@ -428,8 +433,8 @@ class State(SearchState):
         mv/ln/unln elementary operations, with some possibly creating mv cycles
         when combined with other PathOps for other file ids.
         """
-        assert isinstance(src_id, (int, long)) \
-            and isinstance(tgt_id, (int, long)), \
+        assert isinstance(src_id, integer_types) \
+            and isinstance(tgt_id, integer_types), \
             "_gen_pathops: bad ids (%s,%s)." % (src_id, tgt_id)
         src_paths = self.trees.src.id_to_file(src_id).relpaths
         tgt_paths = self.trees.tgt.id_to_file(tgt_id).relpaths
@@ -461,7 +466,7 @@ class State(SearchState):
                     *[tn for tn in tgt_only_paths if tn not in tgt_paths_order])
                 yield mv_op.add(ln_op)
         else:
-            # len(tgt_paths) < len(src_paths) need to create new links at target.
+            # len(tgt_paths) < len(src_paths), create new links at target.
             for src_paths_order \
                     in itertools.permutations(src_paths, len(tgt_paths)):
                 mv_ops = [PathOp.make_mv(SrcTgt(a, b)) \
@@ -483,10 +488,10 @@ class State(SearchState):
         if len(src_ids) == 1 and len(tgt_ids) == 1:
             return iter([(src_ids, tgt_ids)])
         elif len(src_ids) <= len(tgt_ids):
-            res = itertools.izip(itertools.repeat(src_ids),\
+            res = zip(itertools.repeat(src_ids),\
                                 itertools.permutations(tgt_ids, len(src_ids)))
         else:
-            res = itertools.izip(itertools.permutations(src_ids, len(tgt_ids)),\
+            res = zip(itertools.permutations(src_ids, len(tgt_ids)),\
                                     itertools.repeat(tgt_ids))
         bgm = self._best_guess_matches(src_ids, tgt_ids)
         return itertools.chain(bgm, res)
@@ -523,10 +528,8 @@ class State(SearchState):
                 # for some id2 in ids2.
                 return iter([(mt_ids_1, mt_ids_2)])
             else:
-                return itertools.izip(\
-                            itertools.repeat(mt_ids_1 + unmt_ids_1),\
-                            itertools.imap(
-                                lambda permtail: mt_ids_2 + list(permtail),
+                return zip(itertools.repeat(mt_ids_1 + unmt_ids_1), \
+                           imap(lambda permtail: mt_ids_2 + list(permtail),
                                 itertools.permutations(
                                     unmt_ids_2, len(unmt_ids_1))))
         if len(src_ids) == 1 and len(tgt_ids) == 1:
@@ -538,7 +541,7 @@ class State(SearchState):
         else:
             def reverse_pair(pair):
                 return (pair[1], pair[0])
-            res = itertools.imap(
+            res = imap(
                 reverse_pair,
                 match_either_way(
                     tgt_ids, self.trees.tgt, src_ids, self.trees.src)
