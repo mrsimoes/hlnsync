@@ -66,6 +66,9 @@ from lnsync_pkg.filetree import FileTree, FileItem, DirItem, OtherItem, TreeErro
 class PropDBError(Exception):
     pass
 
+class PropDBValueError(PropDBError):
+    pass
+
 class PropDBManager(OnOffObject):
     _onoff_super = OnOffObject
     def get_exclude_patterns(self):
@@ -316,14 +319,14 @@ class FilePropTreeOnline(FilePropTree):
         """Compare the file prop value from source against an up-to-date
         prop value in the db and return True or False accordingly.
         Do not update the database.
-        If the db value is not up-to-date, raise ValueError.
+        Raise PropDBValueError if the db value is not up-to-date.
         """
         assert self.rootdir_obj is not None
         assert file_obj is not None and file_obj.is_file()
         db_prop = self.db_get_uptodate_prop(file_obj, delete_stale=False)
         if db_prop is None:
-            raise ValueError(
-                "no uptodate prop/metadata for %s." % file_obj.relpaths)
+            raise PropDBValueError(
+                "no uptodate prop/metadata for '%s'." % fstr2str(file_obj.relpaths[0]))
         live_prop_value = self.prop_from_source(file_obj)
         return db_prop == live_prop_value
 

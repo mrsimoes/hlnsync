@@ -236,10 +236,10 @@ class SQLPropDBManagerOnline(SQLPropDBManager):
     """Manage an online database (read and updated) for FilePropTree using
     SQLite3.
     """
-    def __init__(self, dbpath, root=None, mode=None, **kwargs):
-        self.treeroot = root
+    def __init__(self, dbpath, root_path=None, mode=None, **kwargs):
+        self.treeroot = root_path
         super(SQLPropDBManagerOnline, self).__init__(
-            dbpath, root=root, **kwargs)
+            dbpath, root=root_path, **kwargs)
 
     def get_exclude_patterns(self):
         """Exclude the SQLite3 main database and -journal, -wal and other tmp

@@ -25,7 +25,7 @@ import sys
 import pipes
 from sqlite3 import Error as SQLError
 
-from six import raise_from, iteritems
+from six import raise_from, reraise, iteritems
 from six.moves import reduce
 
 from lnsync_pkg.p23compat import fstr, fstr2str
@@ -36,7 +36,7 @@ from lnsync_pkg.human2bytes import human2bytes
 from lnsync_pkg.sqlpropdb  import SQLPropDBManager
 from lnsync_pkg.prefixdbname import \
     mode_from_location, pick_db_basename, set_prefix, mk_online_db
-from lnsync_pkg.hashtree import FileHashTree, TreeError
+from lnsync_pkg.hashtree import FileHashTree, TreeError, PropDBValueError
 from lnsync_pkg.matcher import TreePairMatcher
 from lnsync_pkg.fileid import make_id_computer
 
@@ -67,7 +67,7 @@ DESCRIPTION = wrap(
     "lnsync is Copyright (C) 2018 Miguel Simoes. "
     "This program comes with ABSOLUTELY NO WARRANTY. This is free software, "
     "and you are welcome to redistribute it under certain conditions. "
-    "See the GNU General\n Public Licence for details.\n"
+    "See the GNU General\n Public Licence v3 for details.\n"
     "More info at http://github.com/mrsimoes/lnsync" \
     % (metadata.version,
        sys.version_info[0], sys.version_info[1],
@@ -125,12 +125,13 @@ dbprefix_option_parser = argparse.ArgumentParser(add_help=False)
 dbprefix_option_parser.add_argument(
     "-p", "--dbprefix", metavar="PREFIX", type=fstr, action="store",
     default=DEFAULT_DBPREFIX,
-    help="database filename prefix for locations following")
+    help="database filename prefix for following online trees")
 
-# Any --exclude option applies to all locations anywhere in the command line.
-# Any --exclude-once option applies only to the next location.
+# Any --exclude option applies to all tree locations anywhere in the command
+# line.
+# Any --exclude-once option applies only to the next tree location.
 # Due to an argparse limitation, --exclude-once is not supported where
-# for the elements of a location list (nargs="+"). argparse cannot parse
+# for the elements of a tree location list (nargs="+"). argparse cannot parse
 # optional arguments interspersed with the elements in a list argument.
 
 # argparse initializes to None instead of an empty list.
@@ -143,7 +144,7 @@ exclude_option_parser.add_argument(
 excludeonce_option_parser = argparse.ArgumentParser(add_help=False)
 excludeonce_option_parser.add_argument(
     "--exclude-once", metavar="GLOBPATTERN", type=fstr, action="append",
-    help="exclude for the following location only")
+    help="exclude for the following tree only")
 
 def tree_location(location, mandatory_mode=None):
     """Transforms a location path string to a tuple (location, mode).
@@ -208,12 +209,16 @@ class StoreTreeSpecList(StoreTreeSpec):
         setattr(namespace, self.dest, tree_specs)
 
 class StoreRoot(argparse.Action):
-    """Store root with active dbprefix."""
+    """Store another root with active dbprefix."""
     def __call__(self, parser, namespace, values, option_string=None):
-        assert not isinstance(values, list) # Always a single tree argument.
+        assert not isinstance(values, list) # A single root argument at a time.
+        prev_roots = getattr(namespace, self.dest)
+        if not prev_roots: # argparse defaults to explicit None.
+            prev_roots = []
         dbprefix = namespace.dbprefix
         tree_spec = new_tree_spec(values[0], values[1], dbprefix)
-        setattr(namespace, self.dest, tree_spec) # Store db spec in Namespace.
+        prev_roots.append(tree_spec)
+        setattr(namespace, self.dest, prev_roots) # Store db spec in Namespace.
 
 # Create treekwargs with appropritate kwargs to init an
 # instance of an online/offline file tree from stored location data.
@@ -226,7 +231,7 @@ def make_treekwargs(location, mode="online", dbprefix=DEFAULT_DBPREFIX):
     return tree_spec
 
 def tree_spec_to_kwargs(tree_spec):
-    """Edit Location data dict with dbmaker, dbkwargs, root_path.
+    """Edit tree data dict with dbmaker, dbkwargs, root_path.
     """
     real_location = tree_spec["real_location"]
     del tree_spec["cmd_location"]
@@ -237,11 +242,12 @@ def tree_spec_to_kwargs(tree_spec):
         dbpath = os.path.join(real_location,
                               pick_db_basename(real_location, dbprefix))
         tree_spec["root_path"] = real_location
+        tree_spec["dbkwargs"] = {"dbpath":dbpath, "root_path":real_location}
     else:
         dbpath = real_location
         tree_spec["root_path"] = None
+        tree_spec["dbkwargs"] = {"dbpath":dbpath, "root_path":None}
     tree_spec["dbmaker"] = SQLPropDBManager
-    tree_spec["dbkwargs"] = {"dbpath":dbpath} # Get mode from tree.
 
 
 # Options that apply to all tree locations.
@@ -249,7 +255,7 @@ def tree_spec_to_kwargs(tree_spec):
 root_option_parser = argparse.ArgumentParser(add_help=False)
 root_option_parser.add_argument(
     "--root", metavar="DIR", type=tree_online, action=StoreRoot,
-    help="read and update root database for all subdir locations")
+    help="read and update root database for all subtree locations")
 
 bysize_option_parser = argparse.ArgumentParser(add_help=False)
 bysize_option_parser.add_argument(
@@ -278,28 +284,35 @@ def finish_parsing_trees(args):
         relative = os.path.relpath(path, directory)
         return not relative.startswith(fstr(os.pardir + os.sep))
     # argparse may not set default value for --exclude option.
+    verbosity_delta = getattr(args, "verbosity_delta", 0)
+    pr.option_verbosity += verbosity_delta
     global_excludes = getattr(args, "exclude", None)
-    root_spec = getattr(args, "root", None)
-    if root_spec:
-        root_dir = root_spec["real_location"]
+    root_specs = getattr(args, "root", [])
+    if not root_specs: # argparse sets None as explicit default.
+        root_specs = []
+    for root_spec in root_specs:
         tree_spec_to_kwargs(root_spec)
-        root_db_path = root_spec["dbkwargs"]["dbpath"]
     previous_locations = []
-    for tree_spec in getattr(args, "all_tree_specs", []):
+    tree_specs = getattr(args, "all_tree_specs", [])
+    for tree_spec in tree_specs:
         this_location = tree_spec["real_location"]
         if this_location in previous_locations:
             raise ValueError(
                 "duplicate location: %s" % (tree_spec["cmd_location"],))
         previous_locations.append(this_location)
-        if root_spec and tree_spec["mode"] == "online" \
-                and is_subdir(this_location, root_dir):
-            replace_db = root_db_path
-        else:
-            replace_db = None
+        replacement_db = None
+        for root_spec in root_specs:
+            root_dir = root_spec["root_path"]
+            if tree_spec["mode"] == "online" \
+                    and is_subdir(this_location, root_dir):
+                replacement_db = root_spec["dbkwargs"]["dbpath"]
+                pr.info("using %s as db for %s" %
+                        (fstr2str(replacement_db), fstr2str(this_location)))
+                break
         tree_spec_to_kwargs(tree_spec)
         treekwargs = tree_spec # Just for clarity, since the contents changed.
-        if replace_db:
-            treekwargs["dbkwargs"]["dbpath"] = replace_db
+        if replacement_db:
+            treekwargs["dbkwargs"]["dbpath"] = replacement_db
         if global_excludes:
             treekw = "exclude_patterns"
             once_excludes = treekwargs.get(treekw, [])
@@ -312,8 +325,6 @@ def finish_parsing_trees(args):
             if hasattr(args, arg):
                 assert not treekw in treekwargs, "already set: "+str(treekw)
                 treekwargs[treekw] = getattr(args, arg)
-    verbosity_delta = getattr(args, "verbosity_delta", 0)
-    pr.option_verbosity += verbosity_delta
 
 # Argument check and type coerce functions:
 
@@ -398,7 +409,8 @@ def do_sync(args):
             dirs_to_rm_list = []
             for dir_obj, _parent_obj, relpath \
                     in tgt_tree.walk_paths(
-                            recurse=True, topdown=False, dirs=True, files=False):
+                            recurse=True, topdown=False,
+                            dirs=True, files=False):
                 if all((obj.is_dir() and obj in dirs_to_rm_set)
                        for obj in dir_obj.entries.values()):
                     if src_tree.follow_path(relpath) is None:
@@ -417,8 +429,11 @@ class GroupedFileListPrinter(object):
     with an empty line separating consecutive groups.
     If sameline is True, filenames in each group are printed on the same line,
     separated by spaces, with filename spaces and backslashes escaped.
-    If hardlinks is True, print all aliases for each file as if they were different paths.
-    If hardlinks is False, print a for each file a single alias, arbitrarily chosen."""
+    If hardlinks is True, print all aliases for each file as if they were
+    different paths.
+    If hardlinks is False, print a for each file a single alias, arbitrarily
+    chosen.
+    """
     def __init__(self, hardlinks, sameline):
         self.hardlinks = hardlinks
         self.sameline = sameline
@@ -509,7 +524,7 @@ parser_onall = cmd_parsers.add_parser(
              skipempty_option_parser,
              dbprefix_option_parser,
              sameline_option_parser],
-    help='find files common to all locations')
+    help='find files common to all trees')
 parser_onall.add_argument(
     "locations", type=tree_location, action=StoreTreeSpecList, nargs="+")
 def do_onall(args):
@@ -535,7 +550,7 @@ parser_onfirstonly = cmd_parsers.add_parser(
              skipempty_option_parser,
              dbprefix_option_parser,
              sameline_option_parser],
-    help='find files on first location, not on any other')
+    help='find files on first tree, not on any other')
 parser_onfirstonly.add_argument(
     "locations", type=tree_location, action=StoreTreeSpecList, nargs="+")
 def do_onfirstonly(args):
@@ -562,7 +577,7 @@ parser_onlastonly = cmd_parsers.add_parser(
              skipempty_option_parser,
              dbprefix_option_parser,
              sameline_option_parser],
-    help='find files on last location, not on any other')
+    help='find files on last tree, not on any other')
 parser_onlastonly.add_argument(
     "locations", type=tree_location, action=StoreTreeSpecList, nargs="+")
 def do_onlastonly(args):
@@ -582,7 +597,7 @@ parser_cmp = cmd_parsers.add_parser(
              skipempty_option_parser,
              dbprefix_option_parser,
             ],
-    help='recursively compare two locations')
+    help='recursively compare two trees')
 parser_cmp.add_argument(
     "leftlocation", type=tree_location, action=StoreTreeSpec)
 parser_cmp.add_argument(
@@ -660,11 +675,11 @@ def do_cmp(args):
                         "unexpected right object: " + fstr2str(right_path))
             elif right_obj.is_file():
                 if not left_obj.is_file() and not left_obj.is_dir():
-                    pr.info(
+                    pr.print(
                         "left other vs right file: %s" % fstr2str(right_path))
             elif right_obj.is_dir():
                 if not left_obj.is_file() and not left_obj.is_dir():
-                    pr.info(
+                    pr.print(
                         "left other vs right dir: %s" % fstr2str(right_path))
             else:
                 raise RuntimeError(
@@ -734,21 +749,28 @@ def do_check(args):
                     continue
                 try:
                     res = tree.db_check_prop(fobj)
+                except PropDBValueError:
+                    pr.warning("not checked: '%s'" % fstr2str(path))
+                    continue
                 except TreeError as exc:
-                    pr.error("while checking %s: %s" % (path, str(exc)))
+                    pr.error("while checking %s: %s" % (fstr2str(path), str(exc)))
                     continue
                 if res:
                     file_objs_checked_ok.add(fobj)
                 else:
-                    pr.info("failed check: %s" % path)
+                    pr.print("failed check: %s" % path)
                     file_objs_checked_bad.add(fobj)
+        except KeyboardInterrupt as e:
+            t, v, tb = sys.exc_info()
+            pr.print("Interrupted... ", end="")
+            reraise(KeyboardInterrupt, v, tb)
         finally:
             tot_files_checked = len(file_objs_checked_ok) \
                               + len(file_objs_checked_bad)
             tot_files_failed = len(file_objs_checked_bad)
-            msg_out_tail = "out of %d files checked" % (tot_files_checked,)
+            msg_out_tail = "/ %d files checked" % (tot_files_checked,)
             if tot_files_failed > 0:
-                pr.info("%d file(s) failed %s" % \
+                pr.print("%d file(s) failed %s" % \
                     (tot_files_failed, msg_out_tail))
                 for p in file_objs_checked_bad:
                     pr.print(p.relpaths[0])

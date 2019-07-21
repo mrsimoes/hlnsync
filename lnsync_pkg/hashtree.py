@@ -18,7 +18,8 @@ from lnsync_pkg.p23compat import fstr2str
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.blockhash import hash_file
 from lnsync_pkg.onlineoffline import OnOffObject
-from lnsync_pkg.proptree import FilePropTree, PropDBManager, TreeError
+from lnsync_pkg.proptree import \
+    FilePropTree, PropDBManager, TreeError, PropDBError, PropDBValueError
 
 class EmptyDBManager(OnOffObject):
     _onoff_super = PropDBManager

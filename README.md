@@ -4,13 +4,15 @@
 
 _lnsync_ provides unidirectional local file tree sync with rename detection and support for hardlinks.
 
-This package started as a Python learning project. I've found it useful enough to polish for publication, but it underwent limited testing and therefore should be used with caution. All comments, corrections, and suggestions are welcome.
+This package started as a Python learning project. I've found it useful enough to polish for publication, but it underwent limited testing and therefore should be used with caution. Any comment, correction, or suggestion is welcome.
 
 ### Purpose and Operation
 
 When files are renamed/moved in the source file tree, _lnsync_  makes a best-effort to sync target from source by only renaming files and generally creating/removing hard links, but without deleting or copying file data. (It also removes directories which have become extraneous.) It may be used as a preprocessing step for other sync tools, such as _rsync_.
 
 File content is compared by size and content hash, which _lnsync_ stores in single-file SQLite3 database at the top-level directory of each file tree. Using those hashes, _lnsync_ can also find duplicate files (like _fdupes_), compare file trees, and check for changes/bitrot.
+
+The file hash database name is chosen randomly to avoid accidental overwriting when syncing two directories using tools other than _lsync_.
 
 File modification times are used to detect stale hash values and are not synced. File ownership and permissions are ignored: files which cannot be read are skipped.
 
@@ -100,7 +102,7 @@ Options:
 
 - `lnsync lookup <tree> [<relpath>+]` Returns (either from db or by recomputing) the hash value for the files, where `tree` may be a a directory or an offline tree.
 
-- `lnsync cmp <tree1> <tree2>` Recursively compares two file trees. Accepts `--exclude=<pattern>` options.
+- `lnsync cmp <tree1> <tree2>` Recursively compares two file trees. Compares files at each path, does not compare the hard link structure. Accepts `--exclude=<pattern>` options.
 
 - `lnsync fdupes [-h] [<tree>]+` Find files duplicated anywhere on the given trees.
 
@@ -155,6 +157,8 @@ Options:
 ### Possible Improvements
 
 - Filenames are NOT converted to Unicode. To allow using offline database across systems, conversion is required.
+
+- Extend `cmp` to take hard links into account.
 
 - Detect renamed directories to obtain a more compact sync schedule.
 

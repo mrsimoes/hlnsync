@@ -4,7 +4,7 @@
 
 # The package name, which is also the "UNIX name" for the project.
 package = 'lnsync'
-version = '0.3.3'
+version = '0.3.4'
 description = 'Sync local directories with rename detection and hard link support.'
 summary = description
 project = 'lnsync dir sync tool'
