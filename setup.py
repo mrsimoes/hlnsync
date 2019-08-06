@@ -12,6 +12,7 @@ with open(os.path.join("README.md")) as readme_file:
 setup(
 	name = 'lnsync',
 	version = metadata.version,
+	summary = "bug fixes",
 	description = metadata.description,
 	url = metadata.url,
 	download_url = metadata.download_url,

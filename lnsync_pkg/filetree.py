@@ -258,7 +258,7 @@ class FileTree(object):
         if dir_obj.was_scanned():
             return
         with pr.ProgressPrefix(
-            "scanning: " + self.printable_path(dir_obj.get_relpath())
+            "scanning:" + self.printable_path(dir_obj.get_relpath())
             ):
             dir_exclude_matcher = self._exclude_matchers.get(dir_obj)
                 # dir_exclude_matcher is None or an entry.

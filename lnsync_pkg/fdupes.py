@@ -121,14 +121,14 @@ def _props_onall_of_size(trees, file_sz):
     """
     good_props = set()
     first_tree = trees[0]
-    pr.progress("scanning: ", first_tree.printable_path(fstr("")))
+    pr.progress("scanning:", first_tree.printable_path(fstr("")))
     for fobj in first_tree.size_to_files(file_sz):
         prop = _get_prop(first_tree, fobj)
         if prop is None:
             continue
         good_props.add(prop)
     for tree in trees[1:]:
-        pr.progress("scanning: ", tree.printable_path(fstr("")))
+        pr.progress("scanning:", tree.printable_path(fstr("")))
         this_tree_props = set()
         for fobj in tree.size_to_files(file_sz):
             prop = _get_prop(tree, fobj)

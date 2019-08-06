@@ -306,7 +306,7 @@ def finish_parsing_trees(args):
             if tree_spec["mode"] == "online" \
                     and is_subdir(this_location, root_dir):
                 replacement_db = root_spec["dbkwargs"]["dbpath"]
-                pr.info("using %s as db for %s" %
+                pr.info("using %s for %s" %
                         (fstr2str(replacement_db), fstr2str(this_location)))
                 break
         tree_spec_to_kwargs(tree_spec)
@@ -386,7 +386,6 @@ parser_sync.add_argument(
 def do_sync(args):
     with FileHashTree(**args.source) as src_tree:
         with FileHashTree(**args.targetdir) as tgt_tree:
-            pr.progress("starting match")
             matcher = TreePairMatcher(src_tree, tgt_tree)
             pr.progress("calculating match")
             if not matcher.do_match():
@@ -715,7 +714,8 @@ cmd_handlers["lookup"] = do_lookup
 ## check
 parser_check_files = cmd_parsers.add_parser(
     'check',
-    parents=[exclude_option_parser,
+    parents=[root_option_parser,
+             exclude_option_parser,
              hardlinks_option_parser,
              bysize_option_parser,
              maxsize_option_parser,

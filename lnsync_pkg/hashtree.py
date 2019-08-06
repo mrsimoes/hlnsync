@@ -78,11 +78,11 @@ class FileHashTreeOnline(FileHashTree):
         """
         relpath = file_obj.relpaths[0]
         abspath = self.rel_to_abs(relpath)
-        pr.progress("hashing %s" % self.printable_path(relpath))
+        pr.progress("hashing:%s" % self.printable_path(relpath))
         try:
             val = hash_file(abspath)
         except OSError as exc:
-            raise_from(RuntimeError("hashing"), exc)
+            raise_from(RuntimeError("while hashing"), exc)
         if not isinstance(val, integer_types):
             raise  RuntimeError("bad property value %s" % (val,))
         return val

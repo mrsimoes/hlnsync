@@ -228,6 +228,13 @@ class FilePropTreeOffline(FilePropTree):
                         fstr2str(obj_basename),
                         self.printable_path(dir_obj.get_relpath())))
                 yield (obj_basename, None, OtherItem, None)
+            elif obj_type == DirItem and exclude_matcher and \
+                exclude_matcher.match_dir_bname(obj_basename):
+                pr.warning(
+                    "excluded dir %s at %s" % (
+                        fstr2str(obj_basename),
+                        self.printable_path(dir_obj.get_relpath())))
+                yield (obj_basename, None, OtherItem, None)
             else:
                 yield (obj_basename, obj_id, obj_type, obj_id)
 

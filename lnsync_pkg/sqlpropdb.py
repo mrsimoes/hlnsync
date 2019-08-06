@@ -246,14 +246,13 @@ class SQLPropDBManagerOnline(SQLPropDBManager):
         files. The database may be located anywhere, even away from the tree
         root."""
         def is_subdir(path, directory):
-            "Test if path is under directory."
+            "Test if path is under directory, not strict."
             relative = os.path.relpath(path, directory)
             return not relative.startswith(fstr(os.pardir + os.sep))
         if self.treeroot and is_subdir(self.dbpath, self.treeroot):
             relpath = os.path.relpath(self.dbpath, self.treeroot)
             return [fstr("/") + relpath, fstr("/") + relpath + fstr("-*")]
         else:
-            pr.warning("not excluding: ", fstr2str(self.dbpath))
             return []
 
     def _all_tables(self):
