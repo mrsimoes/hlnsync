@@ -4,10 +4,10 @@
 # For conditions of distribution and use, see copyright notice in lnsync.py
 
 """
-Algorithms for finding sizes for which there are is more than one file
-in a list of FilePropDB, sizes for which there is one file in each of the
-FilePropDB in a list etc, and also algorithms for listing the corresponding
-files and file paths.
+Algorithms for finding sizes for which there are is more than one file in a list
+of FilePropDB, sizes for which there is one file in each of the FilePropDB in a
+list etc, and also algorithms for listing the corresponding files and file
+paths.
 
 All that is used from the FilePropTree interface is:
     size_to_files: FilePropTree x int ->  list of FileItem
@@ -30,7 +30,8 @@ def _get_prop(tree, fobj):
     try:
         prop = tree.get_prop(fobj)
     except TreeError as exc:
-        pr.error("processing file id %d, ignored: %s" % (fobj.file_id, str(exc)))
+        pr.error(
+            "processing file id %d, ignored: %s" % (fobj.file_id, str(exc)))
         return None
     else:
         return prop
@@ -136,6 +137,7 @@ def _props_onall_of_size(trees, file_sz):
                 continue
             this_tree_props.add(prop)
         good_props.intersection_update(this_tree_props)
+    pr.progress("scanning complete")
     for prop in good_props:
         yield prop
 
@@ -164,12 +166,14 @@ def _props_onfirstonly_of_size(trees, file_sz):
     trees."""
     good_props = set()
     first_tree = trees[0]
+    pr.progress("scanning:", first_tree.printable_path(fstr("")))
     for fobj in first_tree.size_to_files(file_sz):
         prop = _get_prop(first_tree, fobj)
         if prop is None:
             continue
         good_props.add(prop)
     for tree in trees[1:]:
+        pr.progress("scanning:", tree.printable_path(fstr("")))
         if not good_props:
             break
         for fobj in tree.size_to_files(file_sz):

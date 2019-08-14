@@ -39,12 +39,15 @@ from lnsync_pkg.prefixdbname import \
 from lnsync_pkg.hashtree import FileHashTree, TreeError, PropDBValueError
 from lnsync_pkg.matcher import TreePairMatcher
 from lnsync_pkg.fileid import make_id_computer
+from lnsync_pkg.glob_matcher import IncludePattern, ExcludePattern
 
 # Tell pylint not to mistake module variables for constants
 # pylint: disable=C0103
 
 DEFAULT_DBPREFIX = fstr("lnsync-")
 set_prefix(DEFAULT_DBPREFIX)
+
+HELP_SPACING = 30
 
 _quoter = pipes.quote
 
@@ -97,9 +100,8 @@ class SetVerbosityAction(argparse.Action):
 
 verbosity_options_parser = argparse.ArgumentParser(add_help=False)
 verbosity_options_parser.add_argument(
-    "-q", "--quiet", action=SetVerbosityAction, help="decrease verbosity")
-verbosity_options_parser.add_argument(
-    "-v", "--verbose", action=SetVerbosityAction, help="increase verbosity")
+    "-q", "--quiet", "-v", "--verbose",
+    action=SetVerbosityAction, help="increase/decrease verbosity")
 
 # All options following are shared by multiple command parsers.
 
@@ -135,16 +137,37 @@ dbprefix_option_parser.add_argument(
 # optional arguments interspersed with the elements in a list argument.
 
 # argparse initializes to None instead of an empty list.
+class StoreTaggedPattern(argparse.Action):
+    """Store another root with active dbprefix."""
+    def __call__(self, parser, namespace, values, option_string=None):
+        assert not isinstance(values, list) # A single root argument at a time.
+        prev_patterns = getattr(namespace, self.dest)
+        if not prev_patterns: # argparse defaults to explicit None.
+            prev_patterns = []
+        if "include" in option_string:
+            tagged_pattern = IncludePattern(values)
+        elif "exclude" in option_string:
+            tagged_pattern = ExcludePattern(values)
+        else:
+            raise RuntimeError
+        prev_patterns.append(tagged_pattern)
+#        print("storing in ", self.dest)
+        setattr(namespace, self.dest, prev_patterns) # Store db spec in Namespace.
+
 exclude_option_parser = argparse.ArgumentParser(add_help=False)
 exclude_option_parser.add_argument(
-    "--exclude", metavar="GLOBPATTERN", type=fstr, action="append",
-    help="exclude certain files and dirs")
+    "--exclude", "--include", metavar="GLOBPATTERN",
+    # argparse sets action self.dest to exclude (first option string)
+    type=fstr, action=StoreTaggedPattern,
+    help="exclude/include certain files and dirs")
 
 # argparse autochanges option name to "exclude_once":
 excludeonce_option_parser = argparse.ArgumentParser(add_help=False)
 excludeonce_option_parser.add_argument(
-    "--exclude-once", metavar="GLOBPATTERN", type=fstr, action="append",
-    help="exclude for the following tree only")
+    "--exclude-once", "--include-once", metavar="GLOBPATTERN",
+    # argparse sets action self.dest to exclude_once (first option string with replacement)
+    type=fstr, action=StoreTaggedPattern,
+    help="exclude/include for the following tree only, with precedence over global patterns")
 
 def tree_location(location, mandatory_mode=None):
     """Transforms a location path string to a tuple (location, mode).
@@ -177,12 +200,13 @@ class StoreTreeSpec(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
         """Save a tree spec from values (location, mode) and current dbprefix.
         Include and consume --exclude-once options.
-        Global--exclude patterns are added at the end of parsing.
+        Global --exclude patterns are added at the end of parsing.
         """
         assert not isinstance(values, list)
         dbprefix = namespace.dbprefix
         tree_spec = new_tree_spec(values[0], values[1], dbprefix)
         self.store_tree_spec(namespace, tree_spec)
+        # argparse autorenames exclude-once to exclude_once
         once_excludes = getattr(namespace, "exclude_once", None)
         if once_excludes is not None:
             treekw = "exclude_patterns"
@@ -316,7 +340,7 @@ def finish_parsing_trees(args):
         if global_excludes:
             treekw = "exclude_patterns"
             once_excludes = treekwargs.get(treekw, [])
-            treekwargs[treekw] = global_excludes + once_excludes
+            treekwargs[treekw] = once_excludes + global_excludes
         for arg in "bysize", "maxsize", "skipempty":
             # argparse argument names may not match FileHashTree _init_ kwargs:
             treekw = {"bysize":"size_as_hash",
@@ -351,11 +375,11 @@ def writable_empty_path(path):
 
 # Main parser and subcommand parsers.
 
+# Subparsers return exit code, None meaning 0.
+
 # Register command handler functions here for the main body:
 cmd_handlers = {}  # Commands fully argparsed
 cmd_handlers_extra_args = {} # Commands taking extra non-argparsed arguments.
-
-HELP_SPACING = 26
 
 top_parser = argparse.ArgumentParser(\
     description=DESCRIPTION,
@@ -375,9 +399,8 @@ parser_sync = cmd_parsers.add_parser(
              skipempty_option_parser,
              dbprefix_option_parser,
             ],
-    help="sync target dir from source by content, by renaming and (de)linking "
-         "on target, no file data copied or deleted, like a best-effort "
-         "'rsync source/ target'")
+    help="sync-by-rename target to best match source/, "
+         "no file data copied to or deleted from target")
 parser_sync.add_argument("-n", "--dry-run", help="dry run", action="store_true")
 parser_sync.add_argument(
     "source", type=tree_location, action=StoreTreeSpec)
@@ -420,6 +443,63 @@ def do_sync(args):
                 tgt_tree.rm_dir_writeback(d)
             pr.debug("sync done")
 cmd_handlers["sync"] = do_sync
+
+parser_rsync = cmd_parsers.add_parser(
+    'rsync',
+    parents=[root_option_parser,
+             exclude_option_parser,
+             dbprefix_option_parser,
+             maxsize_option_parser
+            ],
+    help="generate rsync command to complete sync")
+parser_rsync.add_argument(
+    "-x", "--execute", action="store_true", help="also execute rsync command")
+parser_rsync.add_argument(
+    "-n", "--dry-run", help="dry run", action="store_true")
+parser_rsync.add_argument("sourcedir", type=str)
+parser_rsync.add_argument("targetdir", type=str)
+
+def do_rsync(sysargv, args, more_args):
+    """Print suitable rsync command.
+    """
+    if more_args and more_args != sysargv[-len(more_args):]:
+        top_parser.parse_args()
+        assert False, "internal error"
+    else:
+        rsyncargs = more_args
+    src_dir, tgt_dir = args.sourcedir, args.targetdir
+    if src_dir[-1] != os.sep:
+        src_dir += os.sep # rsync needs trailing / on sourcedir.
+    while tgt_dir[-1] == os.sep:
+        tgt_dir = tgt_dir[:-1]
+    src_dir = _quoter(src_dir)
+    tgt_dir = _quoter(tgt_dir)
+    # Options for rsync: recursive, preserve hardlinks.
+    rsync_opts = "-r -H --size-only --progress"
+    if args.maxsize > 0:
+        rsync_opts += " --max-size=%d" % args.maxsize
+    if args.dry_run:
+        rsync_opts += " -n"
+    exclude_patterns = args.exclude
+    # Exclude databases at both ends.
+    rsync_opts += r' --exclude="/%s[0-9]*.db"' % fstr2str(args.dbprefix)
+    if exclude_patterns:
+        for p in exclude_patterns:
+            cmd = "exclude" if p.is_exclude() else "include"
+            cmd_path = p.to_fstr()
+            rsync_opts += ' --%s="%s"' % (cmd, fstr2str(cmd_path))
+    if rsyncargs:
+        rsync_opts += " " + " ".join(rsyncargs)
+    rsync_cmd = "rsync %s %s %s" % (rsync_opts, src_dir, tgt_dir)
+    pr.print(rsync_cmd)
+    if args.execute:
+        try:
+            os.system(rsync_cmd)
+        except OSError as exc:
+            msg = "executing %s: %s" % (rsync_cmd, str(exc))
+            pr.error(msg)
+            raise_from(RuntimeError(msg), exc) # Chain exception.
+cmd_handlers_extra_args["rsync"] = do_rsync
 
 # The next few commands print out list of file paths.
 class GroupedFileListPrinter(object):
@@ -625,7 +705,7 @@ def do_cmp(args):
                 left_tree.walk_dir_contents(cur_dirpath, dirs=True):
             left_path = os.path.join(cur_dirpath, basename)
             right_obj = right_tree.follow_path(left_path)
-            if right_obj is None:
+            if right_obj is None or right_obj.is_excluded():
                 if left_obj.is_file():
                     left_path_printable = \
                         left_tree.printable_path(left_path, pprint=_quoter)
@@ -659,7 +739,7 @@ def do_cmp(args):
                 right_tree.walk_dir_contents(cur_dirpath, dirs=True):
             right_path = os.path.join(cur_dirpath, basename)
             left_obj = left_tree.follow_path(right_path)
-            if left_obj is None:
+            if left_obj is None or left_obj.is_excluded():
                 if right_obj.is_file():
                     right_path_printable = \
                         right_tree.printable_path(right_path, pprint=_quoter)
@@ -691,11 +771,82 @@ def do_cmp(args):
                 cmp_subdir(cur_dirpath)
 cmd_handlers["cmp"] = do_cmp
 
+
+
+## mkoffline
+parser_mkoffline = cmd_parsers.add_parser(
+    'mkoffline',
+    parents=[exclude_option_parser,
+             maxsize_option_parser,
+             skipempty_option_parser,
+             dbprefix_option_parser],
+    help="create offline file tree from dir")
+parser_mkoffline.add_argument(
+    "sourcedir", type=tree_online, action=StoreTreeSpec)
+parser_mkoffline.add_argument(
+    "outputpath", type=writable_empty_path)
+
+def do_mkoffline(args):
+    """Create an offline db by updating an online tree, copying it to
+    the provided output filename and inserting file tree directory
+    structure and file metadata into the outputm, offline db.
+    Overwrites any file at the output.
+    """
+    with FileHashTree(**args.sourcedir) as src_tree:
+        src_tree.db_update_all()
+        with SQLPropDBManager(args.outputpath, mode="offline") as tgt_db:
+            with pr.ProgressPrefix("saving: "):
+                src_tree.db_store_offline(tgt_db)
+            tgt_db.compact()
+cmd_handlers["mkoffline"] = do_mkoffline
+
+## update
+parser_update = cmd_parsers.add_parser(
+    'update',
+    parents=[root_option_parser,
+             exclude_option_parser,
+             dbprefix_option_parser,
+             skipempty_option_parser,
+             maxsize_option_parser
+            ],
+    help='update hashes of new and modified files')
+parser_update.add_argument(
+    "dirs", type=tree_online, action=StoreTreeSpecList, nargs="+")
+def do_update(args):
+    with FileHashTree.listof(args.dirs) as trees:
+        for tree in trees:
+            tree.db_update_all()
+cmd_handlers["update"] = do_update
+
+## rehash
+parser_rehash = cmd_parsers.add_parser(
+    'rehash', parents=[dbprefix_option_parser],
+    help='force hash updates for given files')
+parser_rehash.add_argument(
+    "topdir", type=tree_online, action=StoreTreeSpec)
+parser_rehash.add_argument("relfilepaths", type=relative_path, nargs='+')
+def do_rehash(args):
+    with FileHashTree(**args.topdir) as tree:
+        for relpath in args.relfilepaths:
+            file_obj = tree.follow_path(relpath)
+            if file_obj is None or not file_obj.is_file():
+                pr.error("not a relative path to a file: %s" % str(relpath))
+                continue
+            try:
+                tree.db_recompute_prop(file_obj)
+            except TreeError as exc:
+                pr.debug(str(exc))
+                pr.error("while rehashing %s: %s" % \
+                    (tree.printable_path(relpath, pprint=_quoter),
+                     str(exc)))
+                continue
+cmd_handlers["rehash"] = do_rehash
+
 ## lookup
 parser_lookup = \
     cmd_parsers.add_parser(
         'lookup', parents=[dbprefix_option_parser],
-        help='retrieve file hash')
+        help='retrieve file hashes')
 parser_lookup.add_argument("location", type=tree_location, action=StoreTreeSpec)
 parser_lookup.add_argument("relpath", type=relative_path)
 def do_lookup(args):
@@ -706,9 +857,11 @@ def do_lookup(args):
         if fobj is None or not fobj.is_file():
             pr.warning("not a file: %s" % (tree.printable_path(
                 fpath, pprint=_quoter),))
+            return 1
         else:
-            hash_val = tree.get_prop(fobj)
+            hash_val = tree.get_prop(fobj) # Raises TreeError if no prop.
             pr.print(hash_val)
+            return 0
 cmd_handlers["lookup"] = do_lookup
 
 ## check
@@ -753,15 +906,16 @@ def do_check(args):
                     pr.warning("not checked: '%s'" % fstr2str(path))
                     continue
                 except TreeError as exc:
-                    pr.error("while checking %s: %s" % (fstr2str(path), str(exc)))
+                    pr.error(
+                        "while checking %s: %s" % (fstr2str(path), str(exc)))
                     continue
                 if res:
                     file_objs_checked_ok.add(fobj)
                 else:
                     pr.print("failed check: %s" % path)
                     file_objs_checked_bad.add(fobj)
-        except KeyboardInterrupt as e:
-            t, v, tb = sys.exc_info()
+        except KeyboardInterrupt:
+            _, v, tb = sys.exc_info()
             pr.print("Interrupted... ", end="")
             reraise(KeyboardInterrupt, v, tb)
         finally:
@@ -774,141 +928,19 @@ def do_check(args):
                     (tot_files_failed, msg_out_tail))
                 for p in file_objs_checked_bad:
                     pr.print(p.relpaths[0])
+                return 1
             else:
                 pr.info("no files failed %s" % (msg_out_tail,))
+                return 0
 
 cmd_handlers["check"] = do_check
-
-parser_rsync = cmd_parsers.add_parser(
-    'rsync',
-    parents=[root_option_parser,
-             exclude_option_parser,
-             dbprefix_option_parser,
-             maxsize_option_parser
-            ],
-    help="print rsync command (skipping hash database file)")
-parser_rsync.add_argument(
-    "-x", "--execute", action="store_true", help="also execute rsync command")
-parser_rsync.add_argument(
-    "-n", "--dry-run", help="dry run", action="store_true")
-parser_rsync.add_argument("sourcedir", type=str)
-parser_rsync.add_argument("targetdir", type=str)
-
-def do_rsync(sysargv, args, more_args):
-    """Print suitable rsync command.
-    """
-    if more_args and more_args != sysargv[-len(more_args):]:
-        top_parser.parse_args()
-        assert False, "internal error"
-    else:
-        rsyncargs = more_args
-    src_dir, tgt_dir = args.sourcedir, args.targetdir
-    if src_dir[-1] != os.sep:
-        src_dir += os.sep # rsync needs trailing / on sourcedir.
-    while tgt_dir[-1] == os.sep:
-        tgt_dir = tgt_dir[:-1]
-    src_dir = _quoter(src_dir)
-    tgt_dir = _quoter(tgt_dir)
-    # Options for rsync: recursive, preserve hardlinks.
-    rsync_opts = "-r -H --size-only --progress"
-    if args.maxsize > 0:
-        rsync_opts += " --max-size=%d" % args.maxsize
-    if args.dry_run:
-        rsync_opts += " -n"
-    exclude_patterns = args.exclude
-    if exclude_patterns:
-        for p in exclude_patterns:
-            rsync_opts += ' --exclude="%s"' % fstr2str(p)
-    # Exclude databases at both ends.
-    rsync_opts += r' --exclude="/%s[0-9]*.db"' % fstr2str(args.dbprefix)
-    if rsyncargs:
-        rsync_opts += " " + " ".join(rsyncargs)
-    rsync_cmd = "rsync %s %s %s" % (rsync_opts, src_dir, tgt_dir)
-    pr.print(rsync_cmd)
-    if args.execute:
-        try:
-            os.system(rsync_cmd)
-        except OSError as exc:
-            msg = "executing %s: %s" % (rsync_cmd, str(exc))
-            pr.error(msg)
-            raise_from(RuntimeError(msg), exc) # Chain exception.
-cmd_handlers_extra_args["rsync"] = do_rsync
-
-## mkoffline
-parser_mkoffline = cmd_parsers.add_parser(
-    'mkoffline',
-    parents=[exclude_option_parser,
-             maxsize_option_parser,
-             skipempty_option_parser,
-             dbprefix_option_parser],
-    help="create offline file tree from source dir")
-parser_mkoffline.add_argument(
-    "sourcedir", type=tree_online, action=StoreTreeSpec)
-parser_mkoffline.add_argument(
-    "outputpath", type=writable_empty_path)
-
-def do_mkoffline(args):
-    """Create an offline db by updating an online tree, copying it to
-    the provided output filename and inserting file tree directory
-    structure and file metadata into the outputm, offline db.
-    Overwrites any file at the output.
-    """
-    with FileHashTree(**args.sourcedir) as src_tree:
-        src_tree.db_update_all()
-        with SQLPropDBManager(args.outputpath, mode="offline") as tgt_db:
-            with pr.ProgressPrefix("saving: "):
-                src_tree.db_store_offline(tgt_db)
-            tgt_db.compact()
-cmd_handlers["mkoffline"] = do_mkoffline
-
-## update
-parser_update = cmd_parsers.add_parser(
-    'update',
-    parents=[root_option_parser,
-             exclude_option_parser,
-             dbprefix_option_parser,
-             skipempty_option_parser,
-             maxsize_option_parser
-            ],
-    help='update hashes for new and modified files')
-parser_update.add_argument(
-    "dirs", type=tree_online, action=StoreTreeSpecList, nargs="+")
-def do_update(args):
-    with FileHashTree.listof(args.dirs) as trees:
-        for tree in trees:
-            tree.db_update_all()
-cmd_handlers["update"] = do_update
-
-## rehash
-parser_rehash = cmd_parsers.add_parser(
-    'rehash', parents=[dbprefix_option_parser],
-    help='force hash updates for given files')
-parser_rehash.add_argument(
-    "topdir", type=tree_online, action=StoreTreeSpec)
-parser_rehash.add_argument("relfilepaths", type=relative_path, nargs='+')
-def do_rehash(args):
-    with FileHashTree(**args.topdir) as tree:
-        for relpath in args.relfilepaths:
-            file_obj = tree.follow_path(relpath)
-            if file_obj is None or not file_obj.is_file():
-                pr.error("not a relative path to a file: %s" % str(relpath))
-                continue
-            try:
-                tree.db_recompute_prop(file_obj)
-            except TreeError as exc:
-                pr.debug(str(exc))
-                pr.error("while rehashing %s: %s" % \
-                    (tree.printable_path(relpath, pprint=_quoter),
-                     str(exc)))
-                continue
-cmd_handlers["rehash"] = do_rehash
 
 ## subdir
 parser_subdir = \
     cmd_parsers.add_parser(
         'subdir',
         parents=[dbprefix_option_parser],
-        help='copy hashes to new database at subdir')
+        help='copy hashes to new database at relative subdir')
 parser_subdir.add_argument("topdir", type=fstr)
 parser_subdir.add_argument("relativesubdir", type=relative_path)
 def do_subdir(args):
@@ -953,6 +985,7 @@ def main():
         top_parser.print_help(sys.stderr)
         sys.exit(1)
     pr.set_app_prefix("lnsync: ")
+    exit_error = 1
     try:
         args, extra_args = top_parser.parse_known_args()
         cmd = args.cmdname
@@ -970,13 +1003,17 @@ def main():
             args = top_parser.parse_args()
             assert False, "error: error expected"
         try:
-            handler_fn()
+            handler_exit_code = handler_fn()
         except Exception as exc:
             if __debug__:
                 print(type(exc), exc)
             raise
-        sys.exit(0)
+        if handler_exit_code is not None:
+            exit_error = handler_exit_code
+        else:
+            exit_error = 0
     except KeyboardInterrupt:
+        exit_error = 130
         raise SystemExit("lnsync: interrupted")
     except NotImplementedError as exc:
         pr.error("not implemented on your system: %s", str(exc))
@@ -991,7 +1028,7 @@ def main():
     except Exception as exc:
         pr.error("general exception: %s" % str(exc))
     finally:
-        sys.exit(2)
+        sys.exit(exit_error)
 
 if __name__ == "__main__":
     main()

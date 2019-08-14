@@ -4,30 +4,30 @@
 # For conditions of distribution and use, see copyright notice in lnsync.py
 
 """
-Provides a framework for persistent caching store of an integer-valued
-property value associated to each file in a file tree.
+Provides a framework for persistent caching store of an integer-valued property
+value associated to each file in a file tree.
 
-On request, the property valued is read from persistent database cache,
-if it has been stored and the file hasn't been modified since then
-(by metadata stamp, i.e. size and mtime). Otherwise, the property valued is
-recomputed and stored in the persistent cache.
+On request, the property valued is read from persistent database cache, if it
+has been stored and the file hasn't been modified since then (by metadata stamp,
+i.e. size and mtime). Otherwise, the property valued is recomputed and stored
+in the persistent cache.
 
 There are two modes of operation: "online" and "offline".
 
-- In "online" mode, access to the disk file tree is needed and the database
-may be updated. In this mode, root_path must be a dir, the root of the disk
-file tree.
+- In "online" mode, access to the disk file tree is needed and the database may
+be updated. In this mode, root_path must be a dir, the root of the disk file
+tree.
 
 - In "offline" mode, all property values as well as the tree data structure is
-stored in the database. Access to the original source file tree is unneeded.
-In this mode, root_path is set to None.
+stored in the database. Access to the original source file tree is unneeded. In
+this mode, root_path is set to None.
 
 To use, implement online/offline alternative hierarchies for subclasses of
 PropDBManager and FilePropTree using the protocol described in onlineoffline.py.
 
-The database top class should be given by a kw argument "db", a callable
-that takes a location, an optional mode (default "online") and optional
-kwargs and returns the appropriate db instance (e.g. the client subclass).
+The database top class should be given by a kw argument "db", a callable that
+takes a location, an optional mode (default "online") and optional kwargs and
+returns the appropriate db instance (e.g. the client subclass).
 
 The db instance is created at the end of tree init process, but before any tree
 scanning is done.
@@ -61,7 +61,8 @@ from lnsync_pkg.p23compat import fstr2str
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.fileid import make_id_computer
 from lnsync_pkg.onlineoffline import OnOffObject
-from lnsync_pkg.filetree import FileTree, FileItem, DirItem, OtherItem, TreeError
+from lnsync_pkg.filetree import \
+    FileTree, FileItem, DirItem, OtherItem, ExcludedItem, TreeError
 
 class PropDBError(Exception):
     pass
@@ -227,14 +228,14 @@ class FilePropTreeOffline(FilePropTree):
                     "excluded file %s at %s" % (
                         fstr2str(obj_basename),
                         self.printable_path(dir_obj.get_relpath())))
-                yield (obj_basename, None, OtherItem, None)
+                yield (obj_basename, None, ExcludedItem, None)
             elif obj_type == DirItem and exclude_matcher and \
                 exclude_matcher.match_dir_bname(obj_basename):
                 pr.warning(
                     "excluded dir %s at %s" % (
                         fstr2str(obj_basename),
                         self.printable_path(dir_obj.get_relpath())))
-                yield (obj_basename, None, OtherItem, None)
+                yield (obj_basename, None, ExcludedItem, None)
             else:
                 yield (obj_basename, obj_id, obj_type, obj_id)
 
@@ -333,7 +334,8 @@ class FilePropTreeOnline(FilePropTree):
         db_prop = self.db_get_uptodate_prop(file_obj, delete_stale=False)
         if db_prop is None:
             raise PropDBValueError(
-                "no uptodate prop/metadata for '%s'." % fstr2str(file_obj.relpaths[0]))
+                "no uptodate prop/metadata for '%s'." \
+                % fstr2str(file_obj.relpaths[0]))
         live_prop_value = self.prop_from_source(file_obj)
         return db_prop == live_prop_value
 

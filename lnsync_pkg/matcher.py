@@ -5,14 +5,14 @@
 
 """Match source and target file trees, based on file size and content hash.
 
-Each source file may correspond to multiple source paths,
-and likewise for the target tree.
+Each source file may correspond to multiple source paths, and likewise for the
+target tree.
 
-A target may match at most one source file, with the same .
+A target may match at most one source file, with the same size and hash.
 
-Given a match, generate a sequence of permissible and reversible
-ln/rm/mv operations that, applied to the target FileTree, will bring it
-in sync with the source, as much as possible.
+Given a match, generate a sequence of permissible and reversible ln/rm/mv
+operations that, applied to the target FileTree, will bring it in sync with the
+source, as much as possible.
 """
 
 from __future__ import print_function

@@ -42,7 +42,8 @@ class FileHashTree(OnOffObject):
     def set_dbmanager(self, db):
         super(FileHashTree, self).set_dbmanager(db)
         if db.mode == "offline" or  not self._size_as_hash:
-            self._print_progress = "%s [%s]" % (fstr2str(self.db.dbpath), db.mode)
+            self._print_progress = \
+                "%s [%s]" % (fstr2str(self.db.dbpath), db.mode)
 
     def __enter__(self):
         """Open a database only in online mode and when not using s"""

@@ -36,6 +36,7 @@ from lnsync_pkg.p23compat import sql_text_factory as p23_text_factory
 from lnsync_pkg.p23compat import sql_text_storer as p23_text_storer
 
 import lnsync_pkg.printutils as pr
+from lnsync_pkg.glob_matcher import ExcludePattern
 from lnsync_pkg.filetree import Metadata
 from lnsync_pkg.onlineoffline import OnOffObject
 from lnsync_pkg.proptree import PropDBManager, PropDBError
@@ -84,7 +85,8 @@ class SQLPropDBManager(OnOffObject):
             if ver is None:
                 raise PropDBError("unreadable DB at %s" % fstr2str(sql_db_path))
             elif ver < CUR_DB_FORMAT_VERSION:
-                msg = "outdated db version=%d at %s" % (ver, fstr2str(sql_db_path))
+                msg = "outdated db version=%d at %s" \
+                      % (ver, fstr2str(sql_db_path))
                 raise PropDBError(msg)
             try:
                 self._cx = sqlite3.connect(fstr2str(sql_db_path))
@@ -251,7 +253,8 @@ class SQLPropDBManagerOnline(SQLPropDBManager):
             return not relative.startswith(fstr(os.pardir + os.sep))
         if self.treeroot and is_subdir(self.dbpath, self.treeroot):
             relpath = os.path.relpath(self.dbpath, self.treeroot)
-            return [fstr("/") + relpath, fstr("/") + relpath + fstr("-*")]
+            return [ExcludePattern(fstr("/") + relpath),
+                    ExcludePattern(fstr("/") + relpath + fstr("-*"))]
         else:
             return []
 

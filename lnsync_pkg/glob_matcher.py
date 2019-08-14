@@ -4,117 +4,152 @@
 # For conditions of distribution and use, see copyright notice in lnsync.py
 
 """
-Implements a glob pattern to match files and dirs, as in rsync --exclude
-patterns, with methods well-suited to recursive filetree walking.
+Implement a glob pattern to match files and dirs, as in rsync --exclude
+and --include, in a manner well-suited to recursive file tree walking.
 
-Each pattern is a list of one or more basename glob pattern strings, plus an
-optional head '/' entry and/or an optional trailing '' entry, interpreted as in
-rsync --exclude.
+Each pattern is a list of one or more basename glob pattern strings, with
+optional elements anchoring head '/' and dir matching trailing indicator '/'.
 """
 
-#from __future__ import unicode_literals
-
 import os
-from itertools import chain
 import fnmatch
 
 from lnsync_pkg.p23compat import fstr
 
-def path_totalsplit(path):
-    folders = []
+def path_full_split(path):
+    terms = []
     while True:
-        path, folder = os.path.split(path)
-        folders.append(folder)
+        path, term = os.path.split(path)
+        terms.append(term)
         if path == fstr("/"):
-            folders.append(path)
+            terms.append(path)
             break
         if path == fstr(""):
             break
-    folders.reverse()
-    return folders
+    terms.reverse()
+    return terms
 
-def pattern_is_singleton(pattern):
-    extra_len = 0
-    if pattern[0] == fstr("/"):
-        extra_len += 1
-    if pattern[-1] == fstr(""):
-        extra_len += 1
-    return len(pattern) == 1 + extra_len
+class Pattern(object):
+    __slots__ = ("_split_pattern", "_type")
+    def __init__(self, glob_pattern_path, pattern_type):
+        self._split_pattern = path_full_split(glob_pattern_path)
+        self._type = pattern_type
 
-def pattern_is_anchored(pattern):
-    return pattern[0] == fstr("/")
+    def is_singleton(self):
+        pattern = self._split_pattern
+        extra_len = 0
+        if pattern[0] == fstr("/"):
+            extra_len += 1
+        if pattern[-1] == fstr(""):
+            extra_len += 1
+        return len(pattern) == 1 + extra_len
 
-def pattern_is_dir_matcher(pattern):
-    return pattern[-1] == fstr("")
+    def is_anchored(self):
+        pattern = self._split_pattern
+        return pattern[0] == fstr("/")
 
-def pattern_head_matches(pattern, basename):
-    first_term = pattern_head(pattern)
-    return fnmatch.fnmatch(basename, first_term)
+    def is_dir_matcher(self):
+        pattern = self._split_pattern
+        return pattern[-1] == fstr("")
 
-def pattern_head(pattern):
-    if pattern[0] == fstr("/"):
-        return pattern[1]
-    else:
-        return pattern[0]
+    def head_matches(self, basename):
+        first_term = self.get_head()
+        return fnmatch.fnmatch(basename, first_term)
 
-def pattern_tail(pattern):
-    assert not pattern_is_singleton(pattern)
-    if pattern[0] == fstr("/"):
-        return pattern[2:]
-    else:
-        return pattern[1:]
+    def get_head(self):
+        "Return a term in the pattern, not a pattern."
+        pattern = self._split_pattern
+        if pattern[0] == fstr("/"):
+            head = pattern[1]
+        else:
+            head = pattern[0]
+        return head
+
+    def get_tail(self):
+        "Return the tail pattern."
+        assert not self.is_singleton(), "get_tail"
+        new_patt = Pattern(fstr(""), self._type)
+        pattern = self._split_pattern
+        if pattern[0] == fstr("/"):
+            new_patt._split_pattern = pattern[2:]
+        else:
+            new_patt._split_pattern = pattern[1:]
+        return new_patt
+
+    def is_exclude(self):
+        return self._type == "e"
+
+    def is_include(self):
+        return self._type == "i"
+
+    def to_fstr(self):
+        return fstr(os.sep).join(self._split_pattern)
+
+class ExcludePattern(Pattern):
+    def __init__(self, glob_pattern_path):
+        super(ExcludePattern, self).__init__(glob_pattern_path, "e")
+
+class IncludePattern(Pattern):
+    def __init__(self, glob_pattern_path):
+        super(IncludePattern, self).__init__(glob_pattern_path, "i")
 
 class GlobMatcher(object):
     """Match relative filenames to a list of glob patterns and create subdir
     matchers in a recursive-friendly way.
     """
-
-    # patterns_permanent is a read-only list, shareable with other instances.
-    # They're the initial non-anchored patterns.
-    __slots__ = ["patterns_permanent", "patterns_volatile"]
+    __slots__ = ["_patterns"]
 
     def __init__(self, patterns=None):
-        """patterns is a list of glob pattern string.
+        """patterns is a list of (tag, glob pattern string).
         """
         if patterns is None:
             patterns = []
         assert isinstance(patterns, list)
-        patterns = [path_totalsplit(p) for p in patterns]
-        def not_anchored(p):
-            return not pattern_is_anchored(p)
-        self.patterns_permanent = list(filter(not_anchored, patterns))
-        self.patterns_volatile = list(filter(pattern_is_anchored, patterns))
+        self._patterns = patterns
 
     def all_patterns_iter(self):
-        return chain(self.patterns_permanent, self.patterns_volatile)
+        return self._patterns
 
     def match_file_bname(self, file_bname):
-        """Return True if the single basename file_bname matches some pattern.
+        """Return True if the single basename file_bname matches some exclude
+        pattern before matching any include pattern.
         """
-        def matches(pat):
-            return not pattern_is_dir_matcher(pat) \
-                and pattern_head_matches(pat, file_bname)
-        val = any(matches(p) for p in self.all_patterns_iter())
-        return val
+        res = False
+        for pat in self.all_patterns_iter():
+            if not pat.is_dir_matcher() and pat.head_matches(file_bname):
+                if pat.is_include():
+                    res = False
+                else:
+                    res = True
+                break
+        return res
 
     def match_dir_bname(self, dir_bname):
-        """Return True if dir_bname matches some pattern."""
-        def matches(pat):
-            return pattern_head_matches(pat, dir_bname)
-        return any(matches(p) for p in self.all_patterns_iter())
+        """Return True if dir_bname matches no pattern or matches some include
+        pattern before matching any exclude pattern."""
+        res = False
+        for pat in self.all_patterns_iter():
+            if pat.head_matches(dir_bname):
+                if pat.is_include():
+                    res = False
+                else:
+                    res = True
+                break
+        return res
 
     def to_subdir(self, dir_bname):
         """Return a GlobMatcher representing patterns to use one directory down.
         """
-        subdir_volatile = []
-        for p in self.all_patterns_iter():
-            if not pattern_is_singleton(p) \
-                    and pattern_head_matches(p, dir_bname):
-                subdir_volatile.append(pattern_tail(p))
-        if self.patterns_permanent or subdir_volatile:
+        subdir_patterns = []
+        for pat in self.all_patterns_iter():
+            if not pat.is_anchored():
+                subdir_patterns.append(pat)
+            if not pat.is_singleton() and pat.head_matches(dir_bname):
+                subdir_patterns.append(pat.get_tail())
+        if subdir_patterns:
             new_glob_matcher = GlobMatcher([])
-            new_glob_matcher.patterns_permanent = self.patterns_permanent
-            new_glob_matcher.patterns_volatile = subdir_volatile
-            return new_glob_matcher
+            new_glob_matcher._patterns = subdir_patterns
+            res = new_glob_matcher
         else:
-            return None
+            res = None
+        return res

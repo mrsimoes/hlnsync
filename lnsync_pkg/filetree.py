@@ -6,32 +6,32 @@
 """
 Manage a file tree in a mounted filesystem, with support for hardlinks.
 
-A file tree item is either a file or a directory or catch-all "other"
-item.
+A file tree item is either a file or a directory or catch-all "other" item.
 
-Paths relative to the tree root are used throughout. Because file
-hardlinks are supported, files are distinct from file paths. Each file
-has one or more file paths.
+Paths relative to the tree root are used throughout. Because file hard links are
+supported, files are distinct from file paths. Each file has one or more file
+paths.
 
-File are assigned a file id (a persistent serial number, e.g. inode)
-and are accessible by file id. Directories are also assigned ids.
-The root has id zero.
+File are assigned a file id (a persistent serial number, e.g. inode) and are
+accessible by file id. Directories are also assigned ids. The root has id zero.
 
-An in-memory representation is built by scanning the disk file tree.
-Scanning is done a need-to basis and scanned directories are marked.
-While scanning, items of the disk tree may be ignored using glob patters.
+An in-memory representation is built by scanning the disk file tree. Scanning is
+done a need-to basis and scanned directories are marked. While scanning, items
+of the disk tree may be ignored using glob patters.
 
-Only readable files and read/exec directories are read as files and
-directories. Other files, other dirs, all symlinks and special files are
-read as 'other object', occupying a position on in-memory tree, but
-skipped on walk iterators. File ownership is ignored.
+Only readable files and read/exec directories are read as files and directories.
+Other files, other dirs, all symlinks and special files are read as 'other
+item', occupying a position on in-memory tree, but skipped on walk iterators.
+Excluded objects are also explicitly read as 'excluded item'. File ownership is
+ignored.
+
 
 Optionally, file metadata (file size, mtime, and ctime) is also read and
 recorded. In this case, files are also indexed by size.
 
 Commands for manipulating file paths can be executed (moving, renaming,
-linking/unlinking) and optionally written back to the disk tree. All
-commands are reversible, except those that delete a file's only path.
+linking/unlinking) and optionally written back to the disk tree. All commands
+are reversible, except those that delete a file's only path.
 """
 
 from __future__ import print_function
@@ -52,6 +52,8 @@ class TreeItem(object):
     def is_dir(self):
         return False
     def is_file(self):
+        return False
+    def is_excluded(self):
         return False
 
 class FileItem(TreeItem):
@@ -124,6 +126,10 @@ class DirItem(TreeItem):
 class OtherItem(TreeItem):
     pass
 
+class ExcludedItem(TreeItem):
+    def is_excluded(self):
+        return True
+
 class Metadata(object):
     """File metadata: size, mtime, and ctime.
     Metadata are __equal__ if size and mtime are."""
@@ -185,12 +191,16 @@ class FileTree(object):
         self._next_free_dir_id = 1
         self.rootdir_obj = self._new_dir_obj(0)
         self._exclude_patterns = []
+        # dir-> matcher, must be set before dir is scanned.
         self._exclude_matchers = {}
         self.add_exclude_patterns(kwargs.pop("exclude_patterns", []))
 
-    def add_exclude_patterns(self, patterns):
-        self._exclude_patterns += patterns
+    def add_exclude_patterns(self, patterns, before=True):
         if patterns:
+            if before:
+                self._exclude_patterns = patterns + self._exclude_patterns
+            else:
+                self._exclude_patterns += patterns
             assert not self.rootdir_obj.was_scanned()
             root_matcher = GlobMatcher(self._exclude_patterns)
             self._exclude_matchers = {self.rootdir_obj: root_matcher}
@@ -279,7 +289,7 @@ class FileTree(object):
                     self._scan_dir_process_dir(
                         dir_obj, obj_id, dir_exclude_matcher, basename)
                 else:
-                    dir_obj.add_entry(basename, OtherItem())
+                    dir_obj.add_entry(basename, obj_type())
             if dir_obj in self._exclude_matchers:
                 del self._exclude_matchers[dir_obj]
             dir_obj.mark_scanned()
@@ -333,20 +343,25 @@ class FileTree(object):
         Yield tuples (basename, obj_id, obj_type, rawmetadata), where:
         - basename is str (Python2) or binary string (Python3)
         - rawmetadata is some data that may passed on to _new_file_obj.__init__
-        - obj_type is one of DirItem, FileItem or OtherItem.
+        - obj_type is one of DirItem, FileItem, OtherItem or ExcludedItem.
         """
         dir_relpath = dir_obj.get_relpath()
         dir_abspath = self.rel_to_abs(dir_relpath)
         for obj_bname in os.listdir(dir_abspath):
             obj_abspath = os.path.join(dir_abspath, obj_bname)
             if os.path.islink(obj_abspath): # This must be tested for first.
-                pr.warning("ignored symlink %s" % fstr2str(obj_abspath))
-                yield (obj_bname, None, OtherItem, None)
+                if exclude_matcher \
+                        and exclude_matcher.match_file_bname(obj_bname):
+                    pr.warning("excluded symlink %s" % fstr2str(obj_abspath))
+                    yield (obj_bname, None, ExcludedItem, None)
+                else:
+                    pr.warning("ignored symlink %s" % fstr2str(obj_abspath))
+                    yield (obj_bname, None, OtherItem, None)
             elif os.path.isfile(obj_abspath):
                 if exclude_matcher \
                         and exclude_matcher.match_file_bname(obj_bname):
                     pr.warning("excluded file %s" % fstr2str(obj_abspath))
-                    yield (obj_bname, None, OtherItem, None)
+                    yield (obj_bname, None, ExcludedItem, None)
                 elif not os.access(obj_abspath, os.R_OK):
                     pr.warning("ignored no-read-access file %s" \
                                % fstr2str(obj_abspath))
@@ -361,7 +376,7 @@ class FileTree(object):
                 if exclude_matcher \
                         and exclude_matcher.match_dir_bname(obj_bname):
                     pr.warning("excluded dir %s" % fstr2str(obj_abspath))
-                    yield (obj_bname, None, OtherItem, None)
+                    yield (obj_bname, None, ExcludedItem, None)
                 elif not os.access(obj_abspath, os.R_OK + os.X_OK):
                     pr.warning("ignored no-rx-access dir %s" \
                                % fstr2str(obj_abspath))
@@ -371,8 +386,15 @@ class FileTree(object):
                     self._next_free_dir_id += 1
                     yield (obj_bname, dir_id, DirItem, None)
             else:
-                pr.warning("ignored special file %s" % fstr2str(obj_abspath))
-                yield (obj_bname, None, OtherItem, None)
+                if exclude_matcher \
+                        and exclude_matcher.match_file_bname(obj_bname):
+                    pr.warning(
+                        "excluded special file %s" % fstr2str(obj_abspath))
+                    yield (obj_bname, None, ExcludedItem, None)
+                else:
+                    pr.warning(
+                        "ignored special file %s" % fstr2str(obj_abspath))
+                    yield (obj_bname, None, OtherItem, None)
 
     def _add_path(self, file_obj, dir_obj, fbasename):
         """Add a new path to a file object:  fbasename at dir_obj.
