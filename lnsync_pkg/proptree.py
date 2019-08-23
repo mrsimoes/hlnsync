@@ -271,7 +271,9 @@ class FilePropTreeOnline(FilePropTree):
             prop_value = self.prop_from_source(f_obj)
         except RuntimeError as exc:
             msg = "getting prop from source (id %d, %s): %s." % \
-                  (f_obj.file_id, f_obj.relpaths, str(exc))
+                  (f_obj.file_id,
+                  (fstr2str(frp) for frp in f_obj.relpaths),
+                  str(exc))
             pr.error(msg)
             self._rm_file(f_obj)
             raise_from(TreeError(msg), exc)
@@ -317,8 +319,8 @@ class FilePropTreeOnline(FilePropTree):
             for err_fobj in error_files:
                 self._rm_file(err_fobj)
             tot_update_files = len(update_files)
-            for index, update_fobj in enumerate(update_files):
-                with pr.ProgressPrefix("%d/%d " % (index+1, tot_update_files)):
+            for index, update_fobj in enumerate(update_files, start=1):
+                with pr.ProgressPrefix("%d/%d " % (index, tot_update_files)):
                     self.get_prop(update_fobj)
         finally:
             self.db.commit()

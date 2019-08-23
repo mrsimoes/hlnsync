@@ -223,6 +223,14 @@ class FileTree(object):
         else:
             return []
 
+    def get_file_count(self):
+        """Get the total number of files, after scanning the full tree."""
+        self.scan_subtree()
+        num_files = 0
+        for _sz, files_this_sz in iteritems(self.size_to_files()):
+            num_files += len(files_this_sz)
+        return num_files
+
     def get_all_sizes(self):
         """Return list of all file sizes in the tree."""
         sz__to_files_map = self.size_to_files()

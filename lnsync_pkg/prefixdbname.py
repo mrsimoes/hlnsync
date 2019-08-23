@@ -10,6 +10,7 @@ Uniquely specify a database file at dirpath by file prefix.
 import os
 import fnmatch
 import random
+import re
 
 from lnsync_pkg.p23compat import fstr, fstr2str
 from lnsync_pkg.sqlpropdb import SQLPropDBManager
@@ -67,8 +68,13 @@ def pick_db_basename(dir_path, dbprefix):
             "pick_db_basename: not a directory: %s" % fstr2str(dir_path)
     if dbprefix.endswith(fstr(".db")):
         dbprefix = dbprefix[:-3]
-    pattern = fstr("%s[0-9]*.db" % fstr2str(dbprefix))
-    candidates_base = fnmatch.filter(os.listdir(dir_path), pattern)
+    pattern = fstr("^%s[0-9]*.db$" % fstr2str(dbprefix))
+    regex = re.compile(pattern)
+    candidates_base = []
+    for basename in os.listdir(dir_path):
+        if os.path.isfile(os.path.join(dir_path, basename)) \
+           and regex.match(basename):
+            candidates_base.append(basename)
     if len(candidates_base) == 1:
         db_basename = candidates_base[0]
     elif candidates_base == []:

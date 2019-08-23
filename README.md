@@ -16,7 +16,7 @@ If both hard links are created or removed in the source (without deleting files)
 
 ###  Syncing
 
-When you rename/move in the source file tree, _lnsync_  makes a best-effort to sync the target by only renaming files and generally creating/removing hard links on the target, without deleting or copying any file data.
+When you rename/move in the source file tree, _lnsync_  makes a best-effort to sync the target by only renaming files and generally creating/removing hard links on the target, without deleting or copying any file data. Empty directories on the target which do not exist on the source are also removed.
 
 File content is compared using xxHash (a fast, non-cryptographic hash function). Hash values are stored in a single-file database at the top-level directory of each file tree. The hash value database is a single file at the top directory of processed trees, with basename matching `lnsync-[0-9]+.db`. (Only one such file should exist there.) These files are ignored by all _lnsync_ operations, and care should be taken not to sync them with other tools.
 
@@ -86,7 +86,7 @@ All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [
 
  - `-n` Dry-run, just show which operations would be performed.
 
- - `--exclude=<glob_pattern>` Exclude source files and directories by glob pattern. Patterns are interpreted as in `rsync --exclude=<glob_pattern> source/ target`. This option may be repeated, with each `--exclude` option affecting all file trees. An initial slash anchors the pattern to the file tree root. A trailing slash means the pattern applies only to directories. There is a corresponding `--include`. Some commands accept `--exclude-once=<pattern>` and `--include-once=<pattern>`, which apply only to the next file tree following the switch and gain precedence over global patterns.
+ - `--exclude=<glob_pattern>` Exclude source files and directories by glob pattern. Patterns are interpreted similarly to `rsync --exclude=<glob_pattern> source/ target`, but with `*` matching across slashes and no `**` pattern. This option may be repeated, with each `--exclude` option affecting all file trees. An initial slash anchors the pattern to the file tree root. A trailing slash means the pattern applies only to directories. There is a corresponding `--include`. Some commands accept `--exclude-once=<pattern>` and `--include-once=<pattern>`, which apply only to the next file tree following the switch and gain precedence over global patterns.
 
  To sum up, a file or directory is excluded if it matches an `exclude` pattern before matching any `include` pattern.
 
@@ -130,28 +130,31 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 - Supports Linux only.
 
 ### Possible Improvements
-
-- Filenames are NOT converted to Unicode. To allow using offline database across systems, conversion is required.
+- Make `--include` and `--exclude` patterns more compatible with `rsync`.
 - Extend `cmp` to take hard links into account.
+- Filenames are NOT converted to Unicode. To allow using offline database across systems, conversion is required.
 - Detect renamed directories to obtain a more compact sync schedule.
-- Take advantage of multiple CPUs to hash multiple files in parallel.
-- Support partial hashes for quicker comparison of files of equal size.
-- Further optimizations to the sync algorithm. It's straightforward, but has been working well in practice.
+- Use multiple CPUs to hash files in parallel.
+- Support partial hashes for quicker comparison of same-size files.
+- Further optimize the sync algorithm, though it has been working well in practice.
 - Support for checking for duplicates by actual content, not just hash.
 - Update target mtimes from source.
-- Sort fdupes output, e.g. by name or mtime.
+- Allow sorting output, e.g. by name or mtime.
 - Allow config files and maybe store database along with config files in some .lnsync-DDDD directory at the root.
 
 ## Release Notes
 
+- Version 0.3.7
+-- Bug fix on reading offline trees.
+-- Change output levels and some messages.
 - Version 0.3.6
- - New: --include and --include-once options.
+-- New: --include and --include-once options.
  - Bug fix: wrong exit code.
 - Version 0.3.5
  - Bug fix: not excluding dirs in offline mode.
-- Version 0.3.3
+ - Version 0.3.3
  - Python 3 support.
- Version 0.3.2
+- Version 0.3.2
  - New --root option to allow reading and updating a root tree database when querying subtrees.
 - Version 0.3.0
  - Exclude files by glob pattern in sync and other commands.

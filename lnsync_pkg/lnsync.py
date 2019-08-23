@@ -409,11 +409,12 @@ parser_sync.add_argument(
 def do_sync(args):
     with FileHashTree(**args.source) as src_tree:
         with FileHashTree(**args.targetdir) as tgt_tree:
+            src_tree.scan_subtree()
+            tgt_tree.scan_subtree()
+            pr.progress("calculating match...")
             matcher = TreePairMatcher(src_tree, tgt_tree)
-            pr.progress("calculating match")
             if not matcher.do_match():
                 raise NotImplementedError("match failed")
-            pr.progress("syncing files")
             tgt_tree.writeback = not args.dry_run
             for cmd in matcher.generate_sync_cmds():
                 cmd_str = \
@@ -883,37 +884,41 @@ parser_check_files.add_argument(
 def do_check(args):
     with FileHashTree(**args.location) as tree:
         assert tree.db.mode == "online", "do_check tree not online"
-        which_files_gen = args.relpaths
-        if not which_files_gen:
+        if not args.relpaths:
             def gen_all_paths():
-                for _obj, _parent, path in tree.walk_paths(
+                for obj, _parent, path in tree.walk_paths(
                         files=True, dirs=False, recurse=True):
                     yield path
+            num_files = tree.get_file_count()
             which_files_gen = gen_all_paths()
+        else:
+            num_files = len(args.relpaths)
+            which_files_gen = args.relpaths
         file_objs_checked_ok = set()
         file_objs_checked_bad = set()
         try:
-            for path in which_files_gen:
-                pr.progress("checking: %s" % path)
-                fobj = tree.follow_path(path)
-                if fobj in file_objs_checked_ok:
-                    continue
-                if fobj in file_objs_checked_bad and not args.hardlinks:
-                    continue
-                try:
-                    res = tree.db_check_prop(fobj)
-                except PropDBValueError:
-                    pr.warning("not checked: '%s'" % fstr2str(path))
-                    continue
-                except TreeError as exc:
-                    pr.error(
-                        "while checking %s: %s" % (fstr2str(path), str(exc)))
-                    continue
-                if res:
-                    file_objs_checked_ok.add(fobj)
-                else:
-                    pr.print("failed check: %s" % path)
-                    file_objs_checked_bad.add(fobj)
+            for index, path in enumerate(which_files_gen, start=1):
+                with pr.ProgressPrefix("%d/%d:" % (index, num_files)):
+                    fobj = tree.follow_path(path)
+                    if fobj in file_objs_checked_ok:
+                        continue
+                    if fobj in file_objs_checked_bad and not args.hardlinks:
+                        continue
+                    try:
+                        res = tree.db_check_prop(fobj)
+                    except PropDBValueError:
+                        pr.warning("not checked: '%s'" % fstr2str(path))
+                        continue
+                    except TreeError as exc:
+                        pr.error(
+                            "while checking %s: %s" % (fstr2str(path), str(exc)))
+                        continue
+                    if res:
+                        pr.info("passed check: %s" % fstr2str(path))
+                        file_objs_checked_ok.add(fobj)
+                    else:
+                        pr.print("failed check: %s" % fstr2str(path))
+                        file_objs_checked_bad.add(fobj)
         except KeyboardInterrupt:
             _, v, tb = sys.exc_info()
             pr.print("Interrupted... ", end="")

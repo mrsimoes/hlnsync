@@ -5,10 +5,12 @@
 
 """Provide printing service with verbosity-controlled output levels
 and same-line progress messages.
-print, info, and debug print to stdout at verbosity levels >= 0, 1, and 2.
-error and warning print to stderr and verbosity levels >= 0, 1.
-progress outputs to stdout if it is a tty and verbosity is >= 0.
-Default verbosity is 0.
+Output levels control
+- fatal, error and warning output to stderr at verbosity levels >= -2, -1, 0 resp.
+- print, info, and debug, trace output to stdout at
+  verbosity levels >= 0, 1, 2, and 3 resp.
+- progress outputs to stdout if stdout is a tty and verbosity is >= 0.
+Default verbosity is 0, but can be set negative.
 (See https://www.xfree86.org/4.8.0/ctlseqs.html for terminal control sequences.)
 A context may be setup during which a prefix is prepended to progress messages.
 These contexts may be nested.
@@ -22,6 +24,15 @@ import atexit
 from itertools import chain
 
 from lnsync_pkg.p23compat import isfstr
+
+FATAL_LEVEL = -2
+ERROR_LEVEL = -1
+WARNING_LEVEL = 0
+PRINT_LEVEL = 0
+INFO_LEVEL = 1
+DEBUG_LEVEL = 2
+TRACE_LEVEL = 3
+PROGRESS_LEVEL = 0
 
 # Tell pylint not to mistake module variables for constants
 # pylint: disable=C0103
@@ -100,15 +111,15 @@ def _print_main(*args, **kwargs):
     _progress_was_printed = False
 
 def print(*args, **kwargs):
-    if option_verbosity >= 0:
+    if option_verbosity >= PRINT_LEVEL:
         _print_main(*args, file=sys.stdout, **kwargs)
 
 def fatal(*args, **kwargs):
-    if option_verbosity >= -1:
+    if option_verbosity >= FATAL_LEVEL:
         _print_main(_app_prefix, "fatal: ", *args, file=sys.stderr, **kwargs)
 
 def error(*args, **kwargs):
-    if option_verbosity >= 0:
+    if option_verbosity >= ERROR_LEVEL:
         try:
             if _stderr_is_tty:
                 _print("\033[31m", file=sys.stderr, end="") # Red forgr.
@@ -120,22 +131,32 @@ def error(*args, **kwargs):
                 sys.stderr.flush()
 
 def info(*args, **kwargs): # Default verbosity level is 1.
-    if option_verbosity >= 1:
+    if option_verbosity >= INFO_LEVEL:
         _print_main(*args, file=sys.stdout, **kwargs)
 
 def warning(*args, **kwargs):
-    if option_verbosity >= 2:
-        _print_main(_app_prefix, "warning: ", *args, file=sys.stderr, **kwargs)
+    if option_verbosity >= WARNING_LEVEL:
+        try:
+            if _stderr_is_tty:
+                _print("\033[33m", file=sys.stderr, end="") # Red forgr.
+            _print_main(_app_prefix,
+                        "warning: ", *args, file=sys.stderr, **kwargs)
+        finally:
+            if _stderr_is_tty:
+                _print("\033[39m", file=sys.stderr, end="") # Std foreg.
+                sys.stderr.flush()
+#    if option_verbosity >= 1:
+#        _print_main(_app_prefix, "warning: ", *args, file=sys.stderr, **kwargs)
 
 def debug(template_str, *str_args, **kwargs):
     """Templace with % placeholders and respective are given separately."""
-    if option_verbosity >= 4:
+    if option_verbosity >= DEBUG_LEVEL:
         _print_main("debug: ",
                     template_str % str_args, file=sys.stderr, **kwargs)
 
 def trace(template_str, *str_args, **kwargs):
     """Templace with % placeholders and respective are given separately."""
-    if option_verbosity >= 5:
+    if option_verbosity >= TRACE_LEVEL:
         _print_main("trace: ",
                     template_str % str_args, file=sys.stderr, **kwargs)
 
