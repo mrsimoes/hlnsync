@@ -130,7 +130,7 @@ def error(*args, **kwargs):
                 _print("\033[39m", file=sys.stderr, end="") # Std foreg.
                 sys.stderr.flush()
 
-def info(*args, **kwargs): # Default verbosity level is 1.
+def info(*args, **kwargs):
     if option_verbosity >= INFO_LEVEL:
         _print_main(*args, file=sys.stdout, **kwargs)
 

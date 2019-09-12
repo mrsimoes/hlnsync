@@ -2,7 +2,7 @@
 
 ## Overview
 
-_lnsync_ provides unidirectional, recursive sync-by-rename of locally mounted directories, with support for hard links, without copying or deleting file data. To compare files, files hashes are calculated and stored in a local database. Using these file hashes, _lnsync_ also provides other functions, such as finding duplicate files.
+_lnsync_ provides unidirectional sync-by-rename of locally mounted directories, with support for hard links, without copying or deleting file data. To compare files, files hashes are computed and stored in a local database. Using these file hashes, _lnsync_ also provides other functions, such as finding duplicate files.
 
 This tool allows arbitrary file renaming and moving in the source file tree to be quickly replicated in the target without copying any file data. It may used as a preprocessing step for other sync tools, such as _rsync_.
 
@@ -105,7 +105,7 @@ All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [
 
 - `lnsync cmp <tree1> <tree2>` Recursively compares two file trees. Compares files at each path, does not compare the hard link structure. Accepts `--exclude=<pattern>` options.
 - `lnsync fdupes [-h] [<tree>]+` Find files duplicated anywhere on the given trees.
-- `lnsync onall [<tree>]+`, `lnsync onfirstonly [<tree>]+`, `lnsync onlastonly [<tree>]+` Find files as advertised. Some options: `-M` prunes by maximum size; `-0` prunes empty files; `-1` prints each group of files in a single line, separated by spaces and with escaped backslashes and spaces, like `fdupes`. Use `-H` to consider multiple links to the same file as distinct files; if this option is not used, print a single, arbitrarily picked path for each multiple-linked file found to satisfy the condition of the command.
+- `lnsync onall [<tree>]+`, `lnsync onfirstonly [<tree>]+`, `lnsync onlastonly [<tree>]+` Find files as advertised. Some options: `-M` prunes by maximum size; `-0` prunes empty files; `-1` prints each group of files in a single line, separated by spaces and with escaped backslashes and spaces, like `fdupes`; `-s` sorts output by size. Use `-H` to consider multiple links to the same file as distinct files; if this option is not used, print a single, arbitrarily picked path for each multiple-linked file found to satisfy the condition of the command.
 
 - `lnsync check [<tree>] [<path>]*` Recompute hashes for given files and compare to the hash stored in the database, to check for changes/bitrot.
 
@@ -139,11 +139,15 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 - Further optimize the sync algorithm, though it has been working well in practice.
 - Support for checking for duplicates by actual content, not just hash.
 - Update target mtimes from source.
-- Allow sorting output, e.g. by name or mtime.
+- Allow more output sorting options, e.g. by name or mtime.
 - Allow config files and maybe store database along with config files in some .lnsync-DDDD directory at the root.
 
 ## Release Notes
 
+- Version 0.3.8
+-- Less hashing on `onfirstonly`.
+-- Sort file search output by size.
+-- Adjusted user output levels.
 - Version 0.3.7
 -- Bug fix on reading offline trees.
 -- Change output levels and some messages.

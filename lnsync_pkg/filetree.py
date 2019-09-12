@@ -310,17 +310,17 @@ class FileTree(object):
             file_obj = self._new_file_obj(obj_id, raw_metadata)
             if self._use_metadata:
                 if (self._skipempty and file_obj.file_metadata.size == 0):
-                    obj_abspath = \
-                        self.rel_to_abs(os.path.join(
+                    obj_path = \
+                        self.printable_path(os.path.join(
                             parent_obj.get_relpath(), basename))
-                    pr.warning("ignored empty file %s" % fstr2str(obj_abspath))
+                    pr.info("ignored empty file %s" % obj_path)
                     return
                 elif (self._maxsize is not None and \
                         file_obj.file_metadata.size > self._maxsize):
-                    obj_abspath = \
-                        self.rel_to_abs(os.path.join(
+                    obj_path = \
+                        self.printable_path(os.path.join(
                             parent_obj.get_relpath(), basename))
-                    pr.warning("ignored large file %s" % fstr2str(obj_abspath))
+                    pr.info("ignored large file %s" % obj_path)
                     return
         self._add_path(file_obj, parent_obj, basename)
 
@@ -360,18 +360,18 @@ class FileTree(object):
             if os.path.islink(obj_abspath): # This must be tested for first.
                 if exclude_matcher \
                         and exclude_matcher.match_file_bname(obj_bname):
-                    pr.warning("excluded symlink %s" % fstr2str(obj_abspath))
+                    pr.info("excluded symlink %s" % fstr2str(obj_abspath))
                     yield (obj_bname, None, ExcludedItem, None)
                 else:
-                    pr.warning("ignored symlink %s" % fstr2str(obj_abspath))
+                    pr.info("ignored symlink %s" % fstr2str(obj_abspath))
                     yield (obj_bname, None, OtherItem, None)
             elif os.path.isfile(obj_abspath):
                 if exclude_matcher \
                         and exclude_matcher.match_file_bname(obj_bname):
-                    pr.warning("excluded file %s" % fstr2str(obj_abspath))
+                    pr.info("excluded file %s" % fstr2str(obj_abspath))
                     yield (obj_bname, None, ExcludedItem, None)
                 elif not os.access(obj_abspath, os.R_OK):
-                    pr.warning("ignored no-read-access file %s" \
+                    pr.info("ignored no-read-access file %s" \
                                % fstr2str(obj_abspath))
                     yield (obj_bname, None, OtherItem, None)
                 else:
@@ -383,10 +383,10 @@ class FileTree(object):
             elif os.path.isdir(obj_abspath):
                 if exclude_matcher \
                         and exclude_matcher.match_dir_bname(obj_bname):
-                    pr.warning("excluded dir %s" % fstr2str(obj_abspath))
+                    pr.info("excluded dir %s" % fstr2str(obj_abspath))
                     yield (obj_bname, None, ExcludedItem, None)
                 elif not os.access(obj_abspath, os.R_OK + os.X_OK):
-                    pr.warning("ignored no-rx-access dir %s" \
+                    pr.info("ignored no-rx-access dir %s" \
                                % fstr2str(obj_abspath))
                     yield (obj_bname, None, OtherItem, None)
                 else:
@@ -396,11 +396,11 @@ class FileTree(object):
             else:
                 if exclude_matcher \
                         and exclude_matcher.match_file_bname(obj_bname):
-                    pr.warning(
+                    pr.info(
                         "excluded special file %s" % fstr2str(obj_abspath))
                     yield (obj_bname, None, ExcludedItem, None)
                 else:
-                    pr.warning(
+                    pr.info(
                         "ignored special file %s" % fstr2str(obj_abspath))
                     yield (obj_bname, None, OtherItem, None)
 

@@ -24,7 +24,7 @@ from collections import namedtuple
 
 from six import integer_types
 
-from lnsync_pkg.p23compat import fstr, zip, imap
+from lnsync_pkg.p23compat import fstr, fstr2str, zip, imap
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.onegraph import OneGraph
 from lnsync_pkg.backtracker import SearchState, do_search
@@ -94,7 +94,7 @@ class TreePairMatcher(object):
                         yield self._mk_rm_cmd(new_link_path)
                     else:
                         pr.warning("cannot create hardlink at %s" % \
-                            new_link_path)
+                            fstr2str(new_link_path))
                         continue
                 yield ("ln", ln_ref_path, new_link_path)
 
@@ -121,7 +121,7 @@ class TreePairMatcher(object):
                     self._rm_in_advance.add(final_mv_dest)
                     yield self._mk_rm_cmd(final_mv_dest)
                 else:
-                    pr.warning("cannot mv to %s" % final_mv_pair[1])
+                    pr.warning("cannot mv to %s" % fstr2str(final_mv_pair[1]))
                     continue
             reversed_rel_mv_pairs.reverse()
             rel_mv_pairs = reversed_rel_mv_pairs

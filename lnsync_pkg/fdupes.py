@@ -184,10 +184,23 @@ def _props_onfirstonly_of_size(trees, file_sz):
         yield prop
 
 def located_files_onfirstonly_of_size(all_trees, file_sz):
-    """Iterate over all tuples (prop, {tree1: [files_1],... {tree_k, [files_k]})
+    """Iterate over all tuples (prop, {tree_1: [files_1],... {tree_k, [files_k]})
     over all file props for which there is a corresponding file in each of the
     trees.
+    Assume there is some file of that size on the first tree.
+    Yield prop=None if there is a single file of that size.
     """
     if len(all_trees) >= 1:
-        for prop in _props_onfirstonly_of_size(all_trees, file_sz):
-            yield prop, _located_files_by_prop_of_size(all_trees, prop, file_sz)
+        first_tree = all_trees[0]
+        assert first_tree.size_to_files(file_sz)
+        unique_file = (len(first_tree.size_to_files(file_sz)) == 1)
+        if unique_file:
+            for tree in all_trees[1:]:
+                if tree.size_to_files(file_sz):
+                    unique_file = False
+                    break
+        if unique_file:
+            yield None, {first_tree: first_tree.size_to_files(file_sz)}
+        else:
+            for prop in _props_onfirstonly_of_size(all_trees, file_sz):
+                yield prop, _located_files_by_prop_of_size(all_trees, prop, file_sz)

@@ -224,14 +224,14 @@ class FilePropTreeOffline(FilePropTree):
             obj_type = FileItem if is_file else DirItem
             if obj_type == FileItem and exclude_matcher and \
                 exclude_matcher.match_file_bname(obj_basename):
-                pr.warning(
+                pr.info(
                     "excluded file %s at %s" % (
                         fstr2str(obj_basename),
                         self.printable_path(dir_obj.get_relpath())))
                 yield (obj_basename, None, ExcludedItem, None)
             elif obj_type == DirItem and exclude_matcher and \
                 exclude_matcher.match_dir_bname(obj_basename):
-                pr.warning(
+                pr.info(
                     "excluded dir %s at %s" % (
                         fstr2str(obj_basename),
                         self.printable_path(dir_obj.get_relpath())))

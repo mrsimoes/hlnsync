@@ -67,11 +67,11 @@ def wrap(text, width):
 
 DESCRIPTION = wrap(
     "lnsync version %s on Python %d.%d.\n%s\n"
-    "lnsync is Copyright (C) 2018 Miguel Simoes. "
+    "Visit http://github.com/mrsimoes/lnsync for more info. "
+    "Copyright (C) 2018 Miguel Simoes. "
     "This program comes with ABSOLUTELY NO WARRANTY. This is free software, "
     "and you are welcome to redistribute it under certain conditions. "
-    "See the GNU General\n Public Licence v3 for details.\n"
-    "More info at http://github.com/mrsimoes/lnsync" \
+    "See the GNU General\n Public Licence v3 for details.\n" \
     % (metadata.version,
        sys.version_info[0], sys.version_info[1],
        metadata.description,),
@@ -116,6 +116,11 @@ sameline_option_parser = argparse.ArgumentParser(add_help=False)
 sameline_option_parser.add_argument(
     "-1", "--sameline", action="store_true",
     help="print each group of identical files in the same line")
+
+sort_option_parser = argparse.ArgumentParser(add_help=False)
+sort_option_parser.add_argument(
+    "-s", "--sort", action="store_true",
+    help="sort output by size")
 
 # All options following apply to tree location arguments.
 
@@ -411,7 +416,7 @@ def do_sync(args):
         with FileHashTree(**args.targetdir) as tgt_tree:
             src_tree.scan_subtree()
             tgt_tree.scan_subtree()
-            pr.progress("calculating match...")
+            pr.progress("matching...")
             matcher = TreePairMatcher(src_tree, tgt_tree)
             if not matcher.do_match():
                 raise NotImplementedError("match failed")
@@ -514,13 +519,32 @@ class GroupedFileListPrinter(object):
     If hardlinks is False, print a for each file a single alias, arbitrarily
     chosen.
     """
-    def __init__(self, hardlinks, sameline):
+    def __init__(self, hardlinks, sameline, sort):
         self.hardlinks = hardlinks
         self.sameline = sameline
+        self.sort = sort
+        if self.sort:
+            self.groups = []
         self._output_group_linebreak = False # Not before first group.
         if self.sameline:
             self._built_line = None
-    def start_group(self):
+
+    def add_group(self, located_files):
+        if self.sort:
+            self.groups.append(located_files)
+        else:
+            self._print_group(located_files)
+
+    def flush(self):
+        if self.sort:
+            def get_size(located_files):
+                for file_list in located_files.values(): # Use any.
+                    return file_list[0].file_metadata.size
+            self.groups.sort(key=get_size)
+            for g in self.groups:
+                self._print_group(g)
+
+    def _print_group(self, located_files):
         if self.sameline:
             self._built_line = ""
         else:
@@ -528,14 +552,13 @@ class GroupedFileListPrinter(object):
                 pr.print("")
             else:
                 self._output_group_linebreak = True
-    def end_group(self):
-        if self.sameline:
-            pr.print(self._built_line)
-    def print_located_files(self, located_files):
         for tree, fobjs in iteritems(located_files):
             for fobj in fobjs:
-                self.print_file(tree, fobj)
-    def print_file(self, tree, fobj):
+                self._print_file(tree, fobj)
+        if self.sameline:
+            pr.print(self._built_line)
+
+    def _print_file(self, tree, fobj):
         if self.sameline:
             if self._built_line != "":
                 self._built_line += " "
@@ -574,7 +597,8 @@ parser_fdupes = cmd_parsers.add_parser(
              maxsize_option_parser,
              skipempty_option_parser,
              dbprefix_option_parser,
-             sameline_option_parser],
+             sameline_option_parser,
+             sort_option_parser],
     help='find duplicate files')
 parser_fdupes.add_argument(
     "locations", type=tree_location, action=StoreTreeSpecList, nargs="+")
@@ -582,15 +606,14 @@ def do_fdupes(args):
     """Find duplicate files, using file size as well as file hash.
     """
     with FileHashTree.listof(args.locations) as all_trees:
-        grouper = GroupedFileListPrinter(args.hardlinks, args.sameline)
+        grouper = GroupedFileListPrinter(args.hardlinks, args.sameline, args.sort)
         for file_sz in fdupes.sizes_repeated(all_trees, args.hardlinks):
             with pr.ProgressPrefix("size %d:" % (file_sz,)):
                 for _hash, located_files in \
-                    fdupes.located_files_repeated_of_size(
+                        fdupes.located_files_repeated_of_size(
                             all_trees, file_sz, args.hardlinks):
-                    grouper.start_group()
-                    grouper.print_located_files(located_files)
-                    grouper.end_group()
+                    grouper.add_group(located_files)
+        grouper.flush()
 cmd_handlers["fdupes"] = do_fdupes
 
 ## onall
@@ -603,20 +626,22 @@ parser_onall = cmd_parsers.add_parser(
              maxsize_option_parser,
              skipempty_option_parser,
              dbprefix_option_parser,
-             sameline_option_parser],
+             sameline_option_parser,
+             sort_option_parser],
     help='find files common to all trees')
 parser_onall.add_argument(
     "locations", type=tree_location, action=StoreTreeSpecList, nargs="+")
 def do_onall(args):
     with FileHashTree.listof(args.locations) as all_trees:
-        grouper = GroupedFileListPrinter(args.hardlinks, args.sameline)
+#        for tr in all_trees:
+#            tr.scan_subtree()
+        grouper = GroupedFileListPrinter(args.hardlinks, args.sameline, args.sort)
         for file_sz in fdupes.sizes_onall(all_trees):
             with pr.ProgressPrefix("size %d:" % (file_sz,)):
                 for _hash, located_files in \
                         fdupes.located_files_onall_of_size(all_trees, file_sz):
-                    grouper.start_group()
-                    grouper.print_located_files(located_files)
-                    grouper.end_group()
+                    grouper.add_group(located_files)
+        grouper.flush()
 cmd_handlers["onall"] = do_onall
 
 ## onfirstonly
@@ -629,21 +654,21 @@ parser_onfirstonly = cmd_parsers.add_parser(
              maxsize_option_parser,
              skipempty_option_parser,
              dbprefix_option_parser,
-             sameline_option_parser],
+             sameline_option_parser,
+             sort_option_parser],
     help='find files on first tree, not on any other')
 parser_onfirstonly.add_argument(
     "locations", type=tree_location, action=StoreTreeSpecList, nargs="+")
 def do_onfirstonly(args):
     with FileHashTree.listof(args.locations) as all_trees:
-        grouper = GroupedFileListPrinter(args.hardlinks, args.sameline)
+        grouper = GroupedFileListPrinter(args.hardlinks, args.sameline, args.sort)
         for file_sz in all_trees[0].get_all_sizes():
             with pr.ProgressPrefix("size %d:" % (file_sz,)):
                 for _hash, located_files in \
                         fdupes.located_files_onfirstonly_of_size(
                                 all_trees, file_sz):
-                    grouper.start_group()
-                    grouper.print_located_files(located_files)
-                    grouper.end_group()
+                    grouper.add_group(located_files)
+        grouper.flush()
 cmd_handlers["onfirstonly"] = do_onfirstonly
 
 ## onlastonly
@@ -656,7 +681,8 @@ parser_onlastonly = cmd_parsers.add_parser(
              maxsize_option_parser,
              skipempty_option_parser,
              dbprefix_option_parser,
-             sameline_option_parser],
+             sameline_option_parser,
+             sort_option_parser],
     help='find files on last tree, not on any other')
 parser_onlastonly.add_argument(
     "locations", type=tree_location, action=StoreTreeSpecList, nargs="+")
@@ -708,14 +734,9 @@ def do_cmp(args):
             right_obj = right_tree.follow_path(left_path)
             if right_obj is None or right_obj.is_excluded():
                 if left_obj.is_file():
-                    left_path_printable = \
-                        left_tree.printable_path(left_path, pprint=_quoter)
-                    pr.print("left file only: %s" % (left_path_printable,))
+                    pr.print("left file only: %s" % fstr2str(left_path))
                 elif left_obj.is_dir():
-                    left_path_printable_dir = \
-                        left_tree.printable_path(
-                            left_path+fstr(os.path.sep), pprint=_quoter)
-                    pr.print("left dir only: %s" % (left_path_printable_dir,))
+                    pr.print("left dir only: %s" % fstr2str(left_path+fstr(os.path.sep)))
                 else:
                     raise RuntimeError(
                         "unexpected left object: " + fstr2str(left_path))
@@ -732,7 +753,7 @@ def do_cmp(args):
                 elif right_obj.is_file():
                     pr.print("left dir vs right file: %s" % fstr2str(left_path))
                 else:
-                    pr.print("left dir vs other: %s" % fstr2str(left_path,))
+                    pr.print("left dir vs other: %s" % fstr2str(left_path+fstr(os.path.sep)))
             else:
                 raise RuntimeError(
                     "unexpected left object: " + fstr2str(left_path))
@@ -742,14 +763,9 @@ def do_cmp(args):
             left_obj = left_tree.follow_path(right_path)
             if left_obj is None or left_obj.is_excluded():
                 if right_obj.is_file():
-                    right_path_printable = \
-                        right_tree.printable_path(right_path, pprint=_quoter)
-                    pr.print("right file only: %s" % (right_path_printable,))
+                    pr.print("right file only: %s" % fstr2str(right_path))
                 elif right_obj.is_dir():
-                    right_path_printable_dir = \
-                        right_tree.printable_path(
-                            right_path+fstr(os.path.sep), pprint=_quoter)
-                    pr.print("right dir only: %s" % (right_path_printable_dir,))
+                    pr.print("right dir only: %s" % fstr2str(right_path+fstr(os.path.sep)))
                 else:
                     raise RuntimeError(
                         "unexpected right object: " + fstr2str(right_path))
