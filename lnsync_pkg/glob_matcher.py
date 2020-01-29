@@ -9,6 +9,39 @@ and --include, in a manner well-suited to recursive file tree walking.
 
 Each pattern is a list of one or more basename glob pattern strings, with
 optional elements anchoring head '/' and dir matching trailing indicator '/'.
+
+From the rsync man page:
+   o  if the pattern starts with a / then it is anchored to a particular spot  in  the  hierarchy  of
+      files, otherwise it is matched against the end of the pathname.  This is similar to a leading ^
+      in regular expressions.  Thus "/foo" would match a name of "foo" at either  the  "root  of  the
+      transfer"  (for a global rule) or in the merge-file's directory (for a per-directory rule).  An
+      unqualified "foo" would match a name of "foo" anywhere in the tree  because  the  algorithm  is
+      applied  recursively  from  the  top  down; it behaves as if each path component gets a turn at
+      being the end of the filename.  Even the unanchored "sub/foo" would match at any point  in  the
+      hierarchy where a "foo" was found within a directory named "sub".  See the section on ANCHORING
+      INCLUDE/EXCLUDE PATTERNS for a full discussion of how to specify a pattern that matches at  the
+      root of the transfer.
+   o  if  the pattern ends with a / then it will only match a directory, not a regular file, symlink,
+      or device.
+   o  rsync chooses between doing a simple string match and wildcard matching by checking if the pat-
+      tern contains one of these three wildcard characters: '*', '?', and '['.
+   o  a '*' matches any path component, but it stops at slashes.
+   o  use '**' to match anything, including slashes.
+   o  a '?' matches any character except a slash (/).
+   o  a '[' introduces a character class, such as [a-z] or [[:alpha:]].
+   o  in  a  wildcard  pattern,  a  backslash  can  be used to escape a wildcard character, but it is
+      matched literally when no wildcards are present.  This means that there is an  extra  level  of
+      backslash  removal  when  a pattern contains wildcard characters compared to a pattern that has
+      none.  e.g. if you add a wildcard to "foo\bar" (which matches the backslash) you would need  to
+      use "foo\\bar*" to avoid the "\b" becoming just "b".
+   o  if  the  pattern contains a / (not counting a trailing /) or a "**", then it is matched against
+      the full pathname, including any leading directories. If the pattern doesn't contain a /  or  a
+      "**",  then it is matched only against the final component of the filename.  (Remember that the
+      algorithm is applied recursively so "full filename" can actually be any portion of a path  from
+      the starting directory on down.)
+   o  a  trailing "dir_name/***" will match both the directory (as if "dir_name/" had been specified)
+      and everything in the directory (as if "dir_name/**" had been specified).   This  behavior  was
+      added in version 2.6.7.
 """
 
 import os

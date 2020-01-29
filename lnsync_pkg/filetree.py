@@ -579,6 +579,8 @@ class FileTree(object):
             os.rename(self.rel_to_abs(fn_from), self.rel_to_abs(fn_to))
 
     def rm_dir_writeback(self, dir_obj):
+        """Execute a rmdir, write back to source tree if self.writeback
+        is set."""
         assert not dir_obj.entries, "trying to remove non-empty dir."
         assert dir_obj.parent, "trying to remove rootdir,"
         relpath = dir_obj.get_relpath()

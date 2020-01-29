@@ -1,20 +1,16 @@
-# lnsync
-
-## Overview
+# Overview
 
 _lnsync_ provides unidirectional sync-by-rename of locally mounted directories, with support for hard links, without copying or deleting file data. To compare files, files hashes are computed and stored in a local database. Using these file hashes, _lnsync_ also provides other functions, such as finding duplicate files.
 
 This tool allows arbitrary file renaming and moving in the source file tree to be quickly replicated in the target without copying any file data. It may used as a preprocessing step for other sync tools, such as _rsync_.
 
-### Hard Link Support
+## Hard Link Support
 
 On many file systems (e.g. ext3/4, NTFS, btrfs), a file may be reached via multiple file paths, which function as aliases. A new path created for an existing file is a _hard link_, but all such aliases are on an equal footing, so each may be called a hard link. Removing the last hardlink to a file means deleting that file.
 
 If both hard links are created or removed in the source (without deleting files), and the target supports hard linking, then _lnsync_ can create and removing hardlinks as required on the target when syncing. As before, this is done without copying or deleting file data.
 
-## Functionality
-
-###  Syncing
+##  Syncing
 
 When you rename/move in the source file tree, _lnsync_  makes a best-effort to sync the target by only renaming files and generally creating/removing hard links on the target, without deleting or copying any file data. Empty directories on the target which do not exist on the source are also removed.
 
@@ -22,15 +18,15 @@ File content is compared using xxHash (a fast, non-cryptographic hash function).
 
 File modification times are used to detect stale hash values and are not synced. File ownership and permissions are ignored: files which cannot be read are skipped.
 
-### File Searching
+## File Searching
 
 Using file content hashes, _lnsync_ can also find duplicate files (like _fdupes_), and more generally find files according to the which file trees they appear on, compare file trees, and check for changes/bitrot.
 
-### Offline File Trees
+## Offline File Trees
 
 _lnsync_ can save the structure of a file tree under a local directory and save it in a single-file database. These offline file trees can be used in most _lnsync_ commands in place of an local directory, even as the source in a sync command.
 
-## Alternative Sync Solutions for Linux
+# Alternative Sync Solutions for Linux
 
 Some of the many tools for syncing with rename detection:
 
@@ -46,15 +42,15 @@ Some of the many tools for syncing with rename detection:
 
 In addition to syncing, _lnsync_ allows using the file hash database to search for files according to a variety of criteria.
 
-## Installation and Quickstart
+# Installation and Quickstart
 
-### Installing
+## Installing
 
 Install the latest version from the PyPI repository with `pip install -U lnsync`.
 
 Or clone the repo with `git clone https://github.com/mrsimoes/lnsync.git` and run `python setup.py install`.
 
-### Example Usage
+## Examples
 
 If you have your photo archive at `/home/you/Photos` and your backup is at `/mnt/disk/Photos`, run `lnsync sync -n /home/you/Photos /mnt/disk/Photos` for a dry-run, to see which sync operations would be performed. To sync, ommit the `-n` switch.
 
@@ -70,10 +66,10 @@ To find all files in Photos which are not in the backup (under any name): `lnsyn
 
 To sync the subdir `/home/you/Photos/Best` to your digital picture frame, using the database hashes at `/home/you/Photos`: `lnsync sync /home/you/Photos/Best --root=/home/you/Photos /mnt/eframe/`.
 
-## Command Reference
+# Command Reference
 All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [<cmd-parameters>]`.
 
-### Syncing
+## Syncing
 - `lnsync sync [options] <source> <target>` syncs a target dir from a source dir (or offline tree).
 
  - First, target files are matched to source files. Each matched target file is associated to a single source file. If either file system supports hardlinks, a file may have multiple pathnames. _lnsync_ will not complain if the match is not unique or some files are not matched on either source and/or target.
@@ -88,11 +84,11 @@ All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [
 
  - `--exclude=<glob_pattern>` Exclude source files and directories by glob pattern. Patterns are interpreted similarly to `rsync --exclude=<glob_pattern> source/ target`, but with `*` matching across slashes and no `**` pattern. This option may be repeated, with each `--exclude` option affecting all file trees. An initial slash anchors the pattern to the file tree root. A trailing slash means the pattern applies only to directories. There is a corresponding `--include`. Some commands accept `--exclude-once=<pattern>` and `--include-once=<pattern>`, which apply only to the next file tree following the switch and gain precedence over global patterns.
 
- To sum up, a file or directory is excluded if it matches an `exclude` pattern before matching any `include` pattern.
+To sum up, a file or directory is excluded if it matches an `exclude` pattern before matching any `include` pattern.
 
 - `lnsync rsync [options] <tree> <dir> [rsync-options]` Prints an _rsync_ command that would sync target dir from source, skipping _lnsync_ database files. Source may be a dir or an offline tree. Check the default _rsync_ options provided are what you want. To also run the _rsync_ command, use the `-x` switch.
 
-### Creating, Updating, and Accessing the Hash Database
+## Creating, Updating, and Accessing the Hash Database
 - `lnsync update <dir>` Update the hash database, creating a new database if none exists, and rehashing all new files and those with a changed modification time (mtime). Accepts `--exclude=<pattern>` options.
 - `lnsync update <dir>` Update the hash database, creating a new database if none exists, and rehashing all new files and those with a changed modification time (mtime). Accepts `--exclude=<pattern>` options.
 - `lnsync rehash <dir> [<relpath>]+` Force rehashing files specified by paths relative to the root `dir`.
@@ -101,7 +97,7 @@ All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [
 - `lnsync cleandb <dir>` Remove outdated entries and re-compact the database.
 - `lnsync lookup <tree> [<relpath>+]` Returns (either from db or by recomputing) the hash value for the files, where `tree` may be a a directory or an offline tree.
 
-### Finding Files
+## Finding Files
 
 - `lnsync cmp <tree1> <tree2>` Recursively compares two file trees. Compares files at each path, does not compare the hard link structure. Accepts `--exclude=<pattern>` options.
 - `lnsync fdupes [-h] [<tree>]+` Find files duplicated anywhere on the given trees.
@@ -109,19 +105,18 @@ All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [
 
 - `lnsync check [<tree>] [<path>]*` Recompute hashes for given files and compare to the hash stored in the database, to check for changes/bitrot.
 
-## More Information
+# Origin, Status, and Future Development
 
 This package started as a Python learning project. I've found it useful enough to polish for publication, but as with any work in progress, it should be used with adequate caution.
 
 Feedback, suggestions, comments, and corrections are very welcome.
 
-You can support this project in bitcoin at [17HS828pkQMiXZGy7UNbA49TYCz7LAQ2ze](bitcoin:17HS828pkQMiXZGy7UNbA49TYCz7LAQ2ze?amount=.001).
+You can support this project with bitcoin at [17HS828pkQMiXZGy7UNbA49TYCz7LAQ2ze](bitcoin:17HS828pkQMiXZGy7UNbA49TYCz7LAQ2ze?amount=.001).
 
 This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you are welcome to redistribute it under certain conditions. See the GNU General Public Licence v3 for details.
 
-## Limitations and Future Developments
 
-### Caveats and Limitations
+## Caveats and Limitations
 - Works only on locally mounted directories, no support whatsoever for remote servers.
 - Depends on mtime to detect file content changes.
 - If source files A, B, C (with pairwise distinct contents) are renamed on target in a cycle to C, A, B, sync is currently not supported.
@@ -129,7 +124,7 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 - Minimal support for case-insensitive but case-preserving file systems like vfat: if a target file name differs from source match in case only, target is not updated.
 - Supports Linux only.
 
-### Possible Improvements
+## Possible Improvements
 - Make `--include` and `--exclude` patterns more compatible with `rsync`.
 - Extend `cmp` to take hard links into account.
 - Filenames are NOT converted to Unicode. To allow using offline database across systems, conversion is required.
@@ -145,12 +140,12 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 ## Release Notes
 
 - Version 0.3.8
--- Less hashing on `onfirstonly`.
--- Sort file search output by size.
--- Adjusted user output levels.
+ - Less hashing on `onfirstonly`.
+ - Sort file search output by size.
+ - Adjusted user output levels.
 - Version 0.3.7
--- Bug fix on reading offline trees.
--- Change output levels and some messages.
+ - Bug fix on reading offline trees.
+ - Change output levels and some messages.
 - Version 0.3.6
 -- New: --include and --include-once options.
  - Bug fix: wrong exit code.

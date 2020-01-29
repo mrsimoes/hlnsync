@@ -24,6 +24,7 @@ from collections import namedtuple
 
 from six import integer_types
 
+from lnsync_pkg.human2bytes import bytes2human
 from lnsync_pkg.p23compat import fstr, fstr2str, zip, imap
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.onegraph import OneGraph
@@ -276,7 +277,7 @@ class State(SearchState):
                                          self.trees.tgt.get_all_sizes())
         common_sizes.sort()
         for common_sz in common_sizes:
-            with pr.ProgressPrefix("size %d:" % (common_sz,)):
+            with pr.ProgressPrefix("size %s:" % (bytes2human(common_sz),)):
                 self._init_stack_and_pathop_persize(common_sz)
 
     def _init_stack_and_pathop_persize(self, file_sz):

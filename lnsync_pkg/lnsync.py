@@ -32,7 +32,7 @@ from lnsync_pkg.p23compat import fstr, fstr2str
 import lnsync_pkg.printutils as pr
 import lnsync_pkg.fdupes as fdupes
 import lnsync_pkg.metadata as metadata
-from lnsync_pkg.human2bytes import human2bytes
+from lnsync_pkg.human2bytes import human2bytes, bytes2human
 from lnsync_pkg.sqlpropdb  import SQLPropDBManager
 from lnsync_pkg.prefixdbname import \
     mode_from_location, pick_db_basename, set_prefix, mk_online_db
@@ -66,8 +66,8 @@ def wrap(text, width):
                   text.split(' '),)
 
 DESCRIPTION = wrap(
-    "lnsync version %s on Python %d.%d.\n%s\n"
-    "Visit http://github.com/mrsimoes/lnsync for more info. "
+    "lnsync %s (python %d.%d).\n%s\n"
+    "Home: http://github.com/mrsimoes/lnsync "
     "Copyright (C) 2018 Miguel Simoes. "
     "This program comes with ABSOLUTELY NO WARRANTY. This is free software, "
     "and you are welcome to redistribute it under certain conditions. "
@@ -238,7 +238,8 @@ class StoreTreeSpecList(StoreTreeSpec):
         setattr(namespace, self.dest, tree_specs)
 
 class StoreRoot(argparse.Action):
-    """Store another root with active dbprefix."""
+    """Store another root with active dbprefix.
+    """
     def __call__(self, parser, namespace, values, option_string=None):
         assert not isinstance(values, list) # A single root argument at a time.
         prev_roots = getattr(namespace, self.dest)
@@ -389,6 +390,8 @@ cmd_handlers_extra_args = {} # Commands taking extra non-argparsed arguments.
 top_parser = argparse.ArgumentParser(\
     description=DESCRIPTION,
     parents=[verbosity_options_parser],
+    add_help=False,
+    usage=argparse.SUPPRESS,
     formatter_class=lambda prog: argparse.HelpFormatter(
         prog, max_help_position=HELP_SPACING))
 cmd_parsers = top_parser.add_subparsers(dest="cmdname", help="sub-command help")
@@ -404,8 +407,8 @@ parser_sync = cmd_parsers.add_parser(
              skipempty_option_parser,
              dbprefix_option_parser,
             ],
-    help="sync-by-rename target to best match source/, "
-         "no file data copied to or deleted from target")
+    help="sync-by-rename target to best match source, but "
+         "no file content copied to or deleted from target")
 parser_sync.add_argument("-n", "--dry-run", help="dry run", action="store_true")
 parser_sync.add_argument(
     "source", type=tree_location, action=StoreTreeSpec)
@@ -446,7 +449,7 @@ def do_sync(args):
                         dirs_to_rm_list.append(dir_obj)
             for d in dirs_to_rm_list:
                 pr.print("rmdir %s" % (_quoter(fstr2str(d.get_relpath()),)))
-                tgt_tree.rm_dir_writeback(d)
+                tgt_tree.rm_dir_writeback(d) # Obeys tgt_tree.writeback.
             pr.debug("sync done")
 cmd_handlers["sync"] = do_sync
 
@@ -608,7 +611,7 @@ def do_fdupes(args):
     with FileHashTree.listof(args.locations) as all_trees:
         grouper = GroupedFileListPrinter(args.hardlinks, args.sameline, args.sort)
         for file_sz in fdupes.sizes_repeated(all_trees, args.hardlinks):
-            with pr.ProgressPrefix("size %d:" % (file_sz,)):
+            with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
                 for _hash, located_files in \
                         fdupes.located_files_repeated_of_size(
                             all_trees, file_sz, args.hardlinks):
@@ -633,11 +636,9 @@ parser_onall.add_argument(
     "locations", type=tree_location, action=StoreTreeSpecList, nargs="+")
 def do_onall(args):
     with FileHashTree.listof(args.locations) as all_trees:
-#        for tr in all_trees:
-#            tr.scan_subtree()
         grouper = GroupedFileListPrinter(args.hardlinks, args.sameline, args.sort)
         for file_sz in fdupes.sizes_onall(all_trees):
-            with pr.ProgressPrefix("size %d:" % (file_sz,)):
+            with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
                 for _hash, located_files in \
                         fdupes.located_files_onall_of_size(all_trees, file_sz):
                     grouper.add_group(located_files)
@@ -663,7 +664,7 @@ def do_onfirstonly(args):
     with FileHashTree.listof(args.locations) as all_trees:
         grouper = GroupedFileListPrinter(args.hardlinks, args.sameline, args.sort)
         for file_sz in all_trees[0].get_all_sizes():
-            with pr.ProgressPrefix("size %d:" % (file_sz,)):
+            with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
                 for _hash, located_files in \
                         fdupes.located_files_onfirstonly_of_size(
                                 all_trees, file_sz):

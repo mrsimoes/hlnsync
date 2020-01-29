@@ -24,8 +24,9 @@ SYMBOLS = {
                        'zebi', 'yobi'),
 }
 
-def bytes2human(value, format='%(value).1f %(symbol)s', symbols='customary'):
+def bytes2human(value, format='%(value).1f%(symbol)s', symbols='customary'):
     """
+    (Changed default format string from '%(value).1 f%(symbol)s' )
     Convert n bytes into a human readable string based on format.
     symbols can be either "customary", "customary_ext", "iec" or "iec_ext",
     see: http://goo.gl/kTQMs

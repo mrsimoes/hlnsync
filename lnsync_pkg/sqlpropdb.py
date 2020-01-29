@@ -7,7 +7,7 @@
 Implement an SQLite3 database suited  to FileProp, with "online" and "offline"
 modes.
 
-In offline mode, stores a file tree.
+In offline mode, it stores a file tree structure as well as file metadata.
 
 Open/close is achieved by managing a context. This is mandatory.
 
@@ -17,6 +17,9 @@ argument, to select online/offline).
 In online mode, a root kw argument is accepted, so that the correct exclude
 patterns are returned to make database files invisible to the tree. This
 defaults to the directory containing the database file.
+
+Connections to the same database file in online mode are shared via a class
+variable.
 
 All databases are EXCLUSIVE lock, i.e. lock on read.
 
@@ -48,9 +51,11 @@ class SQLPropDBManager(OnOffObject):
     methods common to online and offline modes.
     """
     _onoff_super = PropDBManager
+    _current_online_cx = {} # dbpath -> [enter_count, db_cx].
 
     def __init__(self, dbpath, mode=None, **kwargs):
-        """dbpath is the actual sqlite3 database filename."""
+        """dbpath is the actual sqlite3 database filename.
+        """
         self._cx = None
         self._enter_count = 0
         self.dbpath = dbpath
@@ -76,9 +81,12 @@ class SQLPropDBManager(OnOffObject):
           None)]
 
     def __enter__(self):
-        self._enter_count += 1
-        if self._enter_count == 1: # First entered.
-            sql_db_path = self.dbpath
+        sql_db_path = self.dbpath
+        if sql_db_path in self._current_online_cx:
+            cx_info = self._current_online_cx[sql_db_path]
+            cx_info[0] += 1
+            self._cx = cx_info[1]
+        else:
             if not os.path.isfile(sql_db_path):
                 self._create_empty()
             ver = self.which_db_version()
@@ -96,14 +104,19 @@ class SQLPropDBManager(OnOffObject):
             except sqlite3.Error as exc:
                 msg = "cannot open DB at %s" % fstr2str(sql_db_path)
                 raise_from(PropDBError(msg), exc)
+            self._current_online_cx[sql_db_path] = [1, self._cx]
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._enter_count -= 1
-        if self._enter_count == 0:
-            if self._cx:
-                self._cx.commit()
-                self._cx.close()
+        if self._cx:
+            sql_db_path = self.dbpath
+            if sql_db_path in self._current_online_cx:
+                cx_info = self._current_online_cx[sql_db_path]
+                cx_info[0] -= 1
+                if cx_info[0] == 0:
+                    del self._current_online_cx[sql_db_path]
+                    self._cx.commit()
+                    self._cx.close()
         return False # Do not suppress any exception.
 
     def set_prop_metadata(self, file_id, prop_value, metadata):
@@ -137,7 +150,6 @@ class SQLPropDBManager(OnOffObject):
             temp_cx.execute("PRAGMA foreign_keys=ON;")
         except sqlite3.Error as exc:
             msg = "cannot create database at %s", fstr2str(dbpath)
-            pr.error(msg)
             raise_from(PropDBError(msg), exc)
         finally:
             if temp_cx is not None:
@@ -269,14 +281,14 @@ class SQLPropDBManagerOnline(SQLPropDBManager):
             file_ids = (file_ids,)
         try:
             del_prop_cmd = "DELETE FROM prop WHERE file_id=?;"
-            self._cx.executemany(del_prop_cmd, [(fid,) for fid in file_ids])
+            vals = [(fid,) for fid in file_ids]
+            self._cx.executemany(del_prop_cmd, vals)
         except sqlite3.Error as exc:
-            ms = "could not delete ids"
-            pr.error(msg)
+            msg = "could not delete ids: %s (%s)" % (file_ids, exc)
             raise_from(PropDBError(msg), exc)
 
     def delete_ids_except(self, file_ids_to_keep):
-        """Delete from the db all ids, except those given. Expensive.
+        """Delete from the db all ids, exdeletecept those given. Expensive.
         """
         ids_to_delete = set()
         if not isinstance(file_ids_to_keep, set):

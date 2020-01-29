@@ -195,7 +195,6 @@ class FilePropTree(OnOffObject):
             res = self.db.get_prop_metadata(f_obj.file_id)
         except PropDBError as exc:
             msg = "reading db for id %d: %s" % (f_obj.file_id, str(exc))
-            pr.error(msg)
             raise_from(TreeError(msg), exc)
         return res
 
@@ -272,9 +271,8 @@ class FilePropTreeOnline(FilePropTree):
         except RuntimeError as exc:
             msg = "getting prop from source (id %d, %s): %s." % \
                   (f_obj.file_id,
-                  (fstr2str(frp) for frp in f_obj.relpaths),
+                  list(fstr2str(frp) for frp in f_obj.relpaths),
                   str(exc))
-            pr.error(msg)
             self._rm_file(f_obj)
             raise_from(TreeError(msg), exc)
         f_obj.prop_value = prop_value

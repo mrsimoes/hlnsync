@@ -75,7 +75,6 @@ def do_search(state):
             else:
                 state.up_delta(next_delta)
 
-
 class QueensBoard(SearchState):
     """Solve the n x n queen problem using depth-first shared state.
     """
@@ -85,13 +84,11 @@ class QueensBoard(SearchState):
         self.board = [[0,]*board_size for _ in range(board_size)]
         self.next_row = 0
         self.valid = True
-
     def make_delta_iter(self):
         if self.next_row == self.board_size:
             return None
         else:
             return iter(range(self.board_size))
-
     def down_delta(self, state_delta):
         col = state_delta
         row = self.next_row
@@ -109,8 +106,6 @@ class QueensBoard(SearchState):
                             return
         self.next_row = row + 1
         self.valid = True
-
-
     def up_delta(self, state_delta):
         col = state_delta
         assert self.next_row > 0, "Cannot go up from row 0."
@@ -119,10 +114,8 @@ class QueensBoard(SearchState):
         self.next_row -= 1
         self.board[self.next_row][col] = 0
         self.valid = True
-
     def is_valid(self):
         return self.valid
-
     def __str__(self):
         rep = ""
         for row in self.board:
@@ -131,7 +124,7 @@ class QueensBoard(SearchState):
             rep += "\n"
         return rep
 
-def _solve_n_queen():
+if __name__ == "__main__":
     import sys
     try:
         assert len(sys.argv) == 2, "Wrong number of arguments."
@@ -147,6 +140,3 @@ def _solve_n_queen():
         print(board)
     else:
         print("No solution found.")
-
-if __name__ == "__main__":
-    _solve_n_queen()
