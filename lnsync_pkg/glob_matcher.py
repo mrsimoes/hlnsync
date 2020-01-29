@@ -50,6 +50,9 @@ import fnmatch
 from lnsync_pkg.p23compat import fstr
 
 def path_full_split(path):
+    """Split a matching pattern into a list of components.
+    If the pattern starts with /, the first element of the result is "/"
+    If the pattern ends with /, the last element of the result is ""."""
     terms = []
     while True:
         path, term = os.path.split(path)
@@ -116,7 +119,12 @@ class Pattern(object):
         return self._type == "i"
 
     def to_fstr(self):
-        return fstr(os.sep).join(self._split_pattern)
+        res = fstr(os.sep).join(self._split_pattern)
+        if res[0:2] == fstr("//"):
+            res = res[1:]
+        if res[-2:-1] == fstr("//"):
+            res = res[:-1]
+        return res
 
 class ExcludePattern(Pattern):
     def __init__(self, glob_pattern_path):

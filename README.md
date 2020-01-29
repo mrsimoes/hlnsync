@@ -139,6 +139,9 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 
 ## Release Notes
 
+- Version 0.3.9
+ - Fix bug when multiple online databases share same database file via --root.
+ - Multiple small bug fixes.
 - Version 0.3.8
  - Less hashing on `onfirstonly`.
  - Sort file search output by size.
