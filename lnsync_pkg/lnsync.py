@@ -23,6 +23,7 @@ import os
 import argparse
 import sys
 import pipes
+import configparser
 from sqlite3 import Error as SQLError
 
 from six import raise_from, reraise, iteritems
@@ -44,12 +45,13 @@ from lnsync_pkg.glob_matcher import IncludePattern, ExcludePattern
 # Tell pylint not to mistake module variables for constants
 # pylint: disable=C0103
 
+# Global variables.
+
 DEFAULT_DBPREFIX = fstr("lnsync-")
 set_prefix(DEFAULT_DBPREFIX)
-
 HELP_SPACING = 30
-
 _quoter = pipes.quote
+CFG = None # Configuration parser object, set below.
 
 def wrap(text, width):
     """A word-wrap function that preserves existing line breaks
@@ -78,6 +80,42 @@ DESCRIPTION = wrap(
     80
     )
 
+# Parser code starts here, plus the ConfigParser global variable.
+
+class LnsyncConfigParser(configparser.ConfigParser):
+    def __init__(self):
+        super().__init__()
+        self.read(["lnsync.cfg", os.path.expanduser("~/.lnsync.cfg")])
+        self.read(os.path.expanduser('~/.lnsync.cfg'))
+    def get_default(self, key, value, opttype):
+        if opttype == bool:
+            outval = self["DEFAULT"].getboolean(key, value)
+        else:
+            outval = opttype(self["DEFAULT"].get(key, value))
+        return outval
+    def get_tree_excludes(self, real_tree):
+        "Return a list of include and exclude patterns for the given tree."
+        real_tree = os.path.realpath(real_tree)
+        res = []
+        def all_pats(sec, item):
+            sec_pats = self[sec].get(item, "")
+            dflt_pats = self["DEFAULT"].get(item, "")
+            if sec_pats == dflt_pats or not dflt_pats:
+                all_pats = sec_pats
+            else:
+                all_pats = sec_pats + " " + dflt_pats
+            return all_pats.split()
+        for sec in self.sections():
+            if real_tree == os.path.realpath(fstr(sec)):
+                inc_pats = all_pats(sec, "include")
+                exc_pats = all_pats(sec, "exclude")
+                for inc_pat in inc_pats:
+                    res.append(IncludePattern(fstr(inc_pat)))
+                for exc_pat in exc_pats:
+                    res.append(ExcludePattern(fstr(exc_pat)))
+                break
+        return res
+
 # Verbosity subparser and control Action for both -q and -v
 # belong to the main parser, not any command parser.
 
@@ -89,7 +127,11 @@ class SetVerbosityAction(argparse.Action):
         # Override default behavior of switch consuming one argument following.
         super(SetVerbosityAction, self).__init__(nargs=0, **kw)
     def __call__(self, parser, namespace, values, option_string=None):
-        verb_delta = getattr(namespace, "verbosity_delta", 0) # Get running sum.
+        if hasattr(namespace, "verbosity_delta"):
+            # Get running sum from possibly previous -v -q options or defaults.
+            verb_delta = getattr(namespace, "verbosity_delta")
+        else:
+            verb_delta = CFG.get_default("verbosity", 0, int)
         if "q" in option_string:
             verb_delta -= 1
         elif  "v" in option_string:
@@ -98,6 +140,7 @@ class SetVerbosityAction(argparse.Action):
             raise ValueError("parsing verbosity option")
         setattr(namespace, "verbosity_delta", verb_delta)
 
+CONFIGURABLE_OPTIONS = {}
 verbosity_options_parser = argparse.ArgumentParser(add_help=False)
 verbosity_options_parser.add_argument(
     "-q", "--quiet", "-v", "--verbose",
@@ -109,18 +152,21 @@ verbosity_options_parser.add_argument(
 
 hardlinks_option_parser = argparse.ArgumentParser(add_help=False)
 hardlinks_option_parser.add_argument(
-    "-H", "--hardlinks", action="store_true",
+    "-H", "--hardlinks", action="store_true", default=False,
     help="hardlinks are duplicates")
+CONFIGURABLE_OPTIONS[hardlinks_option_parser] = [("hardlinks", bool)]
 
 sameline_option_parser = argparse.ArgumentParser(add_help=False)
 sameline_option_parser.add_argument(
-    "-1", "--sameline", action="store_true",
+    "-1", "--sameline", action="store_true", default=False,
     help="print each group of identical files in the same line")
+CONFIGURABLE_OPTIONS[sameline_option_parser] = [("sameline", bool)]
 
 sort_option_parser = argparse.ArgumentParser(add_help=False)
 sort_option_parser.add_argument(
-    "-s", "--sort", action="store_true",
+    "-s", "--sort", action="store_true", default=False,
     help="sort output by size")
+CONFIGURABLE_OPTIONS[sort_option_parser] = [("sort", bool)]
 
 # All options following apply to tree location arguments.
 
@@ -133,15 +179,14 @@ dbprefix_option_parser.add_argument(
     "-p", "--dbprefix", metavar="PREFIX", type=fstr, action="store",
     default=DEFAULT_DBPREFIX,
     help="database filename prefix for following online trees")
+CONFIGURABLE_OPTIONS[dbprefix_option_parser] = [("dbprefix", fstr)]
 
 # Any --exclude option applies to all tree locations anywhere in the command
 # line.
 # Any --exclude-once option applies only to the next tree location.
 # Due to an argparse limitation, --exclude-once is not supported where
 # for the elements of a tree location list (nargs="+"). argparse cannot parse
-# optional arguments interspersed with the elements in a list argument.
-
-# argparse initializes to None instead of an empty list.
+# optional arguments interspersed with elements in a list argument.
 class StoreTaggedPattern(argparse.Action):
     """Store another root with active dbprefix."""
     def __call__(self, parser, namespace, values, option_string=None):
@@ -156,7 +201,6 @@ class StoreTaggedPattern(argparse.Action):
         else:
             raise RuntimeError
         prev_patterns.append(tagged_pattern)
-#        print("storing in ", self.dest)
         setattr(namespace, self.dest, prev_patterns) # Store db spec in Namespace.
 
 exclude_option_parser = argparse.ArgumentParser(add_help=False)
@@ -165,6 +209,7 @@ exclude_option_parser.add_argument(
     # argparse sets action self.dest to exclude (first option string)
     type=fstr, action=StoreTaggedPattern,
     help="exclude/include certain files and dirs")
+exclude_option_parser.set_defaults(exclude=[])
 
 # argparse autochanges option name to "exclude_once":
 excludeonce_option_parser = argparse.ArgumentParser(add_help=False)
@@ -214,9 +259,8 @@ class StoreTreeSpec(argparse.Action):
         # argparse autorenames exclude-once to exclude_once
         once_excludes = getattr(namespace, "exclude_once", None)
         if once_excludes is not None:
-            treekw = "exclude_patterns"
-            tree_spec[treekw] = list(once_excludes)
-            delattr(namespace, "exclude_once")
+            tree_spec["exclude_patterns"] = list(once_excludes)
+            delattr(namespace, "exclude_once") # Reset for next tree.
         setattr(namespace, self.dest, tree_spec)
 
     def store_tree_spec(self, namespace, tree_spec):
@@ -291,23 +335,32 @@ bysize_option_parser = argparse.ArgumentParser(add_help=False)
 bysize_option_parser.add_argument(
     "-z", "--bysize", default=False, action="store_true",
     help="compare files by size only")
+CONFIGURABLE_OPTIONS[bysize_option_parser] = [("bysize", bool)]
 
 maxsize_option_parser = argparse.ArgumentParser(add_help=False)
 maxsize_option_parser.add_argument(
     "-M", "--maxsize", type=human2bytes, default=-1,
     help="ignore files larger than MAXSIZE (default is no limit) "
          "suffixes allowed: K, M, G, etc.")
+def read_max_size(deflt_val):
+    if deflt_val == -1:
+        return -1
+    else:
+        return human2bytes(str)
+CONFIGURABLE_OPTIONS[maxsize_option_parser] = [("maxsize", read_max_size)]
 
 skipempty_option_parser = argparse.ArgumentParser(add_help=False)
 skipempty_option_parser.add_argument(
     "-0", "--skipempty", default=False, action="store_true",
     help="ignore empty files")
+CONFIGURABLE_OPTIONS[skipempty_option_parser] = [("skipempty", bool)]
 
 # Options that apply to all tree locations.
 
 def finish_parsing_trees(args):
     """Transform each tree spec into tree init kwargs, incorporating global
-    --exclude and -root options. Also, add up and apply verbosity options.
+    --exclude and -root options, as well as exclude patterns from the config
+    file. Add up and apply verbosity options.
     """
     def is_subdir(path, directory):
         "Test if path is under directory."
@@ -316,7 +369,8 @@ def finish_parsing_trees(args):
     # argparse may not set default value for --exclude option.
     verbosity_delta = getattr(args, "verbosity_delta", 0)
     pr.option_verbosity += verbosity_delta
-    global_excludes = getattr(args, "exclude", None)
+    # The excludes property is only set if exclude_option_parser was used.
+    global_excludes = getattr(args, "exclude", [])
     root_specs = getattr(args, "root", [])
     if not root_specs: # argparse sets None as explicit default.
         root_specs = []
@@ -343,10 +397,10 @@ def finish_parsing_trees(args):
         treekwargs = tree_spec # Just for clarity, since the contents changed.
         if replacement_db:
             treekwargs["dbkwargs"]["dbpath"] = replacement_db
-        if global_excludes:
-            treekw = "exclude_patterns"
-            once_excludes = treekwargs.get(treekw, [])
-            treekwargs[treekw] = once_excludes + global_excludes
+        config_excludes = CFG.get_tree_excludes(this_location)
+        once_excludes = treekwargs.get("exclude_patterns", [])
+        treekwargs["exclude_patterns"] = \
+            once_excludes + global_excludes + config_excludes
         for arg in "bysize", "maxsize", "skipempty":
             # argparse argument names may not match FileHashTree _init_ kwargs:
             treekw = {"bysize":"size_as_hash",
@@ -384,8 +438,8 @@ def writable_empty_path(path):
 # Subparsers return exit code, None meaning 0.
 
 # Register command handler functions here for the main body:
-cmd_handlers = {}  # Commands fully argparsed
-cmd_handlers_extra_args = {} # Commands taking extra non-argparsed arguments.
+cmd_handlers = {}  # Commands parsed fully by argparse.
+cmd_handlers_extra_args = {} # Commands taking extra, non-argparse arguments.
 
 top_parser = argparse.ArgumentParser(\
     description=DESCRIPTION,
@@ -409,7 +463,11 @@ parser_sync = cmd_parsers.add_parser(
             ],
     help="sync-by-rename target to best match source, but "
          "no file content copied to or deleted from target")
-parser_sync.add_argument("-n", "--dry-run", help="dry run", action="store_true")
+parser_sync.add_argument(
+    "-n", "--dry-run", default=False, action="store_true",
+    help="dry run")
+CONFIGURABLE_OPTIONS[parser_sync] = [("dry_run", bool)]
+
 parser_sync.add_argument(
     "source", type=tree_location, action=StoreTreeSpec)
 parser_sync.add_argument(
@@ -462,9 +520,13 @@ parser_rsync = cmd_parsers.add_parser(
             ],
     help="generate rsync command to complete sync")
 parser_rsync.add_argument(
-    "-x", "--execute", action="store_true", help="also execute rsync command")
+    "-x", "--execute", default=False, action="store_true",
+    help="also execute rsync command")
 parser_rsync.add_argument(
-    "-n", "--dry-run", help="dry run", action="store_true")
+    "-n", "--dry-run", default=False, action="store_true",
+    help="dry run")
+CONFIGURABLE_OPTIONS[parser_rsync] = [("dry_run", bool), ("execute", bool)]
+
 parser_rsync.add_argument("sourcedir", type=str)
 parser_rsync.add_argument("targetdir", type=str)
 
@@ -485,11 +547,12 @@ def do_rsync(sysargv, args, more_args):
     tgt_dir = _quoter(tgt_dir)
     # Options for rsync: recursive, preserve hardlinks.
     rsync_opts = "-r -H --size-only --progress"
-    if args.maxsize > 0:
+    if args.maxsize >= 0:
         rsync_opts += " --max-size=%d" % args.maxsize
     if args.dry_run:
         rsync_opts += " -n"
-    exclude_patterns = args.exclude
+    cfg_excludes = CFG.get_tree_excludes(fstr(args.sourcedir))
+    exclude_patterns = args.exclude + cfg_excludes
     # Exclude databases at both ends.
     rsync_opts += r' --exclude="/%s[0-9]*.db"' % fstr2str(args.dbprefix)
     if exclude_patterns:
@@ -977,7 +1040,8 @@ def do_subdir(args):
     with src_db:
         with tgt_db:
             src_db.merge_prop_values(tgt_db)
-    with FileHashTree(**make_treekwargs(tgt_dir, "online")) as tgt_tree:
+    with FileHashTree(**make_treekwargs(tgt_dir, "online", args.dbprefix)) \
+            as tgt_tree:
         tgt_tree.db_purge_old_entries()
         tgt_tree.db.compact()
 cmd_handlers["subdir"] = do_subdir
@@ -1002,13 +1066,26 @@ def do_cleandb(args):
         tree.db.compact()
 cmd_handlers["cleandb"] = do_cleandb
 
+def set_configurable_defaults():
+    for parser in CONFIGURABLE_OPTIONS.keys():
+        opts = CONFIGURABLE_OPTIONS[parser]
+        actual_defaults = {}
+        for optstr, opttype in opts:
+            deflt_deflt = parser.get_default(optstr)
+            actual_deflt = CFG.get_default(optstr, deflt_deflt, opttype)
+            actual_defaults[optstr] = actual_deflt
+        parser.set_defaults(**actual_defaults)
+
 def main():
-    if len(sys.argv) == 1:
-        top_parser.print_help(sys.stderr)
-        sys.exit(1)
     pr.set_app_prefix("lnsync: ")
     exit_error = 1
     try:
+        if len(sys.argv) == 1:
+            top_parser.print_help(sys.stderr)
+            sys.exit(1)
+        global CFG
+        CFG = LnsyncConfigParser() # Here to catch exceptions.
+        set_configurable_defaults()
         args, extra_args = top_parser.parse_known_args()
         cmd = args.cmdname
         if cmd in cmd_handlers:
@@ -1037,6 +1114,8 @@ def main():
     except KeyboardInterrupt:
         exit_error = 130
         raise SystemExit("lnsync: interrupted")
+    except configparser.Error:
+        pr.error("config file error: %s" % str(exc))
     except NotImplementedError as exc:
         pr.error("not implemented on your system: %s", str(exc))
     except RuntimeError as exc: # Includes NotImplementedError

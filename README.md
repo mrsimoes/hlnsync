@@ -105,6 +105,10 @@ To sum up, a file or directory is excluded if it matches an `exclude` pattern be
 
 - `lnsync check [<tree>] [<path>]*` Recompute hashes for given files and compare to the hash stored in the database, to check for changes/bitrot.
 
+## Configuration files
+
+An INI-style configuration file is searched at `./lnsync.cfg` and `~/.lnsync.cfg`, in that order. In its `DEFAULT` section, default values may be set there for command-line options `sort`, `hardlinks`, `sameline`, `dbprefix`, `bysize`, `maxsize`, `skipempty`, `dry_run`. Each section whose name matches a directory (resp. file) may contain `exclude` and `include` options whose values are space-separated patterns applied to taht online (resp. offline) file tree, after command-line exclude/include patterns. The `DEFAULT` section may also contain similar `exclude` and `include` options, applying to all trees after all other exclude/include patterns.
+
 # Origin, Status, and Future Development
 
 This package started as a Python learning project. I've found it useful enough to polish for publication, but as with any work in progress, it should be used with adequate caution.
@@ -135,13 +139,13 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 - Support for checking for duplicates by actual content, not just hash.
 - Update target mtimes from source.
 - Allow more output sorting options, e.g. by name or mtime.
-- Allow config files and maybe store database along with config files in some .lnsync-DDDD directory at the root.
 
 ## Release Notes
 
-- Version 0.3.9
- - Fix bug when multiple online databases share same database file via --root.
- - Multiple small bug fixes.
+- Version 0.4.0
+ - Drop Python 2 compatibility.
+ - Add config files.
+ - Bug fixes.
 - Version 0.3.8
  - Less hashing on `onfirstonly`.
  - Sort file search output by size.
