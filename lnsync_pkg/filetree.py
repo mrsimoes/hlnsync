@@ -37,7 +37,6 @@ are reversible, except those that delete a file's only path.
 from __future__ import print_function
 
 import os
-from six import iteritems
 
 from lnsync_pkg.p23compat import fstr, isfstr, fstr2str
 import lnsync_pkg.printutils as pr
@@ -70,7 +69,7 @@ class DirItem(TreeItem):
     def __init__(self, dir_id):
         self.dir_id = dir_id
         self.parent = None # A DirItem.
-        self.entries = {} # basename->TreObj.
+        self.entries = {} # basename->TreeObj.
         self.relpath = None # Cache.
         self.scanned = False
     def was_scanned(self):
@@ -108,7 +107,7 @@ class DirItem(TreeItem):
             curr_dir = self
             path = None
             while curr_dir.parent is not None:
-                for entryname, obj in iteritems(curr_dir.parent.entries):
+                for entryname, obj in curr_dir.parent.entries.items():
                     if obj is curr_dir:
                         if path is None:
                             path = entryname
@@ -190,20 +189,20 @@ class FileTree(object):
         self._id_to_file = {}    # May be filled on-demand.
         self._next_free_dir_id = 1
         self.rootdir_obj = self._new_dir_obj(0)
-        self._exclude_patterns = []
+        self._glob_patterns = []
         # dir-> matcher, must be set before dir is scanned.
-        self._exclude_matchers = {}
-        self.add_exclude_patterns(kwargs.pop("exclude_patterns", []))
+        self._glob_matchers = {}
+        self.add_glob_patterns(kwargs.pop("exclude_patterns", []))
 
-    def add_exclude_patterns(self, patterns, before=True):
+    def add_glob_patterns(self, patterns, before=True):
         if patterns:
             if before:
-                self._exclude_patterns = patterns + self._exclude_patterns
+                self._glob_patterns = patterns + self._glob_patterns
             else:
-                self._exclude_patterns += patterns
+                self._glob_patterns += patterns
             assert not self.rootdir_obj.was_scanned()
-            root_matcher = GlobMatcher(self._exclude_patterns)
-            self._exclude_matchers = {self.rootdir_obj: root_matcher}
+            root_matcher = GlobMatcher(self._glob_patterns)
+            self._glob_matchers = {self.rootdir_obj: root_matcher}
 
     def printable_path(self, rel_path, pprint=str):
         """Return a pretty-printed full path from a tree relative path."""
@@ -224,12 +223,9 @@ class FileTree(object):
             return []
 
     def get_file_count(self):
-        """Get the total number of files, after scanning the full tree."""
+        """Return total number of files, after scanning the full tree."""
         self.scan_subtree()
-        num_files = 0
-        for _sz, files_this_sz in iteritems(self.size_to_files()):
-            num_files += len(files_this_sz)
-        return num_files
+        return sum(len(szfiles) for (sz, szfiles) in self._size_to_files.items())
 
     def get_all_sizes(self):
         """Return list of all file sizes in the tree."""
@@ -278,12 +274,12 @@ class FileTree(object):
         with pr.ProgressPrefix(
             "scanning:" + self.printable_path(dir_obj.get_relpath())
             ):
-            dir_exclude_matcher = self._exclude_matchers.get(dir_obj)
-                # dir_exclude_matcher is None or an entry.
+            dir_glob_matcher = self._glob_matchers.get(dir_obj)
+                # dir_glob_matcher is None or an entry.
             for (basename, obj_id, obj_type, raw_metadata) in \
                     self._gen_dir_entries_from_source(
                             dir_obj,
-                            dir_exclude_matcher):
+                            dir_glob_matcher):
 #                try:
 #                    basename.decode('utf-8')
 #                except Exception:
@@ -295,11 +291,11 @@ class FileTree(object):
                         dir_obj, obj_id, basename, raw_metadata)
                 elif obj_type == DirItem:
                     self._scan_dir_process_dir(
-                        dir_obj, obj_id, dir_exclude_matcher, basename)
+                        dir_obj, obj_id, dir_glob_matcher, basename)
                 else:
                     dir_obj.add_entry(basename, obj_type())
-            if dir_obj in self._exclude_matchers:
-                del self._exclude_matchers[dir_obj]
+            if dir_obj in self._glob_matchers:
+                del self._glob_matchers[dir_obj]
             dir_obj.mark_scanned()
 
     def _scan_dir_process_file(self, parent_obj, obj_id,
@@ -325,14 +321,14 @@ class FileTree(object):
         self._add_path(file_obj, parent_obj, basename)
 
     def _scan_dir_process_dir(
-            self, parent_obj, obj_id, parent_excluder, basename):
+            self, parent_obj, obj_id, parent_glob, basename):
         self._next_free_dir_id = max(self._next_free_dir_id, obj_id + 1)
         subdir_obj = self._new_dir_obj(obj_id)
         parent_obj.add_entry(basename, subdir_obj)
-        if parent_excluder:
-            subdir_exclude_matcher = parent_excluder.to_subdir(basename)
-            if subdir_exclude_matcher:
-                self._exclude_matchers[subdir_obj] = subdir_exclude_matcher
+        if parent_glob:
+            subdir_glob_matcher = parent_glob.to_subdir(basename)
+            if subdir_glob_matcher:
+                self._glob_matchers[subdir_obj] = subdir_glob_matcher
 
     def scan_subtree(self, start_dir=None):
         """Recursively scan subtree rooted at start_dir."""
@@ -346,7 +342,7 @@ class FileTree(object):
         if start_dir == self.rootdir_obj:
             self._size_to_files_ready = True
 
-    def _gen_dir_entries_from_source(self, dir_obj, exclude_matcher=None):
+    def _gen_dir_entries_from_source(self, dir_obj, glob_matcher=None):
         """Iterate over the items in a disk file tree.
         Yield tuples (basename, obj_id, obj_type, rawmetadata), where:
         - basename is str (Python2) or binary string (Python3)
@@ -358,16 +354,16 @@ class FileTree(object):
         for obj_bname in os.listdir(dir_abspath):
             obj_abspath = os.path.join(dir_abspath, obj_bname)
             if os.path.islink(obj_abspath): # This must be tested for first.
-                if exclude_matcher \
-                        and exclude_matcher.match_file_bname(obj_bname):
+                if glob_matcher \
+                        and glob_matcher.exclude_file_bname(obj_bname):
                     pr.info("excluded symlink %s" % fstr2str(obj_abspath))
                     yield (obj_bname, None, ExcludedItem, None)
                 else:
                     pr.info("ignored symlink %s" % fstr2str(obj_abspath))
                     yield (obj_bname, None, OtherItem, None)
             elif os.path.isfile(obj_abspath):
-                if exclude_matcher \
-                        and exclude_matcher.match_file_bname(obj_bname):
+                if glob_matcher \
+                        and glob_matcher.exclude_file_bname(obj_bname):
                     pr.info("excluded file %s" % fstr2str(obj_abspath))
                     yield (obj_bname, None, ExcludedItem, None)
                 elif not os.access(obj_abspath, os.R_OK):
@@ -381,8 +377,8 @@ class FileTree(object):
                     fid = self._id_computer.get_id(obj_relpath, stat_data)
                     yield (obj_bname, fid, FileItem, stat_data)
             elif os.path.isdir(obj_abspath):
-                if exclude_matcher \
-                        and exclude_matcher.match_dir_bname(obj_bname):
+                if glob_matcher \
+                        and glob_matcher.exclude_dir_bname(obj_bname):
                     pr.info("excluded dir %s" % fstr2str(obj_abspath))
                     yield (obj_bname, None, ExcludedItem, None)
                 elif not os.access(obj_abspath, os.R_OK + os.X_OK):
@@ -394,8 +390,8 @@ class FileTree(object):
                     self._next_free_dir_id += 1
                     yield (obj_bname, dir_id, DirItem, None)
             else:
-                if exclude_matcher \
-                        and exclude_matcher.match_file_bname(obj_bname):
+                if glob_matcher \
+                        and glob_matcher.exclude_file_bname(obj_bname):
                     pr.info(
                         "excluded special file %s" % fstr2str(obj_abspath))
                     yield (obj_bname, None, ExcludedItem, None)
@@ -478,7 +474,7 @@ class FileTree(object):
         subdir = self.follow_path(subdir_path)
         assert subdir is not None and subdir.is_dir()
         self.scan_dir(subdir)
-        for basename, obj in iteritems(subdir.entries):
+        for basename, obj in subdir.entries.items():
             if obj.is_file() or (dirs and obj.is_dir()):
                 yield obj, basename
 
@@ -500,7 +496,7 @@ class FileTree(object):
             and startdir_obj.is_dir(), "walk_paths: dobj not a dir"
         def output_files(dir_obj):
             dir_path = dir_obj.get_relpath()
-            for basename, obj in iteritems(dir_obj.entries):
+            for basename, obj in dir_obj.entries.items():
                 if (files and obj.is_file()):
                     yield obj, dir_obj, os.path.join(dir_path, basename)
         def output_dir(dir_obj):
@@ -606,7 +602,7 @@ class FileTree(object):
         elif tr_obj.is_dir():
             return tr_obj
         else:
-            raise TreeError("cannot create dir %s" % (fstr2str(dir_relpath),))
+            raise TreeError("cannot create dir %s" % (dir_relpath,))
 
     def exec_cmd(self, cmd):
         """Execute a (cmd, arg1, arg2).

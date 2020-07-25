@@ -68,53 +68,29 @@ compatibility.
 """
 
 import sys
-import six
 
 FSE = sys.getfilesystemencoding() # Always UTF8 on Linux.
 
-if six.PY2:
-    import itertools
-    zip = itertools.izip
-    imap = itertools.imap
-    sql_text_factory = str
-    sql_text_storer = lambda x: buffer(x)
-    def fstr(value):
-        """Create an fstr from None, str by passing through."""
-        if value is None:
-            return None
-        elif isinstance(value, buffer):
-            return str(value)
-        else:
-            assert isinstance(value, str)
-            return value
-    def fstr2str(value):
-        "Convert to str type."
+sql_text_factory = bytes
+sql_text_storer = lambda x: x
+def fstr(value):
+    """Create an fstr from None, str or bytes."""
+    global FSE
+    if value is None:
+        return None
+    elif isinstance(value, str):
+        return value.encode(FSE, "surrogateescape")
+    elif isinstance(value, bytes):
         return value
-    def isfstr(value):
-        return isinstance(value, str)
-else:
-    zip = zip # Builtins.
-    imap = map
-    sql_text_factory = bytes
-    sql_text_storer = lambda x: x
-    def fstr(value):
-        """Create an fstr from None, str or bytes."""
-        global FSE
-        if value is None:
-            return None
-        elif isinstance(value, str):
-            return value.encode(FSE, "surrogateescape")
-        elif isinstance(value, bytes):
-            return value
-        else:
-            assert False, "unknown value"
-    def fstr2str(value):
-        "Convert to str type."
-        try:
-            st = value.decode(FSE)
-        except UnicodeDecodeError as exc:
+    else:
+        assert False, "unknown value"
+def fstr2str(value):
+    "Convert to str type."
+    try:
+        st = value.decode(FSE)
+    except UnicodeDecodeError as exc:
 #            pr.error(exc)
-            st = value.decode(FSE,'replace')
-        return st
-    def isfstr(value):
-        return isinstance(value, bytes)
+        st = value.decode(FSE,'replace')
+    return st
+def isfstr(value):
+    return isinstance(value, bytes)

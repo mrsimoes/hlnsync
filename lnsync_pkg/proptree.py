@@ -12,13 +12,13 @@ has been stored and the file hasn't been modified since then (by metadata stamp,
 i.e. size and mtime). Otherwise, the property valued is recomputed and stored
 in the persistent cache.
 
-There are two modes of operation: "online" and "offline".
+There are two modes of operation: ONLINE and OFFLINE.
 
-- In "online" mode, access to the disk file tree is needed and the database may
+- In ONLINE mode, access to the disk file tree is needed and the database may
 be updated. In this mode, root_path must be a dir, the root of the disk file
 tree.
 
-- In "offline" mode, all property values as well as the tree data structure is
+- In OFFLINE mode, all property values as well as the tree data structure is
 stored in the database. Access to the original source file tree is unneeded. In
 this mode, root_path is set to None.
 
@@ -26,7 +26,7 @@ To use, implement online/offline alternative hierarchies for subclasses of
 PropDBManager and FilePropTree using the protocol described in onlineoffline.py.
 
 The database top class should be given by a kw argument "db", a callable that
-takes a location, an optional mode (default "online") and optional kwargs and
+takes a location, an optional mode (default ONLINE) and optional kwargs and
 returns the appropriate db instance (e.g. the client subclass).
 
 The db instance is created at the end of tree init process, but before any tree
@@ -54,15 +54,13 @@ from __future__ import with_statement, print_function
 import os
 import abc
 
-from six import iteritems, raise_from
-
 from lnsync_pkg.p23compat import fstr2str
 
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.fileid import make_id_computer
-from lnsync_pkg.onlineoffline import OnOffObject
+from lnsync_pkg.onofftype import onofftype, ONLINE, OFFLINE
 from lnsync_pkg.filetree import \
-    FileTree, FileItem, DirItem, OtherItem, ExcludedItem, TreeError
+    FileTree, FileItem, DirItem, ExcludedItem, TreeError
 
 class PropDBError(Exception):
     pass
@@ -70,9 +68,9 @@ class PropDBError(Exception):
 class PropDBValueError(PropDBError):
     pass
 
-class PropDBManager(OnOffObject):
-    _onoff_super = OnOffObject
-    def get_exclude_patterns(self):
+class PropDBManager(metaclass=onofftype):
+#    _onoff_super = OnOffObject
+    def get_glob_patterns(self):
         return []
     def __init__(self, *args, **kwargs):
         pass
@@ -87,10 +85,10 @@ class FileItemProp(FileItem):
         self.prop_value = None
         self.prop_metadata = None
 
-class FilePropTree(OnOffObject):
+class FilePropTree(FileTree, metaclass=onofftype):
     """A file tree providing persistent cache of values for a file property.
     """
-    _onoff_super = FileTree
+#    _onoff_super = FileTree
 
     def __init__(self, **kwargs):
         """Takes kwargs mode (as OnOffObject object), root_path (as a FileTree)
@@ -100,10 +98,10 @@ class FilePropTree(OnOffObject):
         (This delays connecting to the db as much as possible.)"""
         self._enter_count = 0 # Context manager entry count.
         self.db = None
-        mode = kwargs.get("mode", "online") # Default is online.
-        assert mode in ("online", "offline")
+        mode = kwargs.get("mode", ONLINE) # Default is online.
+        assert mode in (ONLINE, OFFLINE)
         root_path = kwargs.pop("root_path")
-        if mode == "online":
+        if mode == ONLINE:
             assert os.path.isdir(root_path)
         else:
             assert root_path is None
@@ -121,12 +119,12 @@ class FilePropTree(OnOffObject):
                 mode=self.mode, **kwargs.get("dbkwargs", {}))
             self.set_dbmanager(dbobj)
 
-    def set_dbmanager(self, dbmanager):
-        assert self.mode == dbmanager.mode
-        self.db = dbmanager
-        self.add_exclude_patterns(dbmanager.get_exclude_patterns())
-        if self.mode == "online":
-            dbdir = os.path.dirname(dbmanager.dbpath)
+    def set_dbmanager(self, db):
+        assert self.mode == db.mode
+        self.db = db
+        self.add_glob_patterns(db.get_glob_patterns())
+        if self.mode == ONLINE:
+            dbdir = os.path.dirname(db.dbpath)
             if  dbdir != self.root_path:
                 self._id_computer = make_id_computer(dbdir)
 
@@ -145,10 +143,10 @@ class FilePropTree(OnOffObject):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._enter_count -= 1
-        res = False
+        res = False # Do not suppress any exception.
         if self._enter_count == 0:
             res = res or self.db.__exit__(exc_type, exc_val, exc_tb)
-        return res # Do not suppress any exception.
+        return res
 
     def get_prop(self, f_obj):
         """Return a file property value, from db if possible, updating db if
@@ -195,10 +193,11 @@ class FilePropTree(OnOffObject):
             res = self.db.get_prop_metadata(f_obj.file_id)
         except PropDBError as exc:
             msg = "reading db for id %d: %s" % (f_obj.file_id, str(exc))
-            raise_from(TreeError(msg), exc)
+            raise TreeError(msg) from exc
         return res
 
-class FilePropTreeOffline(FilePropTree):
+#class FilePropTreeOffline(FilePropTree):
+class FilePropTreeOffline(FilePropTree, metaclass=onofftype):
     """The file tree is stored in the property database along with up-to-date
     property values.
     """
@@ -216,20 +215,20 @@ class FilePropTreeOffline(FilePropTree):
             msg = "no offline db entry for file id %d" % (f_obj.file_id)
             raise TreeError(msg)
 
-    def _gen_dir_entries_from_source(self, dir_obj, exclude_matcher=None):
+    def _gen_dir_entries_from_source(self, dir_obj, glob_matcher=None):
         """Yield (basename, obj_id, is_file, rawmetadata)."""
         dir_id = dir_obj.dir_id
         for (obj_basename, obj_id, is_file) in self.db.get_dir_contents(dir_id):
             obj_type = FileItem if is_file else DirItem
-            if obj_type == FileItem and exclude_matcher and \
-                exclude_matcher.match_file_bname(obj_basename):
+            if obj_type == FileItem and glob_matcher and \
+                glob_matcher.exclude_file_bname(obj_basename):
                 pr.info(
                     "excluded file %s at %s" % (
                         fstr2str(obj_basename),
                         self.printable_path(dir_obj.get_relpath())))
                 yield (obj_basename, None, ExcludedItem, None)
-            elif obj_type == DirItem and exclude_matcher and \
-                exclude_matcher.match_dir_bname(obj_basename):
+            elif obj_type == DirItem and glob_matcher and \
+                glob_matcher.exclude_dir_bname(obj_basename):
                 pr.info(
                     "excluded dir %s at %s" % (
                         fstr2str(obj_basename),
@@ -238,7 +237,7 @@ class FilePropTreeOffline(FilePropTree):
             else:
                 yield (obj_basename, obj_id, obj_type, obj_id)
 
-    def _new_file_obj(self, obj_id, rawmetadata):
+    def _new_file_obj(self, obj_id, _rawmetadata):
         """Return new file object with given id, fill in metadata from
         raw_metadata. This method is set as _new_file_obj when mode is offline.
         """
@@ -251,7 +250,8 @@ class FilePropTreeOffline(FilePropTree):
         return "{%s}%s" % \
                 (pprint(fstr2str(self.db.dbpath)), pprint(fstr2str(rel_path)))
 
-class FilePropTreeOnline(FilePropTree):
+#class FilePropTreeOnline(FilePropTree):
+class FilePropTreeOnline(FilePropTree, metaclass=onofftype):
     """A FilePropertyTree that scans a mounted disk file tree and reads and
     updates a persistent cache database.
     """
@@ -271,10 +271,10 @@ class FilePropTreeOnline(FilePropTree):
         except RuntimeError as exc:
             msg = "getting prop from source (id %d, %s): %s." % \
                   (f_obj.file_id,
-                  list(fstr2str(frp) for frp in f_obj.relpaths),
-                  str(exc))
+                   list(fstr2str(frp) for frp in f_obj.relpaths),
+                   str(exc))
             self._rm_file(f_obj)
-            raise_from(TreeError(msg), exc)
+            raise TreeError(msg) from exc
         f_obj.prop_value = prop_value
         f_obj.prop_metadata = f_obj.file_metadata
         try:
@@ -295,7 +295,7 @@ class FilePropTreeOnline(FilePropTree):
         try:
             self.db.delete_ids(file_obj.file_id)
         except PropDBError as exc:
-            raise_from(RuntimeError(str(exc)), exc)
+            raise RuntimeError(str(exc)) from exc
         self.get_prop(file_obj)
 
     def db_update_all(self):
@@ -360,19 +360,24 @@ class FilePropTreeOnline(FilePropTree):
         """
         assert self._use_metadata
         self.scan_subtree() # Scan the full tree.
+        if os.path.samefile(self.root_path, os.path.dirname(self.db.dbpath)):
+            filter_fn = None
+        else:
+            def filter_fn(fid):
+                return fid in self._id_to_file # Allow using a parent dir database.
         with target_dbmanager:
-            self.db.merge_prop_values(target_dbmanager)
+            self.db.merge_prop_values(target_dbmanager, filter_fn=filter_fn)
             target_dbmanager.rm_offline_tree()
             with pr.ProgressPrefix("saving hashes: "):
                 tot_items = len(self._id_to_file)
                 cur_item = 0
-                for f_id, f_obj in iteritems(self._id_to_file):
+                for f_id, f_obj in self._id_to_file.items():
                     pr.progress_percentage(cur_item, tot_items)
                     cur_item += 1
                     try:
                         target_dbmanager.set_offline_metadata(
                             f_id, f_obj.file_metadata)
-                    except DBError as exc:
+                    except PropDBError as exc:
                         pr.error("saving offline metadata for id %d: %s" \
                             % (f_id, str(exc)))
             pr.progress("saving tree")

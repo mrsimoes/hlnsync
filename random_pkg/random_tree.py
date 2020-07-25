@@ -13,8 +13,8 @@ import shutil
 from lnsync_pkg.p23compat import fstr
 from lnsync_pkg.filetree import FileTree
 
-DIR_PREFIX = fstr("d-")
-FILE_PREFIX = fstr("f-")
+DIR_PREFIX = "d-"
+FILE_PREFIX = "f-"
 
 class FileTreeCreator(FileTree):
     """

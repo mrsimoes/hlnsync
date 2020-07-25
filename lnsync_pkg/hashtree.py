@@ -10,27 +10,22 @@ values.
 __init accepts new size_as_hash kw argument.
 """
 
-from __future__ import print_function
-
-from six import integer_types, raise_from
 
 from lnsync_pkg.p23compat import fstr2str
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.blockhash import hash_file
-from lnsync_pkg.onlineoffline import OnOffObject
+from lnsync_pkg.onofftype import onofftype, OFFLINE
 from lnsync_pkg.proptree import \
     FilePropTree, PropDBManager, TreeError, PropDBError, PropDBValueError
 
-class EmptyDBManager(OnOffObject):
-    _onoff_super = PropDBManager
+class EmptyDBManager(PropDBManager, metaclass=onofftype):
     def __enter__():
         pass
+
     def __exit__(*args):
         return False
 
-class FileHashTree(OnOffObject):
-    _onoff_super = FilePropTree
-
+class FileHashTree(FilePropTree, metaclass=onofftype):
     def __init__(self, **kwargs):
         size_as_hash = kwargs.get("size_as_hash", False)
         self._size_as_hash = size_as_hash
@@ -41,12 +36,11 @@ class FileHashTree(OnOffObject):
 
     def set_dbmanager(self, db):
         super(FileHashTree, self).set_dbmanager(db)
-        if db.mode == "offline" or  not self._size_as_hash:
+        if db.mode == OFFLINE or not self._size_as_hash:
             self._print_progress = \
                 "%s [%s]" % (fstr2str(self.db.dbpath), db.mode)
 
     def __enter__(self):
-        """Open a database only in online mode and when not using s"""
         assert self.db
         if self._print_progress is not None:
             pr.info("opening %s" % (self._print_progress,))
@@ -70,8 +64,7 @@ class FileHashTree(OnOffObject):
         """
         return ListContextManager(cls, init_args_list)
 
-
-class FileHashTreeOnline(FileHashTree):
+class FileHashTreeOnline(metaclass=onofftype):
     def prop_from_source(self, file_obj):
         """Recompute and return prop for source file at relpath. (Online mode
         only.)
@@ -83,8 +76,8 @@ class FileHashTreeOnline(FileHashTree):
         try:
             val = hash_file(abspath)
         except OSError as exc:
-            raise_from(RuntimeError("while hashing"), exc)
-        if not isinstance(val, integer_types):
+            raise RuntimeError("while hashing") from exc
+        if not isinstance(val, int):
             raise  RuntimeError("bad property value %s" % (val,))
         return val
 
@@ -101,12 +94,12 @@ class ListContextManager(object):
     def __enter__(self):
         for kwargs in self.init_args_list:
             obj = self.classref(**kwargs)
-            obj.__enter__()
-            self.objs_entered.append(obj)
+            val = obj.__enter__()
+            self.objs_entered.append(val)
         return self.objs_entered
 
     def __exit__(self, exc_type, exc_value, traceback):
-        res = False # By default, the exception was not handled here.
+        res = False # By default, the exception is not suppressed.
         for obj in reversed(self.objs_entered):
             res = res or obj.__exit__(exc_type, exc_value, traceback)
         return res

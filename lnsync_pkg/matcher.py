@@ -22,10 +22,8 @@ import itertools
 import copy
 from collections import namedtuple
 
-from six import integer_types
-
 from lnsync_pkg.human2bytes import bytes2human
-from lnsync_pkg.p23compat import fstr, fstr2str, zip, imap
+from lnsync_pkg.p23compat import fstr, fstr2str
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.onegraph import OneGraph
 from lnsync_pkg.backtracker import SearchState, do_search
@@ -285,6 +283,11 @@ class State(SearchState):
         eliminating common trivial cases."""
         sz_src_files = self.trees.src.size_to_files(file_sz)
         sz_tgt_files = self.trees.tgt.size_to_files(file_sz)
+        if len(sz_src_files) == 1 and len(sz_tgt_files) == 1 \
+            and set(sz_src_files[0].relpaths) == set(sz_tgt_files[0].relpaths):
+            # If there are single source and target files for this size,
+            # and the paths are the same, do nothing (no hashing required).
+            return
         src_hashes = {self.trees.src.get_prop(f) for f in sz_src_files}
         tgt_hashes = {self.trees.tgt.get_prop(f) for f in sz_tgt_files}
         sz_common_hashes = set.intersection(src_hashes, tgt_hashes)
@@ -434,8 +437,7 @@ class State(SearchState):
         mv/ln/unln elementary operations, with some possibly creating mv cycles
         when combined with other PathOps for other file ids.
         """
-        assert isinstance(src_id, integer_types) \
-            and isinstance(tgt_id, integer_types), \
+        assert isinstance(src_id, int) and isinstance(tgt_id, int), \
             "_gen_pathops: bad ids (%s,%s)." % (src_id, tgt_id)
         src_paths = self.trees.src.id_to_file(src_id).relpaths
         tgt_paths = self.trees.tgt.id_to_file(tgt_id).relpaths
@@ -530,9 +532,9 @@ class State(SearchState):
                 return iter([(mt_ids_1, mt_ids_2)])
             else:
                 return zip(itertools.repeat(mt_ids_1 + unmt_ids_1), \
-                           imap(lambda permtail: mt_ids_2 + list(permtail),
-                                itertools.permutations(
-                                    unmt_ids_2, len(unmt_ids_1))))
+                           map(lambda permtail: mt_ids_2 + list(permtail),
+                               itertools.permutations(unmt_ids_2,
+                                                      len(unmt_ids_1))))
         if len(src_ids) == 1 and len(tgt_ids) == 1:
             res = iter([]) # Nothing to add
         elif len(src_ids) <= len(tgt_ids):
@@ -542,7 +544,7 @@ class State(SearchState):
         else:
             def reverse_pair(pair):
                 return (pair[1], pair[0])
-            res = imap(
+            res = map(
                 reverse_pair,
                 match_either_way(
                     tgt_ids, self.trees.tgt, src_ids, self.trees.src)

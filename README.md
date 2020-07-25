@@ -1,32 +1,50 @@
 # Overview
 
-_lnsync_ provides unidirectional sync-by-rename of locally mounted directories, with support for hard links, without copying or deleting file data. To compare files, files hashes are computed and stored in a local database. Using these file hashes, _lnsync_ also provides other functions, such as finding duplicate files.
+_lnsync_ provides unidirectional sync-by-rename of local directories with support for hard links, but with no copying or deleting file data.
 
-This tool allows arbitrary file renaming and moving in the source file tree to be quickly replicated in the target without copying any file data. It may used as a preprocessing step for other sync tools, such as _rsync_.
+Files are identified by content, by file hash. Using those hashes, other features are provided, such as finding duplicate files.
 
-## Hard Link Support
+File renaming, moving, and linking in the source can be quickly replicated in the target.
 
-On many file systems (e.g. ext3/4, NTFS, btrfs), a file may be reached via multiple file paths, which function as aliases. A new path created for an existing file is a _hard link_, but all such aliases are on an equal footing, so each may be called a hard link. Removing the last hardlink to a file means deleting that file.
+_lnsync_ may be used as a preprocessing step for other sync tools such as _rsync_, which do copy and delete file data.
 
-If both hard links are created or removed in the source (without deleting files), and the target supports hard linking, then _lnsync_ can create and removing hardlinks as required on the target when syncing. As before, this is done without copying or deleting file data.
+##  Hard Link Support
 
-##  Syncing
+On some file systems (e.g. ext3/4, NTFS, btrfs), the same file may be reached by multiple file paths, which function as aliases.
 
-When you rename/move in the source file tree, _lnsync_  makes a best-effort to sync the target by only renaming files and generally creating/removing hard links on the target, without deleting or copying any file data. Empty directories on the target which do not exist on the source are also removed.
+A new path created for an existing file is a _hard link_, but all such aliases are on an equal footing, so each may be called a hard link. Removing the last hard link to a file means deleting that file.
 
-File content is compared using xxHash (a fast, non-cryptographic hash function). Hash values are stored in a single-file database at the top-level directory of each file tree. The hash value database is a single file at the top directory of processed trees, with basename matching `lnsync-[0-9]+.db`. (Only one such file should exist there.) These files are ignored by all _lnsync_ operations, and care should be taken not to sync them with other tools.
+Arbitrary linking/delinking (but not deleting) in the source can also be easily easily replicated in the target, so long as the target supports linking.
 
-File modification times are used to detect stale hash values and are not synced. File ownership and permissions are ignored: files which cannot be read are skipped.
+##  Syncing and the Hash Database
 
-## File Searching
+_lnsync_  makes a best-effort to sync the target to the source by only renaming files and generally creating/removing hard links on the target.
 
-Using file content hashes, _lnsync_ can also find duplicate files (like _fdupes_), and more generally find files according to the which file trees they appear on, compare file trees, and check for changes/bitrot.
+Empty directories on the target which do not exist on the source are also removed.
+
+File content is compared using xxHash (a fast, non-cryptographic hash function). Hash values are stored in a single-file database at the top-level directory of each file tree.
+
+This hash value database is a single file at the top directory of processed trees, with basename matching `lnsync-[0-9]+.db`. (Only one such file should exist there.) These files are ignored by all _lnsync_ operations, and care should be taken not to overwrite them when syncing with other tools.
+
+File modification times are used to detect stale hash values. Modification times are not synced. File ownership and permissions are ignored: files which cannot be read are skipped.
+
+Symbolic links are skipped.
 
 ## Offline File Trees
 
-_lnsync_ can save the structure of a file tree under a local directory and save it in a single-file database. These offline file trees can be used in most _lnsync_ commands in place of an local directory, even as the source in a sync command.
+_lnsync_ can save the file tree structure (with no file content) of a local directory to a single-file database. These offline trees can be used in most _lnsync_ commands in place of an local directory, e.g. as the source in a sync command.
 
-# Alternative Sync Solutions for Linux
+## File Searching
+
+Using file hashes, _lnsync_ can also find duplicate files (like _fdupes_), and more generally find files according to the which file trees they appear on, compare file trees, and check for file content changes/bitrot.
+
+It is also possible to search files by pathname.
+
+## Installing
+
+Install the latest version from the PyPI repository with `pip install -U lnsync` or clone the repo with `git clone https://github.com/mrsimoes/lnsync.git` and run `python setup.py install`.
+
+## Alternative Sync Solutions for Linux
 
 Some of the many tools for syncing with rename detection:
 
@@ -42,15 +60,7 @@ Some of the many tools for syncing with rename detection:
 
 In addition to syncing, _lnsync_ allows using the file hash database to search for files according to a variety of criteria.
 
-# Installation and Quickstart
-
-## Installing
-
-Install the latest version from the PyPI repository with `pip install -U lnsync`.
-
-Or clone the repo with `git clone https://github.com/mrsimoes/lnsync.git` and run `python setup.py install`.
-
-## Examples
+# Example Usage
 
 If you have your photo archive at `/home/you/Photos` and your backup is at `/mnt/disk/Photos`, run `lnsync sync -n /home/you/Photos /mnt/disk/Photos` for a dry-run, to see which sync operations would be performed. To sync, ommit the `-n` switch.
 
@@ -60,21 +70,27 @@ To quickly obtain an _rsync_ command that will complete syncing, skipping `lnsyn
 
 Finally, to check the target is in-sync by recursively comparing it to source, run `lnsync cmp /home/you/Photos /mnt/disk/Photos`.
 
-To find duplicate files on the Photos directory, run `lnsync fdupes /home/you/Photos`. Use `-z` to compare by size only. Use `-H` to count different hardlinks to the same file as distinct files. If this option is not given, for each multiple-linked with other duplicates, a path is arbitrarily picked and printed.
+To find duplicate files on the Photos directory, run `lnsync fdupes /home/you/Photos`. Use `-z` to compare by size only. Use `-H` to count different hard links to the same file as distinct files. If this option is not given, for each multiple-linked with other duplicates, a path is arbitrarily picked and printed.
 
 To find all files in Photos which are not in the backup (under any name): `lnsync onfirstonly /home/you/Photos /mnt/disk/Photos`. 
 
-To sync the subdir `/home/you/Photos/Best` to your digital picture frame, using the database hashes at `/home/you/Photos`: `lnsync sync /home/you/Photos/Best --root=/home/you/Photos /mnt/eframe/`.
+To find all files with jpg extension, `lnsync search /home/you/Photos "*.jpg"`.
+
+To sync the subdir `/home/you/Photos/Best` to your digital picture frame, using the hash database at `/home/you/Photos`: `lnsync sync /home/you/Photos/Best --root=/home/you/Photos /mnt/eframe/`.
+
+To have any operation on a subdir of `/home/you/Photos` use the hash database at `/home/you/Photos`, include the option `root=/home/you/Photos` under section `/home/you/Photos/**` of your config file. (See Configuration Files below.)
 
 # Command Reference
+
 All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [<cmd-parameters>]`.
 
 ## Syncing
+
 - `lnsync sync [options] <source> <target>` syncs a target dir from a source dir (or offline tree).
 
- - First, target files are matched to source files. Each matched target file is associated to a single source file. If either file system supports hardlinks, a file may have multiple pathnames. _lnsync_ will not complain if the match is not unique or some files are not matched on either source and/or target.
+ - First, target files are matched to source files. Each matched target file is associated to a single source file. If either file system supports hard links, a file may have multiple pathnames. _lnsync_ will not complain if the match is not unique or some files are not matched on either source and/or target.
 
- - For each matched target file, its pathnames are made to match those of the corresponding source file, by renaming, deleting, or creating hardlinks. New intermediate subdirectories are created as needed on the target and directories which become empty on the target are removed.
+ - For each matched target file, its pathnames are made to match those of the corresponding source file, by renaming, deleting, or creating hard links. New intermediate subdirectories are created as needed on the target and directories which become empty on the target are removed.
 
  - `-z` Match files by size only. In this case, hash databases are not created or updated.
 
@@ -82,9 +98,12 @@ All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [
 
  - `-n` Dry-run, just show which operations would be performed.
 
- - `--exclude=<glob_pattern>` Exclude source files and directories by glob pattern. Patterns are interpreted similarly to `rsync --exclude=<glob_pattern> source/ target`, but with `*` matching across slashes and no `**` pattern. This option may be repeated, with each `--exclude` option affecting all file trees. An initial slash anchors the pattern to the file tree root. A trailing slash means the pattern applies only to directories. There is a corresponding `--include`. Some commands accept `--exclude-once=<pattern>` and `--include-once=<pattern>`, which apply only to the next file tree following the switch and gain precedence over global patterns.
-
-To sum up, a file or directory is excluded if it matches an `exclude` pattern before matching any `include` pattern.
+ - `--exclude <glob_pattern> ... <glob_pattern>` Exclude source files and directories by glob patterns. There is a corresponding `--include` and these are interpreted as in `rsync --exclude <pattern> source/ target` (beware, compatability has not been fully tested).
+ -- A file or directory is excluded if it matches an `exclude` pattern before matching any `include` pattern.
+ -- Each `--exclude` and `--include` option applies to all file trees in the command.
+ -- Some commands accept `--exclude-once=<pattern>` and `--include-once=<pattern>`, which apply only to the next file tree following the switch and gain precedence over global patterns.
+ -- An initial slash anchors the pattern to the corresponding file tree root.
+ -- A trailing slash means the pattern applies only to directories. 
 
 - `lnsync rsync [options] <tree> <dir> [rsync-options]` Prints an _rsync_ command that would sync target dir from source, skipping _lnsync_ database files. Source may be a dir or an offline tree. Check the default _rsync_ options provided are what you want. To also run the _rsync_ command, use the `-x` switch.
 
@@ -102,12 +121,20 @@ To sum up, a file or directory is excluded if it matches an `exclude` pattern be
 - `lnsync cmp <tree1> <tree2>` Recursively compares two file trees. Compares files at each path, does not compare the hard link structure. Accepts `--exclude=<pattern>` options.
 - `lnsync fdupes [-h] [<tree>]+` Find files duplicated anywhere on the given trees.
 - `lnsync onall [<tree>]+`, `lnsync onfirstonly [<tree>]+`, `lnsync onlastonly [<tree>]+` Find files as advertised. Some options: `-M` prunes by maximum size; `-0` prunes empty files; `-1` prints each group of files in a single line, separated by spaces and with escaped backslashes and spaces, like `fdupes`; `-s` sorts output by size. Use `-H` to consider multiple links to the same file as distinct files; if this option is not used, print a single, arbitrarily picked path for each multiple-linked file found to satisfy the condition of the command.
+- `lnsync search <tree> [<globpat>]+` Find files one of whose relative paths matches one of the given glob patterns (which are as in `--exclude`).
 
+## Other Commands
 - `lnsync check [<tree>] [<path>]*` Recompute hashes for given files and compare to the hash stored in the database, to check for changes/bitrot.
 
-## Configuration files
+## Configuration Files
 
-An INI-style configuration file is searched at `./lnsync.cfg` and `~/.lnsync.cfg`, in that order. In its `DEFAULT` section, default values may be set there for command-line options `sort`, `hardlinks`, `sameline`, `dbprefix`, `bysize`, `maxsize`, `skipempty`, `dry_run`. Each section whose name matches a directory (resp. file) may contain `exclude` and `include` options whose values are space-separated patterns applied to taht online (resp. offline) file tree, after command-line exclude/include patterns. The `DEFAULT` section may also contain similar `exclude` and `include` options, applying to all trees after all other exclude/include patterns.
+Optional command-line arguments are read from any INI-style configuration files at `./lnsync.cfg`, `~/lnsync.cfg`, and `~/.lnsync.cfg`. In its `DEFAULT` section, in entries of the form `key = value`, the `key` can match the short or long option name (with intermediate minus replaced by underscores, e.g. `n` or `dry_run`).
+
+For options taking no values, the `value` can be either empty or be a count of how many times to apply that option. For options  taking more than one value (e.g. `exclude`), multiple values may be separated by line breaks. values may be set there for command-line options `sort`, `hardlinks`, `sameline`, `dbprefix`, `bysize`, `maxsize`, `skipempty`, `dry_run`.
+
+The `DEFAULT` section may contain `exclude` and `include` options, applying to all trees. Sections whose name glob-matches a directory (or offline tree file) may contain `exclude` and `include` options that applied only to that location, before all other exclude/include patterns.
+
+To specify another configuration file altogether, `--config FILENAME`. To avoid all config files, `--no-config`.
 
 # Origin, Status, and Future Development
 
@@ -119,7 +146,6 @@ You can support this project with bitcoin at [17HS828pkQMiXZGy7UNbA49TYCz7LAQ2ze
 
 This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you are welcome to redistribute it under certain conditions. See the GNU General Public Licence v3 for details.
 
-
 ## Caveats and Limitations
 - Works only on locally mounted directories, no support whatsoever for remote servers.
 - Depends on mtime to detect file content changes.
@@ -129,11 +155,14 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 - Supports Linux only.
 
 ## Possible Improvements
+
+- argparsecomplete support
+- Find all hard links (aliases) to a given file.
 - Make `--include` and `--exclude` patterns more compatible with `rsync`.
-- Extend `cmp` to take hard links into account.
+- Extend `cmp` to take hard links into account and generally extend each command to either work on files or paths.
 - Filenames are NOT converted to Unicode. To allow using offline database across systems, conversion is required.
 - Detect renamed directories to obtain a more compact sync schedule.
-- Use multiple CPUs to hash files in parallel.
+- Use coroutines to scan trees and hash files in parallel.
 - Support partial hashes for quicker comparison of same-size files.
 - Further optimize the sync algorithm, though it has been working well in practice.
 - Support for checking for duplicates by actual content, not just hash.
@@ -142,6 +171,15 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 
 ## Release Notes
 
+- Version 0.5.1
+ - Search files by file path glob pattern.
+ - Multiple patterns on --exclude.
+ - More powerful configuration files.
+ - `--root` now allowed in `mkoffline` and `rehash`.
+ - Major rewrite of the command line and config file parsers.
+ - Optimize onfirstonly and sync to do less hashing.
+ - Fix bugs in `--root`, `cmp`, `check`, and more.
+ - Wildcards in config section names.
 - Version 0.4.0
  - Drop Python 2 compatibility.
  - Add config files.
@@ -149,7 +187,7 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 - Version 0.3.8
  - Less hashing on `onfirstonly`.
  - Sort file search output by size.
- - Adjusted user output levels.
+ - Adjust user output levels.
 - Version 0.3.7
  - Bug fix on reading offline trees.
  - Change output levels and some messages.

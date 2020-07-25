@@ -13,7 +13,6 @@ On backtracking, the extension is undone by applying the delta 'up'.
 from __future__ import print_function
 
 import abc
-import six
 
 import lnsync_pkg.printutils as pr
 
@@ -58,7 +57,7 @@ def do_search(state):
             pr.debug("backtracker: success")
             return True # Found a valid leaf.
         try:
-            next_delta = six.next(down_deltas_iter)
+            next_delta = next(down_deltas_iter)
         except StopIteration:
             # No more children: backtrack, if possible.
             if originating_delta is None:
@@ -128,7 +127,7 @@ if __name__ == "__main__":
     import sys
     try:
         assert len(sys.argv) == 2, "Wrong number of arguments."
-        board_size = int(sys.argv[1]),
+        board_size = int(sys.argv[1])
         assert board_size > 0, "Board size must be >= 1."
     except Exception as exc:
         print(exc)

@@ -4,14 +4,14 @@
 
 # The package name, which is also the "UNIX name" for the project.
 package = 'lnsync'
-version = '0.4.0'
-description = 'Sync-by-rename local directories with hard link support, fast fdupes, and more.'
+version = '0.5.1'
+description = 'Sync by content with hard link support, fast fdupes, and more.'
 summary = description
 project = 'lnsync dir sync tool'
 project_no_spaces = project.replace(' ', '')
 url = 'https://github.com/mrsimoes/lnsync'
 download_url = 'https://github.com/mrsimoes/lnsync/archive/v%s.tar.gz' % version
-keywords = 'sync rsync fast rename backup links hardlinks fdupes'
+keywords = 'sync rsync fast rename backup link hardlink fdupes'
 authors = ['Miguel Simoes']
 authors_string = ', '.join(authors)
 emails = ['miguelrsimoes@yahoo.com']

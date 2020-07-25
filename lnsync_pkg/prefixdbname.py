@@ -8,15 +8,10 @@ Uniquely specify a database file at dirpath by file prefix.
 """
 
 import os
-import fnmatch
 import random
 import re
 
 from lnsync_pkg.p23compat import fstr, fstr2str
-from lnsync_pkg.sqlpropdb import SQLPropDBManager
-
-def mk_online_db(dir_path, db_basename):
-    return SQLPropDBManager(os.path.join(dir_path, db_basename), mode="online")
 
 def mode_from_location(location, mandatory_mode=None):
     """Given a location path for a file tree, decide if it is an offline
