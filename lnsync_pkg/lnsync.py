@@ -1176,7 +1176,7 @@ def main():
             handler_exit_code = handler_fn()
         except Exception as exc:
             if __debug__:
-                print(type(exc), exc)
+                pr.debug("%s %s", type(exc), exc)
             raise
         if handler_exit_code is not None:
             exit_error = handler_exit_code

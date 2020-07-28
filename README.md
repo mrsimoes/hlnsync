@@ -2,7 +2,7 @@
 
 _lnsync_ provides unidirectional sync-by-rename of local directories with support for hard links, but with no copying or deleting file data.
 
-Files are identified by content, by file hash. Using those hashes, other features are provided, such as finding duplicate files.
+Files are identified by content, using file hashes. By means of those hashes, other features are provided, such as finding duplicate files.
 
 File renaming, moving, and linking in the source can be quickly replicated in the target.
 

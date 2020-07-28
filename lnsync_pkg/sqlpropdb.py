@@ -177,6 +177,9 @@ class SQLPropDBManager(PropDBManager, metaclass=onofftype):
                 db_ver = db_ver_rec[0]
             else:
                 db_ver = 0
+        except sqlite3.Error as exc:
+            msg = "cannot open DB at %s" % fstr2str(db_path)
+            raise PropDBError(msg) from exc
         finally:
             if sql_cx:
                 sql_cx.close()
