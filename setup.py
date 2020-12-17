@@ -36,6 +36,7 @@ setup(
        'Programming Language :: Python :: 3.6',
        'License :: OSI Approved :: GNU General Public License v3 (GPLv3)',
        'Topic :: System :: Archiving :: Backup',
+       'Topic :: System :: Archiving :: Mirroring',
        'Topic :: Utilities',
 	],
 )

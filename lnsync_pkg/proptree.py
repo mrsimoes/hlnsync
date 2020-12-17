@@ -9,8 +9,8 @@ value associated to each file in a file tree.
 
 On request, the property valued is read from persistent database cache, if it
 has been stored and the file hasn't been modified since then (by metadata stamp,
-i.e. size and mtime). Otherwise, the property valued is recomputed and stored
-in the persistent cache.
+i.e. size and mtime). Otherwise, the property valued is recomputed (method
+prop_from_source) and stored in the persistent cache.
 
 There are two modes of operation: ONLINE and OFFLINE.
 
@@ -49,34 +49,40 @@ Create multiple trees at once using:
         <body>
 """
 
-from __future__ import with_statement, print_function
-
 import os
 import abc
+import concurrent.futures
 
 from lnsync_pkg.p23compat import fstr2str
 
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.fileid import make_id_computer
-from lnsync_pkg.onofftype import onofftype, ONLINE, OFFLINE
+from lnsync_pkg.miscutils import ListContextManager
+from lnsync_pkg.modaltype import onofftype, ONLINE, OFFLINE
 from lnsync_pkg.filetree import \
     FileTree, FileItem, DirItem, ExcludedItem, TreeError
 
-class PropDBError(Exception):
+class PropDBException(Exception):
     pass
 
-class PropDBValueError(PropDBError):
+class PropDBError(PropDBException):
+    pass
+
+class PropDBNoValue(PropDBException):
+    pass
+
+class PropDBStaleValue(PropDBException):
     pass
 
 class PropDBManager(metaclass=onofftype):
-#    _onoff_super = OnOffObject
     def get_glob_patterns(self):
         return []
     def __init__(self, *args, **kwargs):
         pass
 
 class FileItemProp(FileItem):
-    """A file tree object that records a file property value along with a
+    """
+    A file tree object that records a file property value along with a
     metadata stamp, ie file size, mtime and ctime.
     """
     __slots__ = "prop_value", "prop_metadata"
@@ -86,20 +92,35 @@ class FileItemProp(FileItem):
         self.prop_metadata = None
 
 class FilePropTree(FileTree, metaclass=onofftype):
-    """A file tree providing persistent cache of values for a file property.
     """
-#    _onoff_super = FileTree
+    A file tree providing persistent cache of values for a file property.
+    """
+    @classmethod
+    def scan_trees_async(cls, *trees):
+        if False:
+            for t in trees:
+                t.scan_subtree()
+            return
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(trees)) as executor:
+            def scanner(t):
+                pr.print("Scanning ", tree)
+                t.scan_subtree()
+                pr.print("Done ", tree)
+            for tree in trees:
+                executor.submit(scanner, tree)
 
     def __init__(self, **kwargs):
-        """Takes kwargs mode (as OnOffObject object), root_path (as a FileTree)
-        plus dbmaker, a callable that accepts kw args dbpath, and root.
+        """
+        Take kwargs mode (as OnOffObject object), root_path (as a FileTree)
+        plus dbmaker, a callable that accepts kw args dbpath, root,
+        and dbkwargs, args to be fed to the db factory.
         If dbmaker is not none, it is called with root, mode and **dbkwargs to
         return a database manager object.
-        (This delays connecting to the db as much as possible.)"""
+        (This delays connecting to the db as much as possible.)
+        """
         self._enter_count = 0 # Context manager entry count.
         self.db = None
-        mode = kwargs.get("mode", ONLINE) # Default is online.
-        assert mode in (ONLINE, OFFLINE)
+        mode = self.mode
         root_path = kwargs.pop("root_path")
         if mode == ONLINE:
             assert os.path.isdir(root_path)
@@ -130,12 +151,16 @@ class FilePropTree(FileTree, metaclass=onofftype):
 
     @abc.abstractmethod
     def prop_from_source(self, file_obj):
-        """Should obtain file property value from tree source.
-        Raise RuntimeError if something goes wrong."""
+        """
+        Obtain file property value from tree source.
+        Raise RuntimeError if something goes wrong.
+        """
         pass
 
     def __enter__(self):
-        """Create the SQL db manager, scan root directory."""
+        """
+        Create the SQL db manager, scan root directory.
+        """
         self._enter_count += 1
         if self._enter_count == 1: # First entered.
             self.db.__enter__()
@@ -148,29 +173,50 @@ class FilePropTree(FileTree, metaclass=onofftype):
             res = res or self.db.__exit__(exc_type, exc_val, exc_tb)
         return res
 
+    @classmethod
+    def listof(cls, init_args_list):
+        """
+        Return a context manager that will create/destroy a list of classref
+        initialized by the given list of kwargs.
+        """
+        return ListContextManager(cls, init_args_list)
+
     def get_prop(self, f_obj):
-        """Return a file property value, from db if possible, updating db if
-        needed. Raise TreeError if the value could not be obtained from
-        database or from source.
+        """
+        Return the file property value, if at all possible.
+        Otherwise, raise an appropriate PropDBException.
+        Do not delete stale DB values.
         """
         assert f_obj is not None, "get_prop: no f_obj"
         if f_obj.prop_value is not None:
             return f_obj.prop_value
-        res = self.db_get_uptodate_prop(f_obj, delete_stale=False)
-        if res is not None:
-            f_obj.prop_value = res
-        return res
+        f_obj.prop_value = self.db_get_uptodate_prop(f_obj, delete_stale=False)
+        return f_obj.prop_value
+
+    def preget_props_async(self, f_obj_list):
+        """
+        Use threads to prefetch all properties in parallel.
+        Nothing is returned, but prop values should be cached.
+        """
+        if sqlite3.threadsafety == 0:
+            return
+        def prop_getter(f_obj):
+            self.get_prop(f_obj)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(f_obj_list)) as executor:
+            for f_obj in f_obj_list:
+                executor.submit(prop_getter, f_obj)
 
     def db_get_uptodate_prop(self, f_obj, delete_stale):
-        """Return either a property value, if current, or None if the prop
-        value is either not in the db, or its metadata stamp (db mtime + size)
-        does not match the file metadata.
-        If the prop value is stale, delete the stale entry from the db.
-        May raise TreeError. """
-        res = self.db_get_stored_prop(f_obj)
-        if res is None:
-            return None
-        prop_val, prop_md = res
+        """
+        Return either a property value, if on db and current.
+        Raise PropDBNoValue or PropDBStaleValue if the value is either not in
+        the db, or is stale: its metadata stamp (db mtime + size) does not match
+        the file metadata.
+        If the file property value is stale, optionally erase the stale entry
+        from the db.
+        May also raise PropDBError.
+        """
+        prop_val, prop_md = self.db.get_prop_metadata(f_obj.file_id)
         if prop_md == f_obj.file_metadata:
             f_obj.prop_value = prop_val
             f_obj.prop_metadata = prop_md
@@ -183,42 +229,33 @@ class FilePropTree(FileTree, metaclass=onofftype):
                 str(delete_stale))
             if delete_stale:
                 self.db.delete_ids(f_obj.file_id)
-            return None
+            raise PropDBStaleValue
 
-    def db_get_stored_prop(self, f_obj):
-        """Return stored prop value along with property value metadata stamp,
-        as a pair, even if not up-to-date.
-        May raise TreeError. """
-        try:
-            res = self.db.get_prop_metadata(f_obj.file_id)
-        except PropDBError as exc:
-            msg = "reading db for id %d: %s" % (f_obj.file_id, str(exc))
-            raise TreeError(msg) from exc
-        return res
-
-#class FilePropTreeOffline(FilePropTree):
-class FilePropTreeOffline(FilePropTree, metaclass=onofftype):
-    """The file tree is stored in the property database along with up-to-date
+class FilePropTreeOffline(FilePropTree, mode=OFFLINE):
+    """
+    The file tree is stored in the property database along with up-to-date
     property values.
     """
     def db_get_uptodate_prop(self, f_obj, delete_stale):
-        """Return either a property value, if current, or None if the prop
-        value is either not in the db, or its db mtime stamp does not match
-        the file mtime.
-        If the prop value is stale, delete the stale entry from the db.
-        May raise TreeError."""
-        res = super(FilePropTreeOffline, self).db_get_uptodate_prop(
-            f_obj, delete_stale=False)
-        if res is not None:
-            return res
-        else:
-            msg = "no offline db entry for file id %d" % (f_obj.file_id)
-            raise TreeError(msg)
+        """
+        Return the property value.
+        Expect delete_stale should be False.
+        Since the DB is offline, expect delete_stale to be False and raise
+        stale and no-value conditions errors as PropDBError.
+        """
+        assert delete_stale is False
+        try:
+            return super(FilePropTreeOffline,
+                         self).db_get_uptodate_prop(f_obj, delete_stale=False)
+        except (PropDBNoValue, PropDBStaleValue) as exc:
+            raise PropDBError("while offline: " + str(exc))
 
     def _gen_dir_entries_from_source(self, dir_obj, glob_matcher=None):
-        """Yield (basename, obj_id, is_file, rawmetadata)."""
+        """
+        Yield (basename, obj_id, is_file, rawmetadata).
+        """
         dir_id = dir_obj.dir_id
-        for (obj_basename, obj_id, is_file) in self.db.get_dir_contents(dir_id):
+        for (obj_basename, obj_id, is_file) in self.db.get_dir_entries(dir_id):
             obj_type = FileItem if is_file else DirItem
             if obj_type == FileItem and glob_matcher and \
                 glob_matcher.exclude_file_bname(obj_basename):
@@ -238,7 +275,8 @@ class FilePropTreeOffline(FilePropTree, metaclass=onofftype):
                 yield (obj_basename, obj_id, obj_type, obj_id)
 
     def _new_file_obj(self, obj_id, _rawmetadata):
-        """Return new file object with given id, fill in metadata from
+        """
+        Return new file object with given id, fill in metadata from
         raw_metadata. This method is set as _new_file_obj when mode is offline.
         """
         metadata = self.db.get_offline_metadata(obj_id)
@@ -246,74 +284,75 @@ class FilePropTreeOffline(FilePropTree, metaclass=onofftype):
         return file_obj
 
     def printable_path(self, rel_path, pprint=str):
-        """Return a printable version of the tree+relpath."""
+        """
+        Return a printable version of the tree+relpath.
+        """
         return "{%s}%s" % \
                 (pprint(fstr2str(self.db.dbpath)), pprint(fstr2str(rel_path)))
 
-#class FilePropTreeOnline(FilePropTree):
-class FilePropTreeOnline(FilePropTree, metaclass=onofftype):
-    """A FilePropertyTree that scans a mounted disk file tree and reads and
+class FilePropTreeOnline(FilePropTree, mode=ONLINE):
+    """
+    A FilePropertyTree that scans a mounted disk file tree and reads and
     updates a persistent cache database.
     """
     def get_prop(self, f_obj):
-        """Return a file property value, from db if possible, updating db if
-        needed. Raise TreeError if the value could not be obtained from
-        database or from source.
+        """
+        Return a file property value, from db if possible, updating db if
+        needed. Raise PropDBError if the DB cannot be read or TreeError if the
+        value cannot be obtained from source.
         """
         # Try memory and database, without deleting entries.
-        res = super(FilePropTreeOnline, self).get_prop(f_obj)
-        if res is not None:
-            return res
-        if self.db_get_stored_prop(f_obj) is not None: # There is a stale entry.
+        try:
+            return super(FilePropTreeOnline, self).get_prop(f_obj)
+        except PropDBStaleValue:
             self.db.delete_ids(f_obj.file_id)
-        try: # No value on memory or database cache, recompute.
+        except PropDBNoValue:
+            pass
+        # No value on memory or database: recompute and store.
+        try:
             prop_value = self.prop_from_source(f_obj)
-        except RuntimeError as exc:
-            msg = "getting prop from source (id %d, %s): %s." % \
-                  (f_obj.file_id,
-                   list(fstr2str(frp) for frp in f_obj.relpaths),
-                   str(exc))
-            self._rm_file(f_obj)
-            raise TreeError(msg) from exc
+        except Exception as exc:
+            msg = "while getting prop from source (id %d): %s" % \
+                        (f_obj.file_id, str(exc))
+#            self._rm_file(f_obj) # This impedes processing other files in the same dir
+                                  # TODO dynamic exlude
+            raise TreeError(msg)
         f_obj.prop_value = prop_value
         f_obj.prop_metadata = f_obj.file_metadata
         try:
-            self.db.set_prop_metadata(
-                f_obj.file_id,
-                prop_value,
-                f_obj.prop_metadata)
-        except RuntimeError as e:
+            self.db.set_prop_metadata(f_obj.file_id,
+                                      prop_value,
+                                      f_obj.prop_metadata)
+        except Exception as e:
             pr.error(
                 "while saving file id %d prop to db: %s" \
                 % (f_obj.file_id, str(e)))
         return prop_value
 
-    def db_recompute_prop(self, file_obj):
-        """Recompute property value for given file path.
-        Raise RuntimeError if something goes wrong."""
+    def recompute_prop(self, file_obj):
+        """
+        Recompute property value for given file path.
+        """
         file_obj.prop_value = None            # Force prop recompute.
-        try:
-            self.db.delete_ids(file_obj.file_id)
-        except PropDBError as exc:
-            raise RuntimeError(str(exc)) from exc
+        self.db.delete_ids(file_obj.file_id)
         self.get_prop(file_obj)
 
     def db_update_all(self):
-        """Read property value for every file, forcing updates when needed."""
+        """
+        Read property value for every file, forcing updates when needed.
+        """
         error_files = set()
         update_files = set()
         try:
             for fobj, _parent, path \
                     in self.walk_paths(dirs=False, recurse=True):
-                res = None
                 try:
-                    res = self.db_get_uptodate_prop(fobj, delete_stale=True)
-                except TreeError as exc:
+                    self.db_get_uptodate_prop(fobj, delete_stale=True)
+                except (PropDBNoValue, PropDBStaleValue):
+                    update_files.add(fobj)
+                except PropDBError as exc:
                     pr.error("processing file %s: %s" % (fstr2str(path), exc))
                     error_files.add(fobj)
-                else:
-                    if res is None:
-                        update_files.add(fobj)
             for err_fobj in error_files:
                 self._rm_file(err_fobj)
             tot_update_files = len(update_files)
@@ -324,10 +363,11 @@ class FilePropTreeOnline(FilePropTree, metaclass=onofftype):
             self.db.commit()
 
     def db_check_prop(self, file_obj):
-        """Compare the file prop value from source against an up-to-date
+        """
+        Compare the file prop value from source against an up-to-date
         prop value in the db and return True or False accordingly.
         Do not update the database.
-        Raise PropDBValueError if the db value is not up-to-date.
+        Raise PropDBStaleValue if the db value is not up-to-date.
         """
         assert self.rootdir_obj is not None
         assert file_obj is not None and file_obj.is_file()
@@ -340,8 +380,10 @@ class FilePropTreeOnline(FilePropTree, metaclass=onofftype):
         return db_prop == live_prop_value
 
     def db_purge_old_entries(self):
-        """Scan tree and purge property database from old entries.
-        Do not compact/vacuum the database."""
+        """
+        Scan tree and purge property database from old entries.
+        Do not compact/vacuum the database.
+        """
         self.scan_subtree()
         fileids_now = self._id_to_file.keys()
         pr.progress("discarding old ids from the db")
@@ -351,12 +393,15 @@ class FilePropTreeOnline(FilePropTree, metaclass=onofftype):
         pr.info("database cleaned")
 
     def printable_path(self, rel_path, pprint=str):
-        """Return a printable version of the tree+relpath."""
+        """
+        Return a printable version of the tree+relpath.
+        """
         return super(FilePropTreeOnline, self).printable_path(
             rel_path, pprint=pprint)
 
     def db_store_offline(self, target_dbmanager):
-        """Scan tree and save tree structure into the given target db manager.
+        """
+        Scan tree and save tree structure into the given target db manager.
         """
         assert self._use_metadata
         self.scan_subtree() # Scan the full tree.
@@ -364,7 +409,7 @@ class FilePropTreeOnline(FilePropTree, metaclass=onofftype):
             filter_fn = None
         else:
             def filter_fn(fid):
-                return fid in self._id_to_file # Allow using a parent dir database.
+                return fid in self._id_to_file # To allow a parent dir database.
         with target_dbmanager:
             self.db.merge_prop_values(target_dbmanager, filter_fn=filter_fn)
             target_dbmanager.rm_offline_tree()
@@ -391,5 +436,5 @@ class FilePropTreeOnline(FilePropTree, metaclass=onofftype):
                     obj_is_file = 0
                     obj_id = obj.dir_id
                     obj_basename = os.path.basename(path)
-                target_dbmanager.set_dir_content(
+                target_dbmanager.put_dir_entry(
                     dir_id, obj_basename, obj_id, obj_is_file)

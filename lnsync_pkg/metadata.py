@@ -4,8 +4,8 @@
 
 # The package name, which is also the "UNIX name" for the project.
 package = 'lnsync'
-version = '0.5.2'
-description = 'Sync by content with hard link support, fast fdupes, and more.'
+version = '0.6.0.pre1'
+description = 'Sync by content with hard link support, fast fdupes, and much more.'
 summary = description
 project = 'lnsync dir sync tool'
 project_no_spaces = project.replace(' ', '')

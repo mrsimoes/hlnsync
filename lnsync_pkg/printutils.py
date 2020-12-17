@@ -3,10 +3,11 @@
 # Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
 # For conditions of distribution and use, see copyright notice in lnsync.py
 
-"""Provide printing service with verbosity-controlled output levels
+"""
+Provide printing service with verbosity-controlled output levels
 and same-line progress messages.
 Output levels control
-- fatal, error and warning output to stderr at verbosity levels >= -2, -1, 0 resp.
+- fatal, error and warning output to stderr at verbosity levels >= -2,-1,0 resp.
 - print, info, and debug, trace output to stdout at
   verbosity levels >= 0, 1, 2, and 3 resp.
 - progress outputs to stdout if stdout is a tty and verbosity is >= 0.
@@ -17,13 +18,15 @@ These contexts may be nested.
 A prefix may be set for each non-progress message.
 """
 
-from __future__ import print_function
-
 import sys
 import atexit
 from itertools import chain
+import threading
 
 from lnsync_pkg.p23compat import isfstr
+
+# Make printing sequences of terminal ctrl codes thread-safe.
+PRINT_LOCK = threading.RLock()
 
 FATAL_LEVEL = -2
 ERROR_LEVEL = -1
@@ -49,8 +52,9 @@ _progress_was_printed = False
 
 _app_prefix = ""
 
-class ProgressPrefix(object):
-    """Set up a context during which a prefix is prepended to progress output.
+class ProgressPrefix:
+    """
+    Set up a context during which a prefix is prepended to progress output.
     """
     def __init__(self, prefix):
         self.prefix = prefix
@@ -64,7 +68,9 @@ class ProgressPrefix(object):
         return False # We never handle exceptions.
 
 def progress(*args):
-    """Print each arg in the same line, without changing to the next line."""
+    """
+    Print each arg in the same line, without changing to the next line.
+    """
     global _progress_prefixes
     global _progress_was_printed
     global option_verbosity
@@ -72,14 +78,17 @@ def progress(*args):
         return
     line = "".join(chain(_progress_prefixes, args))
     line = line.replace("\n", "")
-    _print('\033[?7l', end="") # Wrap off.
-    _print(line, end="\033[0K\r") # Erase to end of line.
-    _print('\033[?7h', end="") # Wrap on.
-    _progress_was_printed = True
+    with PRINT_LOCK:
+        _print('\033[?7l', end="") # Wrap off.
+        _print(line, end="\033[0K\r") # Erase to end of line.
+        _print('\033[?7h', end="") # Wrap on.
+        _progress_was_printed = True
     sys.stdout.flush()
 
 def progress_percentage(par, tot):
-    """Print the percentage correspondint to par out of tot items."""
+    """
+    Print the percentage correspondint to par out of tot items.
+    """
     perc = 100 * par // tot
     progress("%02d%%" % (perc,))
 
@@ -97,18 +106,19 @@ def _print_main(*args, **kwargs):
         is_tty = _stdout_is_tty
     else:
         is_tty = _stderr_is_tty
-    if is_tty and _progress_was_printed:
-        _print("\r\033[2K", end="") # Erase current line.
-#    for line in "".join(map(str, args)).splitlines():
-#        _print(line, file=file, **kwargs)
-    for arg in args:
-        if True or not isfstr(arg):
-            arg = str(arg)
-        file.write(arg)
-    if end:
-        file.write(end)
-    file.flush()
-    _progress_was_printed = False
+    with PRINT_LOCK:
+        if is_tty and _progress_was_printed:
+            _print("\r\033[2K", end="") # Erase current line.
+    #    for line in "".join(map(str, args)).splitlines():
+    #        _print(line, file=file, **kwargs)
+        for arg in args:
+            if True or not isfstr(arg):
+                arg = str(arg)
+            file.write(arg)
+        if end:
+            file.write(end)
+        file.flush()
+        _progress_was_printed = False
 
 def print(*args, **kwargs):
     if option_verbosity >= PRINT_LEVEL:
@@ -119,34 +129,34 @@ def fatal(*args, **kwargs):
         _print_main(_app_prefix, "fatal: ", *args, file=sys.stderr, **kwargs)
 
 def error(*args, **kwargs):
-    if option_verbosity >= ERROR_LEVEL:
-        try:
-            if _stderr_is_tty:
-                _print("\033[31m", file=sys.stderr, end="") # Red forgr.
-            _print_main(_app_prefix,
-                        "error: ", *args, file=sys.stderr, **kwargs)
-        finally:
-            if _stderr_is_tty:
-                _print("\033[39m", file=sys.stderr, end="") # Std foreg.
-                sys.stderr.flush()
+    with PRINT_LOCK:
+        if option_verbosity >= ERROR_LEVEL:
+            try:
+                if _stderr_is_tty:
+                    _print("\033[31m", file=sys.stderr, end="") # Red forgr.
+                _print_main(_app_prefix,
+                            "error: ", *args, file=sys.stderr, **kwargs)
+            finally:
+                if _stderr_is_tty:
+                    _print("\033[39m", file=sys.stderr, end="") # Std foreg.
+                    sys.stderr.flush()
 
 def info(*args, **kwargs):
     if option_verbosity >= INFO_LEVEL:
         _print_main(*args, file=sys.stdout, **kwargs)
 
 def warning(*args, **kwargs):
-    if option_verbosity >= WARNING_LEVEL:
-        try:
-            if _stderr_is_tty:
-                _print("\033[33m", file=sys.stderr, end="") # Red forgr.
-            _print_main(_app_prefix,
-                        "warning: ", *args, file=sys.stderr, **kwargs)
-        finally:
-            if _stderr_is_tty:
-                _print("\033[39m", file=sys.stderr, end="") # Std foreg.
-                sys.stderr.flush()
-#    if option_verbosity >= 1:
-#        _print_main(_app_prefix, "warning: ", *args, file=sys.stderr, **kwargs)
+    with PRINT_LOCK:
+        if option_verbosity >= WARNING_LEVEL:
+            try:
+                if _stderr_is_tty:
+                    _print("\033[33m", file=sys.stderr, end="") # Red forgr.
+                _print_main(_app_prefix,
+                            "warning: ", *args, file=sys.stderr, **kwargs)
+            finally:
+                if _stderr_is_tty:
+                    _print("\033[39m", file=sys.stderr, end="") # Std foreg.
+                    sys.stderr.flush()
 
 def debug(template_str, *str_args, **kwargs):
     """Templace with % placeholders and respective are given separately."""

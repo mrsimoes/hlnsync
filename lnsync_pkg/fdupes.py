@@ -25,7 +25,9 @@ from lnsync_pkg.proptree import FileItem, TreeError
 import lnsync_pkg.printutils as pr
 
 def _get_prop(tree, fobj):
-    """Return prop if possible, or None otherwise."""
+    """
+    Return prop if possible, or None otherwise.
+    """
     assert isinstance(fobj, FileItem)
     try:
         prop = tree.get_prop(fobj)
@@ -37,7 +39,8 @@ def _get_prop(tree, fobj):
         return prop
 
 def sizes_repeated(all_trees, hardlinks):
-    """Iterate over all file sizes for which more than two or more files of that
+    """
+    Iterate over all file sizes for which more than two or more files of that
     size exist somewhere across all dbs.
     If hardlinks is True, consider different paths to the same file as distinct
     for this purpose.
@@ -65,7 +68,8 @@ def sizes_repeated(all_trees, hardlinks):
                     sizes_seen_once.add(file_sz)
 
 def located_files_repeated_of_size(all_trees, file_sz, hardlinks):
-    """Iterate over all tuples (prop, {tree1: [files_1],... {tree_k, [files_k]})
+    """
+    Iterate over all tuples (prop, {tree1: [files_1],... {tree_k, [files_k]})
     over all file props which correspond to more than one file across all trees.
     If hardlinks is True, count multiple paths to the same file as repeats of
     the prop.
@@ -94,7 +98,8 @@ def located_files_repeated_of_size(all_trees, file_sz, hardlinks):
         yield prop_val, props_twice_tree_fobjs[prop_val]
 
 def sizes_onall(all_trees):
-    """Iterate over all sizes for which at least one file of that size exists on
+    """
+    Iterate over all sizes for which at least one file of that size exists on
     each of all_trees.
     """
     if len(all_trees) >= 1:
@@ -117,7 +122,8 @@ def sizes_onall(all_trees):
                 yield file_sz
 
 def _props_onall_of_size(trees, file_sz):
-    """Considering only files of the given size, iterate over all
+    """
+    Considering only files of the given size, iterate over all
     props with at least one file in each trees.
     """
     good_props = set()
@@ -142,7 +148,9 @@ def _props_onall_of_size(trees, file_sz):
         yield prop
 
 def _located_files_by_prop_of_size(trees, prop, file_sz):
-    """Return located files of size file_sz matching property prop."""
+    """
+    Return located files of size file_sz matching property prop.
+    """
     located_files = defaultdict(lambda: [])
     for tree in trees:
         for fobj in tree.size_to_files(file_sz):
@@ -152,7 +160,8 @@ def _located_files_by_prop_of_size(trees, prop, file_sz):
     return located_files
 
 def located_files_onall_of_size(all_trees, file_sz):
-    """Iterate over all tuples (prop, {tree1: [files_1],... {tree_k, [files_k]})
+    """
+    Iterate over all tuples (prop, {tree1: [files_1],... {tree_k, [files_k]})
     over all file props for which there is a corresponding file in each of the
     trees.
     """
@@ -161,9 +170,11 @@ def located_files_onall_of_size(all_trees, file_sz):
             yield prop, _located_files_by_prop_of_size(all_trees, prop, file_sz)
 
 def _props_onfirstonly_of_size(trees, file_sz):
-    """Considering only files of the given size, iterate over all props with
-    at least one file the first tree and no other files on any of the remaining
-    trees."""
+    """
+    Considering only files of the given size, iterate over all props with at
+    least one file the first tree and no other files on any of the remaining
+    trees.
+    """
     good_props = set()
     first_tree = trees[0]
     pr.progress("scanning:", first_tree.printable_path(fstr("")))
@@ -184,7 +195,8 @@ def _props_onfirstonly_of_size(trees, file_sz):
         yield prop
 
 def located_files_onfirstonly_of_size(all_trees, file_sz):
-    """Iterate over all tuples (prop, {tree_1: [files_1],... {tree_k, [files_k]})
+    """
+    Iterate over all tuples (prop, {tree_1: [files_1],... {tree_k, [files_k]})
     over all file props for which there is a corresponding file in each of the
     trees.
     Assume there is some file of that size on the first tree.

@@ -40,16 +40,17 @@ from lnsync_pkg.p23compat import sql_text_storer as p23_text_storer
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.glob_matcher import ExcludePattern
 from lnsync_pkg.filetree import Metadata
-from lnsync_pkg.onofftype import onofftype
-from lnsync_pkg.proptree import PropDBManager, PropDBError
+from lnsync_pkg.modaltype import onofftype, ONLINE, OFFLINE
+from lnsync_pkg.proptree import PropDBManager, PropDBError, PropDBNoValue
 
 CUR_DB_FORMAT_VERSION = 1
 
 def mk_online_db(dir_path, db_basename):
     return SQLPropDBManager(os.path.join(dir_path, db_basename), mode="online")
 
-class SQLPropDBManager(PropDBManager, metaclass=onofftype):
-    """Manage an SQLite3 file property db for FilePropertyTree.
+class SQLPropDBManager(PropDBManager):
+    """
+    Manage an SQLite3 file property db for FilePropertyTree.
 
     Implement the context manager protocol to create the connection
     to the required database file, or reuse a previously existing
@@ -58,7 +59,7 @@ class SQLPropDBManager(PropDBManager, metaclass=onofftype):
     """
     _current_online_cx = {} # dbpath -> [enter_count, db_cx].
 
-    def __init__(self, dbpath, mode=None, **kwargs):
+    def __init__(self, dbpath, **kwargs):
         """dbpath is the actual sqlite3 database filename.
         """
         self._cx = None
@@ -131,17 +132,28 @@ class SQLPropDBManager(PropDBManager, metaclass=onofftype):
         self._cx.cursor().execute(cmd, cmd_args)
 
     def get_prop_metadata(self, file_id):
-        """Return either a (prop_value, metadata) pair or None."""
-        cmd = "SELECT value, size, mtime, ctime FROM prop WHERE file_id=?;"
-        res = self._cx.execute(cmd, (file_id,)).fetchone()
-        if res is not None:
-            if not isinstance(res[0], int):
-                raise PropDBError("prop value not integer")
-            res = (res[0], Metadata(res[1], res[2], res[3]))
+        """
+        Get the property value and the metadata associated with the file at
+        the time the property was computed.
+        Return (prop_value, metadata) or raise PropDBError.
+        """
+        try:
+            cmd = "SELECT value, size, mtime, ctime FROM prop WHERE file_id=?;"
+            res = self._cx.execute(cmd, (file_id,)).fetchone()
+        except sqlite3.Error:
+            raise PropDBError("reading: %s" % (fstr2str(self.dbpath),))
+        if res is None:
+            raise PropDBNoValue("no value for file id %d at DB %s" % \
+                    (file_id, fstr2str(self.dbpath)))
+        elif not isinstance(res[0], int):
+            raise PropDBError("prop value not integer for file id %d" % (file_id,))
+        res = (res[0], Metadata(res[1], res[2], res[3]))
         return res
 
     def _create_empty(self):
-        """Create a new SQL database file and close it."""
+        """
+        Create a new SQL database file and close it.
+        """
         dbpath = self.dbpath
         assert not os.path.exists(dbpath)
         pr.progress("Creating new database %s ..." % (fstr2str(dbpath)))
@@ -166,7 +178,9 @@ class SQLPropDBManager(PropDBManager, metaclass=onofftype):
         pass
 
     def which_db_version(self):
-        """Return db version number or None if not recognized."""
+        """
+        Return db version number or None if not recognized.
+        """
         db_path = self.dbpath
         sql_cx = None
         db_ver = None
@@ -186,7 +200,9 @@ class SQLPropDBManager(PropDBManager, metaclass=onofftype):
         return db_ver
 
     def rm_offline_tree(self):
-        """Remove offline tree (even in online mode)."""
+        """
+        Remove offline tree (even in online mode).
+        """
         SQLPropDBManager._reset_db_tables(self._cx, self._tables_offline)
         self._cx.commit()
 
@@ -213,126 +229,11 @@ class SQLPropDBManager(PropDBManager, metaclass=onofftype):
         self._cx.commit()
         self._cx.execute("VACUUM;")
 
-class SQLPropDBManagerOffline(SQLPropDBManager, metaclass=onofftype):
-    """Manage an SQLite3 file property db for FilePropertyTree.
-
-    In offline mode, the database contains the file tree structure
-    and file metadata (size, mtime, ctime).
-    """
-    def __enter__(self):
-            # Make sure we have the root directory contents, at least.
-        super(SQLPropDBManagerOffline, self).__enter__()
-        try:
-            res = list(self.get_dir_contents(0)) # Force evaluation.
-        except Exception as exc:
-            self.__exit__(*sys.exc_info())
-            msg = "not an offline database, was it created with mkoffline? %s"
-            raise PropDBError(msg % (fstr2str(self.dbpath),)) from exc
-        return self
-
-    def _all_tables(self):
-        return SQLPropDBManager._tables_prop \
-             + SQLPropDBManagerOffline._tables_offline
-
-    def set_offline_metadata(self, f_id, metadata):
-        """Store file metadata to the database."""
-        cmd = "INSERT INTO metadata VALUES (?, ?, ?, ?);"
-        self._cx.cursor().execute(
-            cmd, (f_id, metadata.size, metadata.mtime, metadata.ctime))
-
-    def get_offline_metadata(self, file_id):
-        """Return file metadata from database."""
-        cmd = "SELECT size, mtime, ctime FROM metadata WHERE file_id=?;"
-        size, mtime, ctime = self._cx.execute(cmd, (file_id,)).fetchone()
-        return Metadata(size, mtime, ctime)
-
-    def set_dir_content(self, dir_id, obj_basename, obj_id, obj_is_file):
-        """Store a dir entry into the database-stores file tree."""
-        # Escape single quotes for sqlite3.
-        def storer(x):
-            x.replace(fstr("'"), fstr("''"))
-            return p23_text_storer(x)
-        cmd = "INSERT INTO dir_contents VALUES (?, ?, ?, ?);"
-        self._cx.cursor().execute(
-            cmd, (dir_id, storer(obj_basename), obj_id, obj_is_file))
-
-    def get_dir_contents(self, dir_id):
-        """Generate dir entries from the database-stored file tree."""
-        cmd = "SELECT obj_basename, obj_id, obj_is_file " + \
-              "FROM dir_contents WHERE parent_id=?;"
-        cur = self._cx.execute(cmd, (dir_id,))
-        for db_rec in cur.fetchall():
-#            yield db_rec
-            yield (p23_text_factory(db_rec[0]), db_rec[1], db_rec[2]) #TODO FIX HACK
-
-class SQLPropDBManagerOnline(SQLPropDBManager, metaclass=onofftype):
-    """Manage an SQLite3 file property db for FilePropertyTree.
-    In online mode:
-        - Files related to SQL database are ignored via
-        the --exclude mechanism.
-        - File ids may be removed.
-        - File property values may be merged in.
-    """
-    def __init__(self, dbpath, root_path=None, mode=None, **kwargs):
-        self.treeroot = root_path
-        super(SQLPropDBManagerOnline, self).__init__(
-            dbpath, root=root_path, **kwargs)
-
-    def get_glob_patterns(self):
-        """Exclude the SQLite3 main database and -journal, -wal and other tmp
-        files. The database may be located anywhere, even away from the tree
-        root."""
-        def is_subdir(path, directory):
-            "Test if path is under directory, not strict."
-            relative = os.path.relpath(path, directory)
-            return not relative.startswith(fstr(os.pardir + os.sep))
-        if self.treeroot and is_subdir(self.dbpath, self.treeroot):
-            relpath = os.path.relpath(self.dbpath, self.treeroot)
-            return [ExcludePattern(fstr("/") + relpath),
-                    ExcludePattern(fstr("/") + relpath + fstr("-*"))]
-        else:
-            return []
-
-    def _all_tables(self):
-        return SQLPropDBManager._tables_prop
-
-    def delete_ids(self, file_ids):
-        """Remove single file_id, or list or set of file_ids from property
-        table.
-        """
-        if isinstance(file_ids, int):
-            file_ids = (file_ids,)
-        try:
-            del_prop_cmd = "DELETE FROM prop WHERE file_id=?;"
-            vals = [(fid,) for fid in file_ids]
-            self._cx.executemany(del_prop_cmd, vals)
-        except sqlite3.Error as exc:
-            msg = "could not delete ids: %s (%s)" % (file_ids, exc)
-            raise PropDBError(msg) from exc
-
-    def delete_ids_except(self, file_ids_to_keep):
-        """Delete from the db all ids, exdeletecept those given. Expensive.
-        """
-        ids_to_delete = set()
-        if not isinstance(file_ids_to_keep, set):
-            file_ids_to_keep = set(file_ids_to_keep)
-        pr.progress("reading from database")
-        tot_file_records = self._cx.execute(
-            "SELECT count(*) FROM prop;").fetchone()[0]
-        curr_record = 0
-        with pr.ProgressPrefix("pruning: "):
-            for fileid_record in self._cx.execute(
-                    "SELECT file_id FROM prop;").fetchall():
-                pr.progress_percentage(curr_record, tot_file_records)
-                curr_record += 1
-                this_id = fileid_record[0]
-                if not this_id in file_ids_to_keep:
-                    ids_to_delete.add(this_id)
-        self.delete_ids(ids_to_delete)
-
     def merge_prop_values(self, tgt_db, remap_id_fn=None, filter_fn=None):
-        """Update db at target with prop values from source, overwriting if
-        necessary. """
+        """
+        Update db at target with prop values from source, overwriting if
+        necessary.
+        """
         tgt_cx = tgt_db._cx
         prop_tab = self._tables_prop[0]
         tab_name = prop_tab[0]
@@ -365,3 +266,139 @@ class SQLPropDBManagerOnline(SQLPropDBManager, metaclass=onofftype):
                         test_cursor.execute(cmd_delete, (resout[0],))
                     put_cursor.execute(cmd_insert, resout)
         tgt_db.compact()
+
+class SQLPropDBManagerOffline(SQLPropDBManager, mode=OFFLINE):
+    """
+    Manage an SQLite3 file property db for FilePropertyTree.
+
+    In offline mode, the database contains the file tree structure
+    and file metadata (size, mtime, ctime).
+    """
+    def __enter__(self):
+            # Make sure we have the root directory contents, at least.
+        super(SQLPropDBManagerOffline, self).__enter__()
+        try:
+            res = list(self.get_dir_entries(0)) # Force evaluation.
+        except Exception as exc:
+            self.__exit__(*sys.exc_info())
+            msg = "not an offline database, was it created with mkoffline? %s"
+            raise PropDBError(msg % (fstr2str(self.dbpath),)) from exc
+        return self
+
+    def _all_tables(self):
+        return SQLPropDBManager._tables_prop \
+             + SQLPropDBManagerOffline._tables_offline
+
+    def set_offline_metadata(self, f_id, metadata):
+        """
+        Store file metadata to the database.
+        """
+        cmd = "INSERT INTO metadata VALUES (?, ?, ?, ?);"
+        self._cx.cursor().execute(
+            cmd, (f_id, metadata.size, metadata.mtime, metadata.ctime))
+
+    def get_offline_metadata(self, file_id):
+        """
+        Return file offline saved metadata from database, or raise PropDBError.
+        """
+        cmd = "SELECT size, mtime, ctime FROM metadata WHERE file_id=?;"
+        try:
+            size, mtime, ctime = self._cx.execute(cmd, (file_id,)).fetchone()
+        except Exception as exc:
+            msg = "Cannot read database %s offline metadata for file id %d." \
+                % (fstr2str(self.dbpath), file_id,)
+            raise PropDBError(msg)
+        return Metadata(size, mtime, ctime)
+
+    def put_dir_entry(self, dir_id, obj_basename, obj_id, obj_is_file):
+        """
+        Store a dir entry into the database-stores file tree.
+        """
+        # Escape single quotes for sqlite3.
+        def storer(x):
+            x.replace(fstr("'"), fstr("''"))
+            return p23_text_storer(x)
+        cmd = "INSERT INTO dir_contents VALUES (?, ?, ?, ?);"
+        self._cx.cursor().execute(
+            cmd, (dir_id, storer(obj_basename), obj_id, obj_is_file))
+
+    def get_dir_entries(self, dir_id):
+        """
+        Generate dir entries from the database-stored file tree.
+        """
+        cmd = "SELECT obj_basename, obj_id, obj_is_file " + \
+              "FROM dir_contents WHERE parent_id=?;"
+        cur = self._cx.execute(cmd, (dir_id,))
+        for db_rec in cur.fetchall():
+#            yield db_rec
+            yield (p23_text_factory(db_rec[0]), db_rec[1], db_rec[2]) #TODO FIX HACK
+
+class SQLPropDBManagerOnline(SQLPropDBManager, mode=ONLINE):
+    """
+    Manage an SQLite3 file property db for FilePropertyTree.
+    In online mode:
+        - Files related to SQL database are ignored via
+        the --exclude mechanism.
+        - File ids may be removed.
+        - File property values may be merged in.
+    """
+    def __init__(self, dbpath, root_path=None, **kwargs):
+        self.treeroot = root_path
+        super(SQLPropDBManagerOnline, self).__init__(
+            dbpath, root=root_path, **kwargs)
+
+    def get_glob_patterns(self):
+        """
+        Exclude the SQLite3 main database and -journal, -wal and other tmp
+        files. The database may be located anywhere, even away from the tree
+        root."""
+        def is_subdir(path, directory):
+            "Test if path is under directory, not strict."
+            relative = os.path.relpath(path, directory)
+            return not relative.startswith(fstr(os.pardir + os.sep))
+        if self.treeroot and is_subdir(self.dbpath, self.treeroot):
+            relpath = os.path.relpath(self.dbpath, self.treeroot)
+            return [ExcludePattern(fstr("/") + relpath),
+                    ExcludePattern(fstr("/") + relpath + fstr("-*"))]
+        else:
+            return []
+
+    def _all_tables(self):
+        return SQLPropDBManager._tables_prop
+
+    def delete_ids(self, file_ids):
+        """
+        Remove single file_id, or list or set of file_ids from property
+        table.
+        """
+        if isinstance(file_ids, int):
+            file_ids = (file_ids,)
+        try:
+            del_prop_cmd = "DELETE FROM prop WHERE file_id=?;"
+            vals = [(fid,) for fid in file_ids]
+            self._cx.executemany(del_prop_cmd, vals)
+        except sqlite3.Error as exc:
+            msg = "could not delete from %s file ids: %s (%s)" % \
+                (fstr2str(self.dbpath), file_ids, exc)
+            raise PropDBError(msg) from exc
+
+    def delete_ids_except(self, file_ids_to_keep):
+        """
+        Delete from the db all ids, exdeletecept those given. Expensive.
+        """
+        ids_to_delete = set()
+        if not isinstance(file_ids_to_keep, set):
+            file_ids_to_keep = set(file_ids_to_keep)
+        pr.progress("reading from database")
+        tot_file_records = self._cx.execute(
+            "SELECT count(*) FROM prop;").fetchone()[0]
+        curr_record = 0
+        with pr.ProgressPrefix("pruning: "):
+            for fileid_record in self._cx.execute(
+                    "SELECT file_id FROM prop;").fetchall():
+                pr.progress_percentage(curr_record, tot_file_records)
+                curr_record += 1
+                this_id = fileid_record[0]
+                if not this_id in file_ids_to_keep:
+                    ids_to_delete.add(this_id)
+        self.delete_ids(ids_to_delete)

@@ -19,7 +19,7 @@ from lnsync_pkg.p23compat import fstr
 _SEP = fstr("/")
 _STST = fstr("**")
 
-class Pattern(object):
+class Pattern:
     __slots__ = ("_pattern", "_inner_str", "_type",
                  "_sep_pos", "_stst_pos",
                  "_anchored", "_dir_matcher")
@@ -65,15 +65,14 @@ class Pattern(object):
     def is_dir_matcher(self):
         return self._dir_matcher
 
-    def is_stst(self):
-        return self._stst_pos == 0 and len(self._inner_str) == 2
-
     def is_empty(self):
         return len(self._inner_str) == 0
 
     def head_to_tails(self, component):
-        """Return a list of new patterns that match the possible tail of path
-        names for which the first component matches the given component."""
+        """
+        Return a list of new patterns that match the possible tail of path
+        names for which the first component matches the given component.
+        """
         tails = set()
         if 0 <= self._sep_pos < self._stst_pos \
                 or self._stst_pos < 0 <= self._sep_pos:
@@ -106,11 +105,15 @@ class Pattern(object):
         return tails
 
     def matches_head(self, component):
-        """True if basename matches as first component."""
+        """
+        True if basename matches as first component.
+        """
         return self.head_to_tails(component)
 
     def matches_exactly(self, component):
-        """True if basename matches the full pattern."""
+        """
+        True if basename matches the full pattern.
+        """
         tails = self.head_to_tails(component)
         return any(t.is_empty() for t in tails)
 
@@ -143,14 +146,16 @@ class IncludePattern(Pattern):
         super(IncludePattern, self).__init__(path_glob, pattern_type="i")
 
 
-class GlobMatcher(object):
-    """Match relative filenames to a list of glob patterns and create subdir
+class GlobMatcher:
+    """
+    Match relative filenames to a list of glob patterns and create subdir
     matchers in a recursive-friendly way.
     """
     __slots__ = ["_patterns"]
 
     def __init__(self, patterns=None):
-        """patterns is a list of (tag, glob pattern string).
+        """
+        patterns is a list of (tag, glob pattern string).
         """
         if patterns is None:
             patterns = []
@@ -161,7 +166,8 @@ class GlobMatcher(object):
         return self._patterns
 
     def exclude_file_bname(self, file_bname):
-        """Return True if the single basename file_bname matches some exclude
+        """
+        Return True if the single basename file_bname matches some exclude
         pattern before matching any include pattern.
         """
         res = False
@@ -177,8 +183,9 @@ class GlobMatcher(object):
         return res
 
     def exclude_dir_bname(self, dir_bname):
-        """Return True if dir_bname matches some exclude
-        pattern before matching any include pattern.
+        """
+        Return True if dir_bname matches some exclude pattern before matching
+        any include pattern.
         """
         res = False
         for pat in self.all_patterns_iter():
@@ -191,7 +198,8 @@ class GlobMatcher(object):
         return res
 
     def to_subdir(self, dir_bname):
-        """Return a GlobMatcher representing patterns to use one directory down.
+        """
+        Return a GlobMatcher representing patterns to use one directory down.
         """
         subdir_patterns = [] # Include/Exclude need to be kept in order.
         for pat in self.all_patterns_iter():

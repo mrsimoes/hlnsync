@@ -1,8 +1,5 @@
 #!/usr/bin/env python
 
-from __future__ import print_function
-from __future__ import absolute_import
-
 from random_pkg.random_extras import dirichlet_vec_discrete_rv, randint_intv_avg, randint_avg
 
 import random

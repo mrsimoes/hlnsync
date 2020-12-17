@@ -15,8 +15,6 @@ On FAT/VFAT: use hash of dirname + int(ctime) + small integer to ensure
 uniqueness.
 """
 
-from __future__ import print_function
-
 import os
 import abc
 
@@ -47,7 +45,8 @@ def get_fs_type(path):
     return None
 
 def make_id_computer(root_path):
-    """Return an instance of the appropriate IDComputer class.
+    """
+    Return an instance of the appropriate IDComputer class.
     """
     file_sys = get_fs_type(root_path)
     if file_sys in ('ext2', 'ext3', 'ext4', 'ecryptfs', 'btrfs',
@@ -61,8 +60,9 @@ def make_id_computer(root_path):
         raise EnvironmentError(
             "IDComputer: not implemented for file system %s." % file_sys)
 
-class IDComputer(object):
-    """Compute persistent, unique file serial numbers for files in a
+class IDComputer:
+    """
+    Compute persistent, unique file serial numbers for files in a
     tree rooted at a given path.
     """
     def __init__(self, root_path, file_sys):
@@ -76,7 +76,8 @@ class IDComputer(object):
         """Return serial number for file at relative path from the root."""
 
 class InodeIDComputer(IDComputer):
-    """Return inode as file serial number.
+    """
+    Return inode as file serial number.
     """
     def get_id(self, rel_path, stat_data=None):
         if stat_data is None:
@@ -84,11 +85,12 @@ class InodeIDComputer(IDComputer):
         return stat_data.st_ino
 
 class HashPathIDComputer(IDComputer):
-    """Return hash(path)+size(file)+smallint as file serial number.
+    """
+    Return hash(path)+size(file)+smallint as file serial number.
     """
     def __init__(self, root_path, file_sys):
         self._hash_plus_size_uniq = {}
-        super(HashPathIDComputer, self).__init__(root_path, file_sys)
+        super().__init__(root_path, file_sys)
         self.subdir_invariant = False
 
     def get_id(self, rel_path, stat_data=None):

@@ -11,8 +11,6 @@
 Convert numbers to and from human-readable form, using common suffixes.
 """
 
-from __future__ import print_function
-
 # see: http://goo.gl/kTQMs
 SYMBOLS = {
     'customary'     : ('B', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y'),

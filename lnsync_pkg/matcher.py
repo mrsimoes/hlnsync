@@ -15,12 +15,11 @@ operations that, applied to the target FileTree, will bring it in sync with the
 source, as much as possible.
 """
 
-from __future__ import print_function
-
 import os
 import itertools
 import copy
 from collections import namedtuple
+import concurrent.futures
 
 from lnsync_pkg.human2bytes import bytes2human
 from lnsync_pkg.p23compat import fstr, fstr2str
@@ -30,7 +29,7 @@ from lnsync_pkg.backtracker import SearchState, do_search
 
 SrcTgt = namedtuple("SrcTgt", ["src", "tgt"])
 
-class TreePairMatcher(object):
+class TreePairMatcher:
     """Match file trees and generate target path sync (mv, ln, rm) commands.
 
     Target tree must be in online mode.
@@ -54,7 +53,8 @@ class TreePairMatcher(object):
         self._rm_in_advance = None # Used in generating commands.
 
     def do_match(self):
-        """Run matching algorithm, return True if match was found.
+        """
+        Run matching algorithm, return True if match was found.
         """
         pr.progress("starting match-up")
         initial_state = self.mt_state
@@ -65,7 +65,8 @@ class TreePairMatcher(object):
         return have_match
 
     def generate_sync_cmds(self):
-        """Yield sync cmds, each a tuple (cmd arg1 arg2).
+        """
+        Yield sync cmds, each a tuple (cmd arg1 arg2).
 
         arg1 and arg2 are always relative pathnames.
         Possible commands are:
@@ -82,7 +83,8 @@ class TreePairMatcher(object):
             self._gen_rm_cmds())
 
     def _gen_ln_cmds(self):
-        """Generate mkdir/ln commands to create new links.
+        """
+        Generate mkdir/ln commands to create new links.
         """
         ln_map = self.mt_state.total_path_op.ln_map
         for ln_ref_path in ln_map:
@@ -98,7 +100,8 @@ class TreePairMatcher(object):
                 yield ("ln", ln_ref_path, new_link_path)
 
     def _gen_mv_cmds(self):
-        """Generate mkdir/mv commands.
+        """
+        Generate mkdir/mv commands.
         """
         mv_graph = self.mt_state.total_path_op.mv_graph
         roots = mv_graph.get_all_roots()
@@ -128,14 +131,16 @@ class TreePairMatcher(object):
                 yield ("mv", curr_path, new_path)
 
     def _gen_rm_cmds(self):
-        """Generate rm commands.
+        """
+        Generate rm commands.
         """
         for relpath in self.mt_state.total_path_op.unln_set:
             if relpath not in self._rm_in_advance:
                 yield self._mk_rm_cmd(relpath)
 
     def _mk_rm_cmd(self, relpath):
-        """Create a rm command.
+        """
+        Create a rm command.
 
         A rm command includes an alternative path to the same file as its
         second paramater, to allow undoing.
@@ -146,8 +151,9 @@ class TreePairMatcher(object):
             witness_path = f_obj.relpaths[1]
         return ("rm", relpath, witness_path)
 
-class PathOp(object):
-    """A combined mv/ln/rm set of operations to be applied at the target.
+class PathOp:
+    """
+    A combined mv/ln/rm set of operations to be applied at the target.
 
     Consists of:
         - mv_graph: a 1-graph where each arc oldpath1->newpath1 corresponds
@@ -171,7 +177,8 @@ class PathOp(object):
 
     @staticmethod
     def make_mv(st_path):
-        """PathOp for mv {tpath->spath} from SrcTgt(spath, tpath).
+        """
+        PathOp for mv {tpath->spath} from SrcTgt(spath, tpath).
         Represents 'mv tpath spath' operation.
         """
         if st_path.src == st_path.tgt:
@@ -183,12 +190,15 @@ class PathOp(object):
 
     @staticmethod
     def make_unln(*paths):
-        """PathOp for unlinking paths."""
+        """
+        PathOp for unlinking paths.
+        """
         return PathOp(OneGraph(), {}, set(paths))
 
     @staticmethod
     def make_ln(tgt_path, ln_paths):
-        """PathOp for hard linking {tgtpath->[newnames]}.
+        """
+        PathOp for hard linking {tgtpath->[newnames]}.
         """
         return PathOp(OneGraph(), {tgt_path: ln_paths}, set())
 
@@ -202,7 +212,8 @@ class PathOp(object):
         self.unln_set = unln_set
 
     def add(self, another_op):
-        """Merge another_op into self, return self.
+        """
+        Merge another_op into self, return self.
         """
         self.mv_graph.add_graph(another_op.mv_graph)
         for tgt_path in another_op.ln_map:
@@ -216,7 +227,8 @@ class PathOp(object):
         return self
 
     def remove(self, another_op):
-        """Remove another_op elementary operations from self.
+        """
+        Remove another_op elementary operations from self.
         """
         self.mv_graph.remove_graph(another_op.mv_graph)
         for tgt_path in another_op.ln_map:
@@ -232,7 +244,8 @@ class PathOp(object):
         return not self.mv_graph.has_cycle()
 
 class State(SearchState):
-    """State for matching using the backtracker.
+    """
+    State for matching using the backtracker.
 
     Implements make_delta_iter, that generates deltas.
     An delta is the data used by a parent node to generate one of the children
@@ -252,7 +265,8 @@ class State(SearchState):
                 "trees", "szhash_to_src_ids", "_valid"
 
     def __init__(self, trees):
-        """trees is a SrcTgt pair (src_tree, tgt_tree).
+        """
+        trees is a SrcTgt pair (src_tree, tgt_tree).
 
         Init state variables and static data szhash_to_ids.
         """
@@ -267,7 +281,9 @@ class State(SearchState):
         self.szhash_cur = None
 
     def _init_stack_and_pathop(self):
-        """Create a stack of (size, hash) to match."""
+        """
+        Create a stack of (size, hash) to match.
+        """
         def list_intersection(list1, list2):
             tmp = set(list1)
             return [e for e in list2 if e in tmp]
@@ -279,8 +295,10 @@ class State(SearchState):
                 self._init_stack_and_pathop_persize(common_sz)
 
     def _init_stack_and_pathop_persize(self, file_sz):
-        """Initialize stack, considering only files of a given size,
-        eliminating common trivial cases."""
+        """
+        Initialize stack, considering only files of a given size,
+        eliminating common trivial cases.
+        """
         sz_src_files = self.trees.src.size_to_files(file_sz)
         sz_tgt_files = self.trees.tgt.size_to_files(file_sz)
         if len(sz_src_files) == 1 and len(sz_tgt_files) == 1 \
@@ -288,11 +306,17 @@ class State(SearchState):
             # If there are single source and target files for this size,
             # and the paths are the same, do nothing (no hashing required).
             return
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            def preget_props(tree, files):
+                tree.preget_props_async(files)
+            executor.submit(preget_props, self.trees.src, sz_src_files)
+            executor.submit(preget_props, self.trees.tgt, sz_tgt_files)
         src_hashes = {self.trees.src.get_prop(f) for f in sz_src_files}
         tgt_hashes = {self.trees.tgt.get_prop(f) for f in sz_tgt_files}
         sz_common_hashes = set.intersection(src_hashes, tgt_hashes)
         def commonhash_to_fileids(tree, file_list):
-            """Return table hash -> [fileids] with all files whose hash is one
+            """
+            Return a dict hash->[fileids] with all files whose hash is one
             of the values in sz_common_hashes (hashes in common for this file
             size).
             """
@@ -320,8 +344,10 @@ class State(SearchState):
                 self.szhash_to_ids[szhash] = srctgt_ids
 
     def _init_eliminated_now(self, srctgt_ids):
-        """Return True if these ids were handled now and need not go to the
-        search stack."""
+        """
+        Return True if these ids were handled now and need not go to the
+        search stack.
+        """
 # Case 1. one id on each side.
         ids = srctgt_ids
         if len(ids.src) == len(ids.tgt) == 1:
@@ -402,7 +428,8 @@ class State(SearchState):
         return self._valid
 
     def make_delta_iter(self):
-        """Return a non-empty iterator of deltas from current state, or None.
+        """
+        Return a non-empty iterator of deltas from current state, or None.
         """
         pr.trace("making delta for stack size %d and cur ids: %s",
                  len(self.szhash_stack), self.cur_srctgt_ids)
@@ -431,7 +458,8 @@ class State(SearchState):
             return None
 
     def _gen_pathops(self, src_id, tgt_id):
-        """Generate PathOps turning the tgt_id pathset into the src_id pathset.
+        """
+        Generate PathOps turning the tgt_id pathset into the src_id pathset.
 
         Each generated PathOp accomplishes that goal using different specific
         mv/ln/unln elementary operations, with some possibly creating mv cycles
@@ -481,7 +509,8 @@ class State(SearchState):
                 yield mv_op.add(ln_op)
 
     def _gen_id_permutations(self, src_ids, tgt_ids):
-        """Match up each src_id to a tgt_id.
+        """
+        Match up each src_id to a tgt_id.
 
         A matchup is a pair of lists (src_ids, tgt_ids) of equal length.
         Return an iterator that will generate matchups.
@@ -500,7 +529,8 @@ class State(SearchState):
         return itertools.chain(bgm, res)
 
     def _best_guess_matches(self, src_ids, tgt_ids):
-        """Return a generator for some matchups of ids1 to ids2.
+        """
+        Return a generator for some matchups of ids1 to ids2.
         See _gen_id_permutations.
         """
         def match_either_way(ids1, tree1, ids2, tree2):
@@ -551,8 +581,9 @@ class State(SearchState):
                 )
         return res
 
-class Delta(object):
-    """State delta for passing to a child node and back.
+class Delta:
+    """
+    State delta for passing to a child node and back.
 
     There are four types of Deltas: a Delta has fields new_szhash, srctgt_id,
     path_op, skip_ids, final_check, interpreted as follows (going down the

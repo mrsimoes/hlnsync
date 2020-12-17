@@ -14,10 +14,12 @@ import re
 from lnsync_pkg.p23compat import fstr, fstr2str
 
 def mode_from_location(location, mandatory_mode=None):
-    """Given a location path for a file tree, decide if it is an offline
+    """
+    Given a location path for a file tree, decide if it is an offline
     tree (location is a file) or a an online tree (location is a dir).
     Raise ValueError if location is neither a file or a dir, or if the
-    location is not readable."""
+    location is not readable.
+    """
     if mandatory_mode is None:
         if os.path.isdir(location):
             mandatory_mode = "online"
@@ -52,7 +54,8 @@ def set_prefix(prefix):
     DB_PREFIX = prefix
 
 def pick_db_basename(dir_path, dbprefix):
-    """Find or create a unique basename matching <dbprefix>[0-9]*.db in the
+    """
+    Find or create a unique basename matching <dbprefix>[0-9]*.db in the
     directory. Raise EnvironmentError if there are too many files matching the
     database basename pattern or if there are none and the given dir is not
     writable.

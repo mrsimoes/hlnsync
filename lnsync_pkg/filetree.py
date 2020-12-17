@@ -34,8 +34,6 @@ linking/unlinking) and optionally written back to the disk tree. All commands
 are reversible, except those that delete a file's only path.
 """
 
-from __future__ import print_function
-
 import os
 
 from lnsync_pkg.p23compat import fstr, isfstr, fstr2str
@@ -46,44 +44,56 @@ from lnsync_pkg.glob_matcher import GlobMatcher
 class TreeError(Exception):
     pass
 
-class TreeItem(object):
-    """Abstract base class for all FileTree items."""
+class TreeItem:
+    """
+    Abstract base class for all FileTree items.
+    """
+
     def is_dir(self):
         return False
+
     def is_file(self):
         return False
+
     def is_excluded(self):
         return False
 
 class FileItem(TreeItem):
     __slots__ = "file_id", "file_metadata", "relpaths"
+
     def __init__(self, file_id, metadata):
         self.file_id = file_id
         self.file_metadata = metadata
         self.relpaths = []
+
     def is_file(self):
         return True
 
 class DirItem(TreeItem):
     __slots__ = "dir_id", "parent", "entries", "relpath", "scanned"
+
     def __init__(self, dir_id):
         self.dir_id = dir_id
         self.parent = None # A DirItem.
         self.entries = {} # basename->TreeObj.
         self.relpath = None # Cache.
         self.scanned = False
+
     def was_scanned(self):
         """Return True if dir was scanned."""
         return self.scanned
+
     def mark_scanned(self):
         """Mark dir as scanned."""
         self.scanned = True
+
     def add_entry(self, basename, obj):
         assert not basename in self.entries, \
             "add_entry: %s already in dir" %  (fstr2str(basename),)
         self.entries[basename] = obj
         if obj.is_dir():
             obj.parent = self
+
     def rm_entry(self, basename):
         assert basename in self.entries, \
             "rm_entry: %s not in dir" % (fstr2str(basename),)
@@ -91,18 +101,23 @@ class DirItem(TreeItem):
         del self.entries[basename]
         if obj.is_dir():
             obj.parent = None
+
     def get_entry(self, bname):
         if bname in self.entries:
             return self.entries[bname]
         else:
             return None
+
     def iter_subdirs(self):
         assert self.scanned, "cannot iterate unscanned dir"
         for obj in self.entries.values():
             if obj.is_dir():
                 yield obj
+
     def get_relpath(self):
-        """Return dir relpath, no trailing os.sep."""
+        """
+        Return dir relpath, no trailing os.sep.
+        """
         if self.relpath is None: # Cache.
             curr_dir = self
             path = None
@@ -119,6 +134,7 @@ class DirItem(TreeItem):
                 path = fstr("")
             self.relpath = path
         return self.relpath
+
     def is_dir(self):
         return True
 
@@ -129,22 +145,28 @@ class ExcludedItem(TreeItem):
     def is_excluded(self):
         return True
 
-class Metadata(object):
-    """File metadata: size, mtime, and ctime.
-    Metadata are __equal__ if size and mtime are."""
+class Metadata:
+    """
+    File metadata: size, mtime, and ctime.
+    Metadata are __equal__ if size and mtime are.
+    """
     __slots__ = "size", "mtime", "ctime"
     __hash__ = None # Since we redefine __eq__, declare not hashable.
+
     def __init__(self, size, mtime, ctime):
         self.size = size
         self.mtime = mtime
         self.ctime = ctime
+
     def __eq__(self, other):
         return self.size == other.size and self.mtime == other.mtime
+
     def __str__(self):
         return "md[%d;%d;%d]" % (self.size, self.mtime, self.ctime)
 
-class FileTree(object):
-    """A file tree that can read from disk and write back changes.
+class FileTree:
+    """
+    A file tree that can read from disk and write back changes.
 
     Support files with multiple paths (hard links) and persistent serial number
     id (inode), dirs, and explicit 'other'.
@@ -156,7 +178,8 @@ class FileTree(object):
     been scanned yet.
     """
     def __init__(self, **kwargs):
-        """Create a root dir object, marked unscanned.
+        """
+        Create a root dir object, marked unscanned.
         Arguments:
             - root_path: path disk file tree (may be None if FileTree is somehow
                 virtual).
@@ -227,10 +250,24 @@ class FileTree(object):
         self.scan_subtree()
         return sum(len(szfiles) for (sz, szfiles) in self._size_to_files.items())
 
+    def get_all_file_ids(self):
+        """Return a dictionary view object with all file ids."""
+        self.scan_subtree()
+        return self._size_to_files.keys()
+
+    def get_all_dirs(self):
+        """Return a set with all dir objects by scanning the full tree."""
+        self.scan_subtree()
+        res = [self.rootdir_obj]
+        for obj, _pobj, _rp in self.walk_paths(dirs=True):
+            if obj.is_dir():
+                res.append(obj)
+        return res
+
     def get_all_sizes(self):
         """Return list of all file sizes in the tree."""
-        sz__to_files_map = self.size_to_files()
-        return sz__to_files_map.keys()
+        sz_to_files_map = self.size_to_files()
+        return sz_to_files_map.keys()
 
     def id_to_file(self, fid):
         assert fid in self._id_to_file, "id_to_file: unknown fid %d." % fid
@@ -272,7 +309,7 @@ class FileTree(object):
         if dir_obj.was_scanned():
             return
         with pr.ProgressPrefix(
-            "scanning:" + self.printable_path(dir_obj.get_relpath())
+                "scanning:" + self.printable_path(dir_obj.get_relpath())
             ):
             dir_glob_matcher = self._glob_matchers.get(dir_obj)
                 # dir_glob_matcher is None or an entry.
@@ -343,7 +380,8 @@ class FileTree(object):
             self._size_to_files_ready = True
 
     def _gen_dir_entries_from_source(self, dir_obj, glob_matcher=None):
-        """Iterate over the items in a disk file tree.
+        """
+        Iterate over the items in a disk file tree.
         Yield tuples (basename, obj_id, obj_type, rawmetadata), where:
         - basename is str (Python2) or binary string (Python3)
         - rawmetadata is some data that may passed on to _new_file_obj.__init__
@@ -401,7 +439,8 @@ class FileTree(object):
                     yield (obj_bname, None, OtherItem, None)
 
     def _add_path(self, file_obj, dir_obj, fbasename):
-        """Add a new path to a file object:  fbasename at dir_obj.
+        """
+        Add a new path to a file object:  fbasename at dir_obj.
         If this is the first path, the file is registered into
         the tree indices.
         """
@@ -419,7 +458,8 @@ class FileTree(object):
         file_obj.relpaths.append(relpath)
 
     def _rm_path(self, file_obj, dir_obj, fbasename):
-        """Remove a path from an existing file: fbasename at dir.
+        """
+        Remove a path from an existing file: fbasename at dir.
         dir must have already been scanned.
         If the final path of a file is removed, the file is removed
         from tree indices."""
@@ -437,16 +477,19 @@ class FileTree(object):
                     del self._size_to_files[file_sz]
 
     def _rm_file(self, file_obj):
-        """Remove a file, i.e. remove all paths."""
+        """
+        Remove a file, i.e. remove all paths.
+        """
         paths = list(file_obj.relpaths)
         for path in paths:
             tr_obj = self.follow_path(os.path.dirname(path))
             self._rm_path(file_obj, tr_obj, os.path.basename(path))
 
     def follow_path(self, relpath):
-        """Return file or dir or other object by relpath from root, or None.
+        """
+        Return file or dir or other object by relpath from root, or None.
 
-        Does not follow symlinks.
+        Do not follow symlinks.
         """
         assert self.rootdir_obj is not None, "follow_path: no rootdir_obj."
         curdir_obj = self.rootdir_obj
@@ -466,9 +509,11 @@ class FileTree(object):
         return curdir_obj
 
     def walk_dir_contents(self, subdir_path, dirs=False):
-        """Generate (obj, basename) for each file and dir entry of
+        """
+        Generate (obj, basename) for each file and dir entry of
         at a directory given by relative path, which is scanned if needed.
-        Skip 'other' entries."""
+        Skip 'other' entries.
+        """
         assert isfstr(subdir_path)
         assert self.rootdir_obj is not None, "walk_dir_contents: no rootdir_obj"
         subdir = self.follow_path(subdir_path)
@@ -480,13 +525,14 @@ class FileTree(object):
 
     def walk_paths(self, startdir_path=None, recurse=True,
                    dirs=False, files=True, topdown=True):
-        """Generate (obj, parent_obj, relpath) for distinct file and dir
+        """
+        Generate (obj, parent_obj, relpath) for distinct file and dir
         relpaths.
         Skip startdir itself, skip other objects.
-         - dirs: include dirs other than startdir.
+         - dirs: include dirs (other than startdir, which is never included).
          - files: include files.
          - recurse: walk the full tree, else just subdir immediate contents.
-         - topdown: breadth-first, else depth-first
+         - topdown: If False, bottom-up.
         """
         assert self.rootdir_obj is not None, "walk_paths: no rootdir_obj."
         if startdir_path is None:
@@ -513,17 +559,18 @@ class FileTree(object):
             stack = [startdir_obj]
             while stack:
                 curdir_obj = stack.pop()
-                self.scan_dir(curdir_obj)
-                for subd_obj in curdir_obj.iter_subdirs():
-                    stack.append(subd_obj)
                 for k in output_dir(curdir_obj):
                     yield k
+                self.scan_dir(curdir_obj)
                 for k in output_files(curdir_obj):
                     yield k
+                for subd_obj in curdir_obj.iter_subdirs():
+                    stack.append(subd_obj)
         else:
             stack = [[None], [startdir_obj]]
             while stack:
-                    # stack[-2:]=[dirs, unprocessed child dirs of dirs[-1]].
+                    # At all times:
+                    # stack[-2:]=dirs, stack[-1]=unprocessed children of dirs[-1].
                 prevdir_children = stack[-1]
                 if prevdir_children:
                     nextdir = prevdir_children[-1]
@@ -535,14 +582,16 @@ class FileTree(object):
                     prevdir = stack[-1].pop()
                     if prevdir is None:
                         break
-                    for k in output_files(prevdir):
-                        yield k
                     for k in output_dir(prevdir):
+                        yield k
+                    for k in output_files(prevdir):
                         yield k
 
     def add_path_writeback(self, file_obj, relpath):
-        """Add a new path to an existing file, creating intermediate dirs if
-        needed."""
+        """
+        Add a new path to an existing file, creating intermediate dirs if
+        needed.
+        """
         tr_obj = self._create_dir_if_needed_writeback(os.path.dirname(relpath))
         self._add_path(file_obj, tr_obj, os.path.basename(relpath))
         if self.writeback:
@@ -561,7 +610,9 @@ class FileTree(object):
         self._rm_path(file_obj, tr_obj, os.path.basename(relpath))
 
     def mv_path_writeback(self, file_obj, fn_from, fn_to):
-        """Rename one of the file's paths."""
+        """
+        Rename one of the file's paths.
+        """
         # Cannot be done by adding/removing links
         # on filesystems not supporting hardlinks.
         d_from = self.follow_path(os.path.dirname(fn_from))
@@ -575,8 +626,9 @@ class FileTree(object):
             os.rename(self.rel_to_abs(fn_from), self.rel_to_abs(fn_to))
 
     def rm_dir_writeback(self, dir_obj):
-        """Execute a rmdir, write back to source tree if self.writeback
-        is set."""
+        """
+        Execute a rmdir, write back to source tree if self.writeback is set.
+        """
         assert not dir_obj.entries, "trying to remove non-empty dir."
         assert dir_obj.parent, "trying to remove rootdir,"
         relpath = dir_obj.get_relpath()
@@ -586,8 +638,10 @@ class FileTree(object):
             os.rmdir(self.rel_to_abs(relpath))
 
     def _create_dir_if_needed_writeback(self, dir_relpath):
-        """Return dir obj corresponding to dir_relpath, creating all needed
-        directories. May raise TreeError."""
+        """
+        Return dir obj corresponding to dir_relpath, creating all needed
+        directories. May raise TreeError.
+        """
         tr_obj = self.follow_path(dir_relpath)
         if tr_obj is None:
             supdname = os.path.dirname(dir_relpath)
@@ -602,12 +656,14 @@ class FileTree(object):
         elif tr_obj.is_dir():
             return tr_obj
         else:
-            raise TreeError("cannot create dir %s" % (dir_relpath,))
+            raise TreeError("cannot create dir %s" % (fstr2str(dir_relpath),))
 
     def exec_cmd(self, cmd):
-        """Execute a (cmd, arg1, arg2).
+        """
+        Execute a (cmd, arg1, arg2).
         cms is one of "mv" ln" "rm"
-        arg1 and arg2 are relative paths, of fstr type."""
+        arg1 and arg2 are relative paths, of fstr type.
+        """
         ctype, fn_from, fn_to = cmd
         obj_from = self.follow_path(fn_from)
         assert obj_from is not None and obj_from.is_file(), \
@@ -632,7 +688,9 @@ class FileTree(object):
             self.exec_cmd(command)
 
     def exec_cmd_reverse(self, cmd):
-        """Revert a command (cmd, arg1, arg2)."""
+        """
+        Revert a command (cmd, arg1, arg2).
+        """
         assert len(cmd) == 3, "exec_cmd_reverse: bad cmd: %s" % (cmd,)
         ctype, fn_from, fn_to = cmd
         if ctype == "mv":
@@ -648,7 +706,9 @@ class FileTree(object):
             raise TreeError("exec_cmd_reverse: unknown command %s" % (cmd,))
 
     def exec_cmds_reverse(self, cmds):
-        """Revert a sequence of commands."""
+        """
+        Revert a sequence of commands.
+        """
         for cmd in reversed(cmds):
             self.exec_cmd_reverse(cmd)
 

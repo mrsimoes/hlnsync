@@ -14,9 +14,10 @@ __init accepts new size_as_hash kw argument.
 from lnsync_pkg.p23compat import fstr2str
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.blockhash import hash_file
-from lnsync_pkg.onofftype import onofftype, OFFLINE
+from lnsync_pkg.modaltype import onofftype, OFFLINE, ONLINE
 from lnsync_pkg.proptree import \
-    FilePropTree, PropDBManager, TreeError, PropDBError, PropDBValueError
+    FilePropTree, PropDBManager, TreeError, \
+    PropDBException, PropDBError, PropDBNoValue
 
 class EmptyDBManager(PropDBManager, metaclass=onofftype):
     def __enter__():
@@ -56,18 +57,11 @@ class FileHashTree(FilePropTree, metaclass=onofftype):
         # from scanning the source file tree (disk or offline).
         return file_obj.file_metadata.size
 
-    @classmethod
-    def listof(cls, init_args_list):
-        """Return a context manager that will create/destroy a list of classref
-        initialized by the given list of kwargs.
-        TODO this belongs in PropTree
-        """
-        return ListContextManager(cls, init_args_list)
 
-class FileHashTreeOnline(metaclass=onofftype):
+class FileHashTreeOnline(FileHashTree, mode=ONLINE):
     def prop_from_source(self, file_obj):
-        """Recompute and return prop for source file at relpath. (Online mode
-        only.)
+        """
+        Recompute and return prop for source file at relpath (online mode only).
         Raise RuntimeError if something goes wrong.
         """
         relpath = file_obj.relpaths[0]
@@ -81,25 +75,3 @@ class FileHashTreeOnline(metaclass=onofftype):
             raise  RuntimeError("bad property value %s" % (val,))
         return val
 
-class ListContextManager(object):
-    """Manage a context that creates a list of classref instances
-    initialized from a given list of init_args dicts.
-    TODO belongs in PropTree
-    """
-    def __init__(self, classref, init_args_list):
-        self.classref = classref
-        self.init_args_list = init_args_list
-        self.objs_entered = []
-
-    def __enter__(self):
-        for kwargs in self.init_args_list:
-            obj = self.classref(**kwargs)
-            val = obj.__enter__()
-            self.objs_entered.append(val)
-        return self.objs_entered
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        res = False # By default, the exception is not suppressed.
-        for obj in reversed(self.objs_entered):
-            res = res or obj.__exit__(exc_type, exc_value, traceback)
-        return res

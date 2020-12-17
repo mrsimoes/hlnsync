@@ -1,10 +1,14 @@
 # Overview
 
-_lnsync_ provides unidirectional sync-by-rename of local directories with support for hard links, but with no copying or deleting file data.
+_lnsync_ provides sync-by-content of local file trees with support for hard links.
 
-Files are identified by content, using file hashes. By means of those hashes, other features are provided, such as finding duplicate files.
+Local directories are one-way synced, as much as possible, by renaming, linking and delinking only.
 
-File renaming, moving, and linking in the source can be quickly replicated in the target.
+In this way, file renaming, moving, and linking in the source directory are quickly and easily replicated on the target.
+
+Files are compared via hashes, which are stored.
+
+Additional features are provided based on those file hashes, such as duplicate detection.
 
 _lnsync_ may be used as a preprocessing step for other sync tools such as _rsync_, which do copy and delete file data.
 
@@ -98,27 +102,28 @@ All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [
 
  - `-n` Dry-run, just show which operations would be performed.
 
- - `--exclude <glob_pattern> ... <glob_pattern>` Exclude source files and directories by glob patterns. There is a corresponding `--include` and these are interpreted as in `rsync --exclude <pattern> source/ target` (beware, compatability has not been fully tested).
- -- A file or directory is excluded if it matches an `exclude` pattern before matching any `include` pattern.
- -- Each `--exclude` and `--include` option applies to all file trees in the command.
- -- Some commands accept `--exclude-once=<pattern>` and `--include-once=<pattern>`, which apply only to the next file tree following the switch and gain precedence over global patterns.
- -- An initial slash anchors the pattern to the corresponding file tree root.
- -- A trailing slash means the pattern applies only to directories. 
+- `--exclude <glob_pattern> ... <glob_pattern>` Exclude source files and directories by glob patterns. There is a corresponding `--include` and these are interpreted as in `rsync --exclude <pattern> source/ target` (beware, compatability has not been fully tested).
+ - A file or directory is excluded if it matches an `exclude` pattern before matching any `include` pattern.
+ - Each `--exclude` and `--include` option applies to all file trees in the command.
+ - Some commands accept `--exclude-once=<pattern>` and `--include-once=<pattern>`, which apply only to the next file tree following the switch and gain precedence over global patterns.
+ - An initial slash anchors the pattern to the corresponding file tree root.
+ - A trailing slash means the pattern applies only to directories. 
 
 - `lnsync rsync [options] <tree> <dir> [rsync-options]` Prints an _rsync_ command that would sync target dir from source, skipping _lnsync_ database files. Source may be a dir or an offline tree. Check the default _rsync_ options provided are what you want. To also run the _rsync_ command, use the `-x` switch.
 
+- `lnsync syncr` This convenience command is like `sync`, but follows it by executing the command created by `rsync` just above.
+
 ## Creating, Updating, and Accessing the Hash Database
-- `lnsync update <dir>` Update the hash database, creating a new database if none exists, and rehashing all new files and those with a changed modification time (mtime). Accepts `--exclude=<pattern>` options.
 - `lnsync update <dir>` Update the hash database, creating a new database if none exists, and rehashing all new files and those with a changed modification time (mtime). Accepts `--exclude=<pattern>` options.
 - `lnsync rehash <dir> [<relpath>]+` Force rehashing files specified by paths relative to the root `dir`.
 - `lnsync subdir <dir> <relsubdir>` Update the database at `relsubdir` using any hash value already present in the hash database for `dir`.
-- `lnsync mkoffline <dir> <outputfile>` Update database at `dir` and create corresponding offline database at `outputfile`.
+- `lnsync mkoffline <dir> <outputfile>` Update database at `dir` and create corresponding offline database at `outputfile`. Use `-f` to force overwriting the output file.
 - `lnsync cleandb <dir>` Remove outdated entries and re-compact the database.
 - `lnsync lookup <tree> [<relpath>+]` Returns (either from db or by recomputing) the hash value for the files, where `tree` may be a a directory or an offline tree.
 
 ## Finding Files
 
-- `lnsync cmp <tree1> <tree2>` Recursively compares two file trees. Compares files at each path, does not compare the hard link structure. Accepts `--exclude=<pattern>` options.
+- `lnsync cmp <tree1> <tree2>` Recursively compares two file trees. If `--hardlinks` is specified, only files at each path are compared, and the hardlink structure is ignored; otherwise both trees need to be fully scanned at the outset. Accepts `--exclude=<pattern>` options.
 - `lnsync fdupes [-h] [<tree>]+` Find files duplicated anywhere on the given trees.
 - `lnsync onall [<tree>]+`, `lnsync onfirstonly [<tree>]+`, `lnsync onlastonly [<tree>]+` Find files as advertised. Some options: `-M` prunes by maximum size; `-0` prunes empty files; `-1` prints each group of files in a single line, separated by spaces and with escaped backslashes and spaces, like `fdupes`; `-s` sorts output by size. Use `-H` to consider multiple links to the same file as distinct files; if this option is not used, print a single, arbitrarily picked path for each multiple-linked file found to satisfy the condition of the command.
 - `lnsync search <tree> [<globpat>]+` Find files one of whose relative paths matches one of the given glob patterns (which are as in `--exclude`).
@@ -130,7 +135,7 @@ All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [
 
 Optional command-line arguments are read from any INI-style configuration files at `./lnsync.cfg`, `~/lnsync.cfg`, and `~/.lnsync.cfg`. In its `DEFAULT` section, in entries of the form `key = value`, the `key` can match the short or long option name (with intermediate minus replaced by underscores, e.g. `n` or `dry_run`).
 
-For options taking no values, the `value` can be either empty or be a count of how many times to apply that option. For options  taking more than one value (e.g. `exclude`), multiple values may be separated by line breaks. values may be set there for command-line options `sort`, `hardlinks`, `sameline`, `dbprefix`, `bysize`, `maxsize`, `skipempty`, `dry_run`.
+For options taking no values, the `value` can be either empty or be a count of how many times to apply that option. For options  taking more than one value (e.g. `exclude`), multiple values may be separated by line breaks. values may be set there for command-line options `sort`, `hardlinks`, `alllinks`, `sameline`, `dbprefix`, `bysize`, `maxsize`, `skipempty`, `dry_run`.
 
 The `DEFAULT` section may contain `exclude` and `include` options, applying to all trees. Sections whose name glob-matches a directory (or offline tree file) may contain `exclude` and `include` options that applied only to that location, before all other exclude/include patterns.
 
@@ -154,6 +159,21 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 - Minimal support for case-insensitive but case-preserving file systems like vfat: if a target file name differs from source match in case only, target is not updated.
 - Supports Linux only.
 
+## Release Notes
+
+- v0.5.3: New `syncr`, changed `mkoffline` syntax, more output options (`--alllinks`), hard link-aware `check` and `cmp`, improved `search`, 
+- v0.5.2: Search files by file path glob pattern. Multiple patterns on --exclude. More powerful configuration files. `--root` now allowed in `mkoffline` and `rehash`. Major rewrite of the command line and config file parsers. Optimize onfirstonly and sync to do less hashing. Fix bugs in `--root`, `cmp`, `check`, and more. Wildcards in config section names.
+- v0.4.0: Drop Python 2 compatibility. Add config files. Bug fixes.
+- v0.3.8: Less hashing on `onfirstonly`. Sort file search output by size. Adjust user output levels.
+- v0.3.7: Bug fix on reading offline trees. Change output levels and some messages.
+- v0.3.6: New: --include and --include-once options. Bug fix: wrong exit code.
+- v0.3.5: Bug fix: not excluding dirs in offline mode.
+- v0.3.3: Python 3 support.
+- v0.3.2: New --root option to allow reading and updating a root tree database when querying subtrees.
+- v0.3.0: Exclude files by glob pattern in sync and other commands. Better terminal output. Major code overhaul.
+- v0.1.9: Improved sync algorithm. Remove directories left empty after sync.
+- v0.1: Initial version.
+
 ## Possible Improvements
 
 - argparsecomplete support
@@ -169,43 +189,3 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 - Update target mtimes from source.
 - Allow more output sorting options, e.g. by name or mtime.
 
-## Release Notes
-
-- Version 0.5.1
- - Search files by file path glob pattern.
- - Multiple patterns on --exclude.
- - More powerful configuration files.
- - `--root` now allowed in `mkoffline` and `rehash`.
- - Major rewrite of the command line and config file parsers.
- - Optimize onfirstonly and sync to do less hashing.
- - Fix bugs in `--root`, `cmp`, `check`, and more.
- - Wildcards in config section names.
-- Version 0.4.0
- - Drop Python 2 compatibility.
- - Add config files.
- - Bug fixes.
-- Version 0.3.8
- - Less hashing on `onfirstonly`.
- - Sort file search output by size.
- - Adjust user output levels.
-- Version 0.3.7
- - Bug fix on reading offline trees.
- - Change output levels and some messages.
-- Version 0.3.6
--- New: --include and --include-once options.
- - Bug fix: wrong exit code.
-- Version 0.3.5
- - Bug fix: not excluding dirs in offline mode.
- - Version 0.3.3
- - Python 3 support.
-- Version 0.3.2
- - New --root option to allow reading and updating a root tree database when querying subtrees.
-- Version 0.3.0
- - Exclude files by glob pattern in sync and other commands.
- - Better terminal output.
- - Major code overhaul.
-- Version 0.1.9
- - Improved sync algorithm.
- - Remove directories left empty after sync.
-- Version 0.1
- - Initial version.

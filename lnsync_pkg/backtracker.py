@@ -3,20 +3,19 @@
 # Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
 # For conditions of distribution and use, see copyright notice in lnsync.py
 
-"""Backtrack search for a maximal state extending the initial state.
+"""
+Backtrack search for a maximal state extending the initial state.
 
 A State can be extended by applying 'down' a delta of data describing that
 extension. A state may be either valid or not. Invalid states are discarded.
 On backtracking, the extension is undone by applying the delta 'up'.
 """
 
-from __future__ import print_function
-
 import abc
 
 import lnsync_pkg.printutils as pr
 
-class SearchState(object):
+class SearchState:
     """Virtual class for a backtracking solver.
 
     Subclasses should implement make_delta_iter, down_delta,
@@ -25,22 +24,31 @@ class SearchState(object):
 
     @abc.abstractmethod
     def make_delta_iter(self):
-        """Return either a non-empty delta iterator or None."""
+        """
+        Return either a non-empty delta iterator or None.
+        """
 
     @abc.abstractmethod
     def down_delta(self, state_delta):
-        """Apply a delta to obtain a child state."""
+        """
+        Apply a delta to obtain a child state.
+        """
 
     @abc.abstractmethod
     def up_delta(self, state_delta):
-        """Apply a delta to revert from a child state back to the parent."""
+        """
+        Unapply a delta to revert from a child state back to the parent.
+        """
 
     @abc.abstractmethod
     def is_valid(self):
-        """Return True is the current state is valid."""
+        """
+        Return True is the current state is valid.
+        """
 
 def do_search(state):
-    """Backtrack search for a valid leaf state, return True if one was found.
+    """
+    Backtrack search for a valid leaf state, return True if one was found.
     """
     if not state.is_valid():
         return False
@@ -75,7 +83,8 @@ def do_search(state):
                 state.up_delta(next_delta)
 
 class QueensBoard(SearchState):
-    """Solve the n x n queen problem using depth-first shared state.
+    """
+    Solve the n x n queen problem using depth-first shared state.
     """
     __slots__ = "n", "board", "next_row", "valid"
     def __init__(self, board_size):
