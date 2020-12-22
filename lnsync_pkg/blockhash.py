@@ -12,8 +12,7 @@ For very large files (>1 GiB), use a reader/hasher thread combo.
 import os
 import pyhashxx
 
-from lnsync_pkg.producerconsumer_threaded \
-    import ProducerConsumerThreaded, NoMoreData
+from lnsync_pkg.thread_utils import ProducerConsumerThreaded, NoMoreData
 
 ASYNC_SIZE_THRESH = 512 * 2**20 # Files larger than 512 Mib
                                 # are processed asynchronously, with threads.

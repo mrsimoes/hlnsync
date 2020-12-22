@@ -40,6 +40,8 @@ from lnsync_pkg.p23compat import fstr, isfstr, fstr2str
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.fileid import make_id_computer
 from lnsync_pkg.glob_matcher import GlobMatcher
+from lnsync_pkg.thread_utils import thread_executor_terminator
+
 
 class TreeError(Exception):
     pass
@@ -177,6 +179,14 @@ class FileTree:
     glob pattern. Exclude patterns may be set so long as the root dir hasn't
     been scanned yet.
     """
+
+    @classmethod
+    def scan_trees_async(cls, trees):
+        def scanner(t):
+            pr.info("Async scanning:", t.printable_path())
+            t.scan_subtree()
+        thread_executor_terminator(scanner, trees)
+
     def __init__(self, **kwargs):
         """
         Create a root dir object, marked unscanned.
@@ -227,12 +237,18 @@ class FileTree:
             root_matcher = GlobMatcher(self._glob_patterns)
             self._glob_matchers = {self.rootdir_obj: root_matcher}
 
-    def printable_path(self, rel_path, pprint=str):
-        """Return a pretty-printed full path from a tree relative path."""
+    def printable_path(self, rel_path=None, pprint=str):
+        """
+        Return a pretty-printed full path from a tree relative path.
+        If rel_path is None, default to root directory.
+        """
+        if rel_path is None:
+            rel_path = fstr("")
         return pprint(fstr2str(os.path.join(self.root_path, rel_path)))
 
     def size_to_files(self, size=None):
-        """Return a list of file objects or, if size is None, the internal
+        """
+        Return a list of file objects or, if size is None, the internal
         size->files dict. Trigger a full-tree scan, if needed.
         """
         assert self._use_metadata, "size_to_files without metadata."
@@ -246,17 +262,23 @@ class FileTree:
             return []
 
     def get_file_count(self):
-        """Return total number of files, after scanning the full tree."""
+        """
+        Return total number of files, after scanning the full tree.
+        """
         self.scan_subtree()
         return sum(len(szfiles) for (sz, szfiles) in self._size_to_files.items())
 
     def get_all_file_ids(self):
-        """Return a dictionary view object with all file ids."""
+        """
+        Return a dictionary view object with all file ids.
+        """
         self.scan_subtree()
         return self._size_to_files.keys()
 
     def get_all_dirs(self):
-        """Return a set with all dir objects by scanning the full tree."""
+        """
+        Return a set with all dir objects by scanning the full tree.
+        """
         self.scan_subtree()
         res = [self.rootdir_obj]
         for obj, _pobj, _rp in self.walk_paths(dirs=True):
@@ -265,7 +287,9 @@ class FileTree:
         return res
 
     def get_all_sizes(self):
-        """Return list of all file sizes in the tree."""
+        """
+        Return list of all file sizes in the tree.
+        """
         sz_to_files_map = self.size_to_files()
         return sz_to_files_map.keys()
 
@@ -274,16 +298,22 @@ class FileTree:
         return self._id_to_file[fid]
 
     def rel_to_abs(self, rel_path):
-        """Relative to absolute path."""
+        """
+        Relative to absolute path.
+        """
         return os.path.join(self.root_path, rel_path)
 
     def abs_to_rel(self, abs_path):
-        """Absolute to relative path."""
+        """
+        Absolute to relative path.
+        """
         return os.path.relpath(abs_path, self.root_path)
 
     def _new_dir_obj(self, dir_id=None):
-        """Return a new dir object, parent and basename yet undetermined.
-        If dir_id is None, it is autoset."""
+        """
+        Return a new dir object, parent and basename yet undetermined.
+        If dir_id is None, it is autoset.
+        """
         if dir_id is None:
             dir_id = self._next_free_dir_id
             self._next_free_dir_id += 1
@@ -291,8 +321,10 @@ class FileTree:
         return dir_obj
 
     def _new_file_obj(self, obj_id, rawmetadata):
-        """Return a new file object. obj_is the file id, rawmetadata is a stat
-        record here."""
+        """
+        Return a new file object. obj_is the file id, rawmetadata is a stat
+        record here.
+        """
         stat_data = rawmetadata
         if self._use_metadata:
             metadata = Metadata(stat_data.st_size,
@@ -304,7 +336,9 @@ class FileTree:
         return file_obj
 
     def scan_dir(self, dir_obj):
-        """Scan a directory from disk, if it hasn't been scanned before."""
+        """
+        Scan a directory from disk, if it hasn't been scanned before.
+        """
         assert isinstance(dir_obj, DirItem) #is not None, "scan_dir: no dir_obj"
         if dir_obj.was_scanned():
             return
@@ -368,7 +402,9 @@ class FileTree:
                 self._glob_matchers[subdir_obj] = subdir_glob_matcher
 
     def scan_subtree(self, start_dir=None):
-        """Recursively scan subtree rooted at start_dir."""
+        """
+        Recursively scan subtree rooted at start_dir.
+        """
         if start_dir is None:
             start_dir = self.rootdir_obj
         self.scan_dir(start_dir)

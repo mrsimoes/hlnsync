@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
-"""Sync target file tree with source tree using hardlinks.
+"""
+Sync target file tree with source tree using hardlinks.
 Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
 
 This program is free software: you can redistribute it and/or modify
@@ -67,6 +68,9 @@ def wrap(text, width):
                                ) >= width)],
                    word,),
                   text.split(' '),)
+
+# NB: A new version of argparse reformats the description string to fit the
+# terminal width.
 
 DESCRIPTION = wrap(
     "lnsync %s (python %d.%d).\n%s\n"
@@ -549,7 +553,7 @@ def do_sync(args):
     merge_tree_patterns(args.source, args.targetdir)
     with FileHashTree(**args.source.kws()) as src_tree:
         with FileHashTree(**args.targetdir.kws()) as tgt_tree:
-            FileHashTree.scan_trees_async(src_tree, tgt_tree)
+            FileHashTree.scan_trees_async([src_tree, tgt_tree])
             pr.progress("matching...")
             matcher = TreePairMatcher(src_tree, tgt_tree)
             if not matcher.do_match():
@@ -657,7 +661,7 @@ parser_syncr = cmd_parsers.add_parser(
             ],
     help="sync and then execute the rsync command")
 parser_syncr.add_argument(
-    "sourcedir", type=ArgTreeOnline, action=StoreTreeArg)
+    "sourcedir", type=ArgTree, action=StoreTreeArg)
 parser_syncr.add_argument(
     "targetdir", type=ArgTreeOnline, action=StoreTreeArg)
 def do_syncr(sysargv, args, more_args):
@@ -688,11 +692,12 @@ def do_fdupes(args):
     """
     Find duplicate files, using file size as well as file hash.
     """
+    grouper = \
+        GroupedFileListPrinter(args.hardlinks, args.alllinks,
+                               args.sameline, args.sort)
     with FileHashTree.listof(targ.kws() for targ in args.locations) \
             as all_trees:
-        grouper = \
-            GroupedFileListPrinter(args.hardlinks, args.alllinks,
-                                   args.sameline, args.sort)
+        FileHashTree.scan_trees_async(all_trees)
         for file_sz in fdupes.sizes_repeated(all_trees, args.hardlinks):
             with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
                 for _hash, located_files in \
@@ -720,10 +725,11 @@ parser_onall.add_argument(
 def do_onall(args):
     if len(args.locations) == 1:
         return do_onfirstonly(args)
+    grouper = \
+        GroupedFileListPrinter(args.hardlinks, args.alllinks,
+                               args.sameline, args.sort)
     with FileHashTree.listof(loc.kws() for loc in args.locations) as all_trees:
-        grouper = \
-            GroupedFileListPrinter(args.hardlinks, args.alllinks,
-                                   args.sameline, args.sort)
+        FileHashTree.scan_trees_async(all_trees)
         for file_sz in sorted(fdupes.sizes_onall(all_trees)):
             with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
                 for _hash, located_files in \
@@ -748,10 +754,11 @@ parser_onfirstonly = cmd_parsers.add_parser(
 parser_onfirstonly.add_argument(
     "locations", type=ArgTree, action=StoreTreeArgList, nargs="+")
 def do_onfirstonly(args):
+    grouper = \
+        GroupedFileListPrinter(args.hardlinks, args.alllinks,
+                               args.sameline, args.sort)
     with FileHashTree.listof(loc.kws() for loc in args.locations) as all_trees:
-        grouper = \
-            GroupedFileListPrinter(args.hardlinks, args.alllinks,
-                                   args.sameline, args.sort)
+        FileHashTree.scan_trees_async(all_trees)
         first_tree = all_trees[0]
         other_trees = all_trees[1:]
         for file_sz in sorted(first_tree.get_all_sizes()):
@@ -975,8 +982,11 @@ def do_cmp(args):
     merge_tree_patterns(args.leftlocation, args.rightlocation)
     def cmp_files(path, left_obj, right_obj):
         left_prop, right_prop = None, None
+        if left_obj.file_metadata.size != right_obj.file_metadata.size:
+            pr.print("files differ in size: %s" % fstr2str(path,))
+            return
         try:
-            left_prop = left_tree.get_prop(left_obj)
+            left_prop = left_tree.get_prop(left_obj) # TODO Threaded hashing here.
             right_prop = right_tree.get_prop(right_obj)
         except TreeError:
             if left_prop is None:
@@ -985,9 +995,7 @@ def do_cmp(args):
                 err_path = right_tree.printable_path(path, pprint=_quoter)
             pr.error("reading %s, ignoring" % (err_path,))
         else:
-            if left_obj.file_metadata.size != right_obj.file_metadata.size:
-                pr.print("files differ in size: %s" % fstr2str(path,))
-            elif left_prop != right_prop:
+            if left_prop != right_prop:
                 pr.print("files differ in content: %s" % fstr2str(path,))
             else:
                 if args.hardlinks or \
@@ -1069,8 +1077,7 @@ def do_cmp(args):
     with FileHashTree(**args.leftlocation.kws()) as left_tree:
         with FileHashTree(**args.rightlocation.kws()) as right_tree:
             if not args.hardlinks:
-                left_tree.scan_subtree()
-                right_tree.scan_subtree()
+                FileHashTree.scan_trees_async([left_tree, right_tree])
             dirpaths_to_visit = [fstr("")]
             while dirpaths_to_visit:
                 cur_dirpath = dirpaths_to_visit.pop()

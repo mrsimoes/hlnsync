@@ -51,9 +51,8 @@ Create multiple trees at once using:
 
 import os
 import abc
-import concurrent.futures
 
-from lnsync_pkg.p23compat import fstr2str
+from lnsync_pkg.p23compat import fstr2str, fstr
 
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.fileid import make_id_computer
@@ -95,19 +94,6 @@ class FilePropTree(FileTree, metaclass=onofftype):
     """
     A file tree providing persistent cache of values for a file property.
     """
-    @classmethod
-    def scan_trees_async(cls, *trees):
-        if False:
-            for t in trees:
-                t.scan_subtree()
-            return
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(trees)) as executor:
-            def scanner(t):
-                pr.print("Scanning ", tree)
-                t.scan_subtree()
-                pr.print("Done ", tree)
-            for tree in trees:
-                executor.submit(scanner, tree)
 
     def __init__(self, **kwargs):
         """
@@ -202,9 +188,7 @@ class FilePropTree(FileTree, metaclass=onofftype):
             return
         def prop_getter(f_obj):
             self.get_prop(f_obj)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(f_obj_list)) as executor:
-            for f_obj in f_obj_list:
-                executor.submit(prop_getter, f_obj)
+        thread_executor_terminator(prop_getter, f_obj_list)
 
     def db_get_uptodate_prop(self, f_obj, delete_stale):
         """
@@ -283,10 +267,13 @@ class FilePropTreeOffline(FilePropTree, mode=OFFLINE):
         file_obj = self._file_type(obj_id, metadata)
         return file_obj
 
-    def printable_path(self, rel_path, pprint=str):
+    def printable_path(self, rel_path=None, pprint=str):
         """
         Return a printable version of the tree+relpath.
+        If rel_path is None, default to root directory.
         """
+        if rel_path is None:
+            rel_path = fstr("")
         return "{%s}%s" % \
                 (pprint(fstr2str(self.db.dbpath)), pprint(fstr2str(rel_path)))
 
@@ -392,10 +379,14 @@ class FilePropTreeOnline(FilePropTree, mode=ONLINE):
 #        self.db.vacuum()
         pr.info("database cleaned")
 
-    def printable_path(self, rel_path, pprint=str):
+    def printable_path(self, rel_path=None, pprint=str):
         """
         Return a printable version of the tree+relpath.
+
+        If rel_path is None, default to root directory.
         """
+        if rel_path is None:
+            rel_path = fstr("")
         return super(FilePropTreeOnline, self).printable_path(
             rel_path, pprint=pprint)
 

@@ -28,14 +28,15 @@ class OneGraph:
         return str(self._arrows)
 
     def follow_arrow(self, node_a):
-        """If a->b is in the graph, return b, else return None."""
+        """
+        If a->b is in the graph, return b, else return None.
+        """
         if node_a in self._arrows:
             return self._arrows[node_a]
         else:
             return None
 
     def has_cycle(self):
-        """Return True if a cycle exists, else False."""
         return len(self._cycles) > 0
 
     def iterarrows(self):
@@ -48,7 +49,7 @@ class OneGraph:
         self._arrows[node_a] = node_b
         cyc = self._cycle_from(node_b)
         if cyc is not None: # There's a cycle. Is it a new one?
-            elem = cyc[0] # Pick any elem in the cycle found.
+            elem = cyc[0] # Pick any elem in the found cycle.
             if not any((elem in old_cyc) for old_cyc in self._cycles):
                 self._cycles.append(set(cyc))
 

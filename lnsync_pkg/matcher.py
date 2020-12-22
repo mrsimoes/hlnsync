@@ -3,7 +3,8 @@
 # Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
 # For conditions of distribution and use, see copyright notice in lnsync.py
 
-"""Match source and target file trees, based on file size and content hash.
+"""
+Match source and target file trees, based on file size and content hash.
 
 Each source file may correspond to multiple source paths, and likewise for the
 target tree.
@@ -19,18 +20,22 @@ import os
 import itertools
 import copy
 from collections import namedtuple
-import concurrent.futures
 
 from lnsync_pkg.human2bytes import bytes2human
 from lnsync_pkg.p23compat import fstr, fstr2str
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.onegraph import OneGraph
 from lnsync_pkg.backtracker import SearchState, do_search
+from lnsync_pkg.thread_utils import thread_executor_terminator
+
+
+MIN_WORK_FOR_THREADED_HASHING = 16 * 2**20 # Min bytes to hash with src an tgt threads.
 
 SrcTgt = namedtuple("SrcTgt", ["src", "tgt"])
 
 class TreePairMatcher:
-    """Match file trees and generate target path sync (mv, ln, rm) commands.
+    """
+    Match file trees and generate target path sync (mv, ln, rm) commands.
 
     Target tree must be in online mode.
     If source tree is also online, it cannot be a subdir of the target, else
@@ -306,11 +311,15 @@ class State(SearchState):
             # If there are single source and target files for this size,
             # and the paths are the same, do nothing (no hashing required).
             return
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            def preget_props(tree, files):
+        if file_sz * (min(len(sz_src_files), len(sz_tgt_files))) > \
+                MIN_WORK_FOR_THREADED_HASHING:
+            # There's enough work to hash src and tgs files in two threads.
+            def preget_props(tree_files):
+                tree, files = tree_files
                 tree.preget_props_async(files)
-            executor.submit(preget_props, self.trees.src, sz_src_files)
-            executor.submit(preget_props, self.trees.tgt, sz_tgt_files)
+            thread_executor_terminator(preget_props,
+                                       ( (self.trees.src, sz_src_files),
+                                         (self.trees.tgt, sz_tgt_files) ) )
         src_hashes = {self.trees.src.get_prop(f) for f in sz_src_files}
         tgt_hashes = {self.trees.tgt.get_prop(f) for f in sz_tgt_files}
         sz_common_hashes = set.intersection(src_hashes, tgt_hashes)

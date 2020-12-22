@@ -4,25 +4,32 @@
 # For conditions of distribution and use, see copyright notice in lnsync.py
 
 """
+Included:
+
 An abstract class that provides producer-consumer synchronized threading with a
 buffer size of one datum.
+
+A thread pool creator that terminates all threads on SIGINT.
 """
 
-import threading
-
+import time
 import abc
+
+import threading
+import concurrent.futures.thread
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class NoMoreData(Exception):
     pass
 
 class ProducerConsumerThreaded:
     """
-    Coordinate a Producer thread with a Consumer thread.
+    Coordinate data Producer and Consumer threads.
     """
     def __init__(self):
         self.ready_for_data = threading.Event()
         self.ready_for_data.set()
-        self.data_is_available = threading.Event()
+        self.data_is_available = threading.Event() # Set also at NoMoreData.
         self.done = False
         def producer_fn():
             while True:
@@ -63,3 +70,15 @@ class ProducerConsumerThreaded:
     @abc.abstractmethod
     def consume(self, datum):
         "Use the given datum."
+
+
+def thread_executor_terminator(fn, objs):
+    with ThreadPoolExecutor(max_workers=len(objs)) as executor:
+        try:
+            futures = [executor.submit(fn, obj) for obj in objs]
+            while not all(future.done() for future in futures):
+                time.sleep(0.2)
+        except KeyboardInterrupt:
+            executor._threads.clear()
+            concurrent.futures.thread._threads_queues.clear()
+            raise

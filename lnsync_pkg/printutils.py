@@ -21,6 +21,7 @@ A prefix may be set for each non-progress message.
 import sys
 import atexit
 from itertools import chain
+from collections import defaultdict
 import threading
 
 from lnsync_pkg.p23compat import isfstr
@@ -47,8 +48,9 @@ _print = print
 _stdout_is_tty = sys.stdout.isatty()
 _stderr_is_tty = sys.stderr.isatty()
 
-_progress_prefixes = []
 _progress_was_printed = False
+_thread_prog_prefix_stack = defaultdict(lambda : [])
+_thread_prog_prefix = defaultdict(lambda : "")
 
 _app_prefix = ""
 
@@ -57,33 +59,40 @@ class ProgressPrefix:
     Set up a context during which a prefix is prepended to progress output.
     """
     def __init__(self, prefix):
-        self.prefix = prefix
+        self.we = threading.get_ident()
+        we = self.we
+        with PRINT_LOCK:
+            _thread_prog_prefix_stack[we].append(prefix)
+            _thread_prog_prefix[we] = "".join(_thread_prog_prefix_stack[we])
+
     def __enter__(self):
-        global _progress_prefixes
-        _progress_prefixes.append(self.prefix)
+        pass
+
     def __exit__(self, exc_type, exc_value, traceback):
-        global _progress_prefixes
-        assert _progress_prefixes[-1] == self.prefix
-        _progress_prefixes.pop()
+        we = self.we
+        with PRINT_LOCK:
+            _thread_prog_prefix_stack[we].pop()
+            _thread_prog_prefix[we] = "".join(_thread_prog_prefix_stack[we])
         return False # We never handle exceptions.
 
 def progress(*args):
     """
     Print each arg in the same line, without changing to the next line.
     """
-    global _progress_prefixes
     global _progress_was_printed
     global option_verbosity
     if option_verbosity < 0 or not _stdout_is_tty:
         return
-    line = "".join(chain(_progress_prefixes, args))
-    line = line.replace("\n", "")
     with PRINT_LOCK:
+        we = threading.get_ident()
+        _progress_prefix = _thread_prog_prefix[we]
+        line = _progress_prefix + "".join(args)
+        line = line.replace("\n", "")
         _print('\033[?7l', end="") # Wrap off.
         _print(line, end="\033[0K\r") # Erase to end of line.
         _print('\033[?7h', end="") # Wrap on.
         _progress_was_printed = True
-    sys.stdout.flush()
+        sys.stdout.flush()
 
 def progress_percentage(par, tot):
     """
@@ -171,18 +180,19 @@ def trace(template_str, *str_args, **kwargs):
                     template_str % str_args, file=sys.stderr, **kwargs)
 
 def _exit_func():
-    if _stdout_is_tty:
-        _print("\033[0J", end="") # Clear line.
-    try:     # Prevent "broken pipe" errors if outputs are closed before atexit.
-        sys.stdout.flush()
-        sys.stdout.close()
-    except Exception:
-        pass
-    try:
-        sys.stderr.flush()
-        sys.stderr.close()
-    except Exception:
-        pass
+    with PRINT_LOCK:
+        if _stdout_is_tty:
+            _print("\033[0J", end="") # Clear line.
+        try:     # Prevent "broken pipe" errors if outputs are closed before atexit.
+            sys.stdout.flush()
+            sys.stdout.close()
+        except Exception:
+            pass
+        try:
+            sys.stderr.flush()
+            sys.stderr.close()
+        except Exception:
+            pass
 
 atexit.register(_exit_func)
 

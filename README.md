@@ -8,35 +8,45 @@ In this way, file renaming, moving, and linking in the source directory are quic
 
 Files are compared via hashes, which are stored.
 
-Additional features are provided based on those file hashes, such as duplicate detection.
+Additional features, such as duplicates detection, are provided based on those file hashes.
 
-_lnsync_ may be used as a preprocessing step for other sync tools such as _rsync_, which do copy and delete file data.
+_lnsync_ may be used as a preprocessing step for other sync tools such as _rsync_.
 
 ##  Hard Link Support
 
 On some file systems (e.g. ext3/4, NTFS, btrfs), the same file may be reached by multiple file paths, which function as aliases.
 
-A new path created for an existing file is a _hard link_, but all such aliases are on an equal footing, so each may be called a hard link. Removing the last hard link to a file means deleting that file.
+A new path created for an existing file is a _hard link_, but all such aliases are on an equal footing, so each may be called a hard link.
 
-Arbitrary linking/delinking (but not deleting) in the source can also be easily easily replicated in the target, so long as the target supports linking.
+Removing the last hard link to a file means deleting that file.
+
+Arbitrary linking/delinking (but not deleting) in the source can be easily replicated in the target, so long as the target also supports linking.
 
 ##  Syncing and the Hash Database
 
-_lnsync_  makes a best-effort to sync the target to the source by only renaming files and generally creating/removing hard links on the target.
+_lnsync_  makes a best-effort to sync the target to the source without copying or deleting file data.
 
 Empty directories on the target which do not exist on the source are also removed.
 
 File content is compared using xxHash (a fast, non-cryptographic hash function). Hash values are stored in a single-file database at the top-level directory of each file tree.
 
-This hash value database is a single file at the top directory of processed trees, with basename matching `lnsync-[0-9]+.db`. (Only one such file should exist there.) These files are ignored by all _lnsync_ operations, and care should be taken not to overwrite them when syncing with other tools.
+The hash values database is a single file at the base directory, with basename matching `lnsync-[0-9]+.db`. Only one such file should exist there.
 
-File modification times are used to detect stale hash values. Modification times are not synced. File ownership and permissions are ignored: files which cannot be read are skipped.
+Hash databases are ignored by all _lnsync_ operations.
+
+Care should be taken not to overwrite them when syncing with other tools.
+
+File modification times are used to detect stale hash values. Modification times are not synced to the target.
+
+File ownership and permissions are ignored. Files which cannot be read are skipped.
 
 Symbolic links are skipped.
 
 ## Offline File Trees
 
-_lnsync_ can save the file tree structure (with no file content) of a local directory to a single-file database. These offline trees can be used in most _lnsync_ commands in place of an local directory, e.g. as the source in a sync command.
+_lnsync_ can save the file tree structure (with no file content) of a local directory to a single-file database.
+
+These offline trees can be used in most _lnsync_ commands in place of an local directory, e.g. as the source in a sync command.
 
 ## File Searching
 
@@ -66,23 +76,35 @@ In addition to syncing, _lnsync_ allows using the file hash database to search f
 
 # Example Usage
 
-If you have your photo archive at `/home/you/Photos` and your backup is at `/mnt/disk/Photos`, run `lnsync sync -n /home/you/Photos /mnt/disk/Photos` for a dry-run, to see which sync operations would be performed. To sync, ommit the `-n` switch.
+If your photos are at `/home/you/Photos` and its backup is at `/mnt/disk/Photos`, then `lnsync sync /home/you/Photos /mnt/disk/Photos` will sync the target. For a dry run, use the `-n` switch.
 
-You will notice that two database files are created, one at the source and another at the backup directory. File hashes are cmoputed as needed and then stored in these files. The database filenames includes a random suffix to avoid accidental overwriting when syncing with a tool other than _lsync_.
+After syncing, two database files are created, one at the source `/home/you/Photos` and another at the target `/mnt/disk/Photos`.
 
-To quickly obtain an _rsync_ command that will complete syncing, skipping `lnsync` database files, run `lnsync rsync /home/you/Photos /mnt/disk/Photos`. To also run this command, use the `-x` switch. Make sure the `rsync` options provided by this command are suitable for you.
+File hashes are computed, as needed, and stored in those files.
 
-Finally, to check the target is in-sync by recursively comparing it to source, run `lnsync cmp /home/you/Photos /mnt/disk/Photos`.
+The database filenames include a random suffix, to help avoid accidental overwriting when syncing with a tool other than _lsync_.
 
-To find duplicate files on the Photos directory, run `lnsync fdupes /home/you/Photos`. Use `-z` to compare by size only. Use `-H` to count different hard links to the same file as distinct files. If this option is not given, for each multiple-linked with other duplicates, a path is arbitrarily picked and printed.
+To obtain an _rsync_ command that will complete syncing, skipping `lnsync` database files, run `lnsync rsync /home/you/Photos /mnt/disk/Photos`.
+
+If the `rsync` options provided are suitable, run the command again with the `-x` switch to execute.
+
+Alternatively, run `lnsync syncr /home/you/Photos /mnt/disk/Photos` to complete those two steps in one go.
+
+Finallyt, to compare source and target, run `lnsync cmp /home/you/Photos /mnt/disk/Photos`.
+
+To find duplicate files, run `lnsync fdupes /home/you/Photos`.
+
+Use `-z` to compare by size only.
+
+Use `-H` to treat hard links to the same file as distinct. If this option is not given, for each multiple-linked with other duplicates, a path is arbitrarily picked and printed.
 
 To find all files in Photos which are not in the backup (under any name): `lnsync onfirstonly /home/you/Photos /mnt/disk/Photos`. 
 
 To find all files with jpg extension, `lnsync search /home/you/Photos "*.jpg"`.
 
-To sync the subdir `/home/you/Photos/Best` to your digital picture frame, using the hash database at `/home/you/Photos`: `lnsync sync /home/you/Photos/Best --root=/home/you/Photos /mnt/eframe/`.
-
 To have any operation on a subdir of `/home/you/Photos` use the hash database at `/home/you/Photos`, include the option `root=/home/you/Photos` under section `/home/you/Photos/**` of your config file. (See Configuration Files below.)
+
+For example, to sync the subdir `/home/you/Photos/Best` to another target, using the hash database at `/home/you/Photos`: `lnsync sync /home/you/Photos/Best --root=/home/you/Photos /mnt/eframe/`.
 
 # Command Reference
 
@@ -123,9 +145,18 @@ All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [
 
 ## Finding Files
 
-- `lnsync cmp <tree1> <tree2>` Recursively compares two file trees. If `--hardlinks` is specified, only files at each path are compared, and the hardlink structure is ignored; otherwise both trees need to be fully scanned at the outset. Accepts `--exclude=<pattern>` options.
+### Files vs Paths
+These commands operate on files, as opposed to paths.
+
+Two paths to the same file do not consitute by themselves a duplication and, if there are two identical file, then fdupes will output a single, arbitrarily picked path for each file when outputing the result.
+
+To instead operate on paths, use the `--hardlinks` switch on these commands.
+
+To operate on files, but print all hardlinks, instead a of picking one, use  `--alllinks`.
+ 
+- `lnsync cmp <tree1> <tree2>` Recursively compares two file trees. Accepts `--exclude=<pattern>` .
 - `lnsync fdupes [-h] [<tree>]+` Find files duplicated anywhere on the given trees.
-- `lnsync onall [<tree>]+`, `lnsync onfirstonly [<tree>]+`, `lnsync onlastonly [<tree>]+` Find files as advertised. Some options: `-M` prunes by maximum size; `-0` prunes empty files; `-1` prints each group of files in a single line, separated by spaces and with escaped backslashes and spaces, like `fdupes`; `-s` sorts output by size. Use `-H` to consider multiple links to the same file as distinct files; if this option is not used, print a single, arbitrarily picked path for each multiple-linked file found to satisfy the condition of the command.
+- `lnsync onall [<tree>]+`, `lnsync onfirstonly [<tree>]+`, `lnsync onlastonly [<tree>]+` Find files as advertised. Some options: `-M` prunes by maximum size; `-0` prunes empty files; `-1` prints each group of files in a single line, separated by spaces and with escaped backslashes and spaces, like `fdupes`; `-s` sorts output by size.
 - `lnsync search <tree> [<globpat>]+` Find files one of whose relative paths matches one of the given glob patterns (which are as in `--exclude`).
 
 ## Other Commands
@@ -152,16 +183,17 @@ You can support this project with bitcoin at [17HS828pkQMiXZGy7UNbA49TYCz7LAQ2ze
 This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you are welcome to redistribute it under certain conditions. See the GNU General Public Licence v3 for details.
 
 ## Caveats and Limitations
-- Works only on locally mounted directories, no support whatsoever for remote servers.
+- Supports Linux only.
+- Supports only for locally mounted directories.
 - Depends on mtime to detect file content changes.
 - If source files A, B, C (with pairwise distinct contents) are renamed on target in a cycle to C, A, B, sync is currently not supported.
 - Only readable files and readable+accessible directories are read. Other files and dirs, as well as symlinks, pipes, special devices are ignored.
 - Minimal support for case-insensitive but case-preserving file systems like vfat: if a target file name differs from source match in case only, target is not updated.
-- Supports Linux only.
 
 ## Release Notes
 
-- v0.5.3: New `syncr`, changed `mkoffline` syntax, more output options (`--alllinks`), hard link-aware `check` and `cmp`, improved `search`, 
+- v0.6.0: Threaded hashing and tree scanning for much better performance. Internal refactoring.
+- v0.5.3: New `syncr`. Changed `mkoffline` syntax. More output options (`--alllinks`). Hard link-aware `check` and `cmp`, improved `search`. 
 - v0.5.2: Search files by file path glob pattern. Multiple patterns on --exclude. More powerful configuration files. `--root` now allowed in `mkoffline` and `rehash`. Major rewrite of the command line and config file parsers. Optimize onfirstonly and sync to do less hashing. Fix bugs in `--root`, `cmp`, `check`, and more. Wildcards in config section names.
 - v0.4.0: Drop Python 2 compatibility. Add config files. Bug fixes.
 - v0.3.8: Less hashing on `onfirstonly`. Sort file search output by size. Adjust user output levels.
@@ -172,20 +204,16 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 - v0.3.2: New --root option to allow reading and updating a root tree database when querying subtrees.
 - v0.3.0: Exclude files by glob pattern in sync and other commands. Better terminal output. Major code overhaul.
 - v0.1.9: Improved sync algorithm. Remove directories left empty after sync.
-- v0.1: Initial version.
+- v0.1.0: Initial version.
 
 ## Possible Improvements
 
 - argparsecomplete support
-- Find all hard links (aliases) to a given file.
 - Make `--include` and `--exclude` patterns more compatible with `rsync`.
-- Extend `cmp` to take hard links into account and generally extend each command to either work on files or paths.
 - Filenames are NOT converted to Unicode. To allow using offline database across systems, conversion is required.
 - Detect renamed directories to obtain a more compact sync schedule.
-- Use coroutines to scan trees and hash files in parallel.
 - Support partial hashes for quicker comparison of same-size files.
 - Further optimize the sync algorithm, though it has been working well in practice.
 - Support for checking for duplicates by actual content, not just hash.
 - Update target mtimes from source.
-- Allow more output sorting options, e.g. by name or mtime.
-
+- More output sorting options, e.g. by name or mtime.
