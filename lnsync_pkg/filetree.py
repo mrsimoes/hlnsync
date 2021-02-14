@@ -34,14 +34,15 @@ linking/unlinking) and optionally written back to the disk tree. All commands
 are reversible, except those that delete a file's only path.
 """
 
+# pylint: disable=too-many-public-methods, too-many-instance-attributes
+
 import os
 
-from lnsync_pkg.p23compat import fstr, isfstr, fstr2str
+from lnsync_pkg.fstr_type import fstr, isfstr, fstr2str
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.fileid import make_id_computer
 from lnsync_pkg.glob_matcher import GlobMatcher
 from lnsync_pkg.thread_utils import thread_executor_terminator
-
 
 class TreeError(Exception):
     pass
@@ -51,13 +52,16 @@ class TreeItem:
     Abstract base class for all FileTree items.
     """
 
-    def is_dir(self):
+    @staticmethod
+    def is_dir():
         return False
 
-    def is_file(self):
+    @staticmethod
+    def is_file():
         return False
 
-    def is_excluded(self):
+    @staticmethod
+    def is_excluded():
         return False
 
 class FileItem(TreeItem):
@@ -68,7 +72,8 @@ class FileItem(TreeItem):
         self.file_metadata = metadata
         self.relpaths = []
 
-    def is_file(self):
+    @staticmethod
+    def is_file():
         return True
 
 class DirItem(TreeItem):
@@ -82,11 +87,15 @@ class DirItem(TreeItem):
         self.scanned = False
 
     def was_scanned(self):
-        """Return True if dir was scanned."""
+        """
+        Test if dir was scanned.
+        """
         return self.scanned
 
     def mark_scanned(self):
-        """Mark dir as scanned."""
+        """
+        Mark dir as scanned.
+        """
         self.scanned = True
 
     def add_entry(self, basename, obj):
@@ -182,10 +191,10 @@ class FileTree:
 
     @classmethod
     def scan_trees_async(cls, trees):
-        def scanner(t):
-            pr.info("Async scanning:", t.printable_path())
-            t.scan_subtree()
-        thread_executor_terminator(scanner, trees)
+        def scanner(tree):
+            pr.info("Async scanning:", tree.printable_path())
+            tree.scan_subtree()
+        thread_executor_terminator(scanner, trees, True)
 
     def __init__(self, **kwargs):
         """
@@ -198,7 +207,7 @@ class FileTree:
             - use_metadata: if True read metadata index files by size
             - maxsize: ignore files larger than this, is positive and not None
             - skipempty: ignore zero-length files
-            - writeback: if True, path manipulation methods update the disk.
+            - writeback: if True, path operation methods update the disk tree.
             - file_type, dir_type: classes to instantiate.
         """
         self.root_path = kwargs.pop("root_path")
@@ -498,7 +507,8 @@ class FileTree:
         Remove a path from an existing file: fbasename at dir.
         dir must have already been scanned.
         If the final path of a file is removed, the file is removed
-        from tree indices."""
+        from tree indices.
+        """
         dir_obj.rm_entry(fbasename)
         relpath = os.path.join(dir_obj.get_relpath(), fbasename)
         assert relpath in file_obj.relpaths, "_rm_path: non-existing relpath."
@@ -524,7 +534,6 @@ class FileTree:
     def follow_path(self, relpath):
         """
         Return file or dir or other object by relpath from root, or None.
-
         Do not follow symlinks.
         """
         assert self.rootdir_obj is not None, "follow_path: no rootdir_obj."
@@ -576,22 +585,19 @@ class FileTree:
         startdir_obj = self.follow_path(startdir_path)
         assert startdir_obj is not None \
             and startdir_obj.is_dir(), "walk_paths: dobj not a dir"
+
         def output_files(dir_obj):
             dir_path = dir_obj.get_relpath()
             for basename, obj in dir_obj.entries.items():
                 if (files and obj.is_file()):
                     yield obj, dir_obj, os.path.join(dir_path, basename)
+
         def output_dir(dir_obj):
             if dirs and dir_obj != startdir_obj:
                 dir_path = dir_obj.get_relpath()
                 yield dir_obj, dir_obj.parent, dir_path
-        if not recurse:
-            for k in output_files(startdir_obj):
-                yield k
-            for subd_obj in startdir_obj.iter_subdirs():
-                for k in output_dir(subd_obj):
-                    yield k
-        elif topdown:
+
+        def walk_topdown():
             stack = [startdir_obj]
             while stack:
                 curdir_obj = stack.pop()
@@ -602,7 +608,8 @@ class FileTree:
                     yield k
                 for subd_obj in curdir_obj.iter_subdirs():
                     stack.append(subd_obj)
-        else:
+
+        def walk_bottomup():
             stack = [[None], [startdir_obj]]
             while stack:
                     # At all times:
@@ -622,6 +629,19 @@ class FileTree:
                         yield k
                     for k in output_files(prevdir):
                         yield k
+
+        if not recurse:
+            for k in output_files(startdir_obj):
+                yield k
+            for subd_obj in startdir_obj.iter_subdirs():
+                for k in output_dir(subd_obj):
+                    yield k
+        elif topdown:
+            for k in walk_topdown():
+                yield k
+        else:
+            for k in walk_bottomup():
+                yield k
 
     def add_path_writeback(self, file_obj, relpath):
         """

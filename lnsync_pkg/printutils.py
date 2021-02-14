@@ -18,13 +18,12 @@ These contexts may be nested.
 A prefix may be set for each non-progress message.
 """
 
+# pylint: disable=global-statement, redefined-builtin, broad-except
+
 import sys
 import atexit
-from itertools import chain
 from collections import defaultdict
 import threading
-
-from lnsync_pkg.p23compat import isfstr
 
 # Make printing sequences of terminal ctrl codes thread-safe.
 PRINT_LOCK = threading.RLock()
@@ -49,8 +48,8 @@ _stdout_is_tty = sys.stdout.isatty()
 _stderr_is_tty = sys.stderr.isatty()
 
 _progress_was_printed = False
-_thread_prog_prefix_stack = defaultdict(lambda : [])
-_thread_prog_prefix = defaultdict(lambda : "")
+_thread_prog_prefix_stack = defaultdict(lambda: [])
+_thread_prog_prefix = defaultdict(lambda: "")
 
 _app_prefix = ""
 
@@ -121,9 +120,8 @@ def _print_main(*args, **kwargs):
     #    for line in "".join(map(str, args)).splitlines():
     #        _print(line, file=file, **kwargs)
         for arg in args:
-            if True or not isfstr(arg):
-                arg = str(arg)
-            file.write(arg)
+            out_arg = str(arg)
+            file.write(out_arg)
         if end:
             file.write(end)
         file.flush()
@@ -200,10 +198,10 @@ if __name__ == "__main__":
     import time
     import random
     if len(sys.argv) > 1:
-        arg = str(sys.argv[1])
+        intext = str(sys.argv[1])
     else:
-        arg = "TEST"
-    msg = arg + " -- this is "
+        intext = "TEST"
+    msg = intext + " -- this is "
     set_app_prefix("myapp")
     for v in [-1, 0, 1, 2, 3, 4, 5]:
         option_verbosity = v

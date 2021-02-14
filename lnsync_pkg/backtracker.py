@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
 # For conditions of distribution and use, see copyright notice in lnsync.py
@@ -102,16 +102,19 @@ class QueensBoard(SearchState):
         row = self.next_row
         self.board[row][col] = 1
         bd_size = self.board_size
-        for delta in range(bd_size):
-            for row_sign in (-1, 0, 1):
-                for col_sign in (-1, 0, 1):
+        for row_sign in (-1, 0, 1):
+            for col_sign in (-1, 0, 1):
+                if row_sign == col_sign == 0:
+                    break
+                for delta in range(1, bd_size):
                     (oth_r, oth_c) = (row+row_sign*delta, col+col_sign*delta)
-                    if 0 <= oth_r < bd_size and 0 <= oth_c < bd_size \
-                            and (oth_r, oth_c) != (row, col):
+                    if 0 <= oth_r < bd_size and 0 <= oth_c < bd_size:
                         if self.board[oth_r][oth_c] != 0:
                             self.valid = False
                             self.next_row = row + 1
                             return
+                    else:
+                        break
         self.next_row = row + 1
         self.valid = True
     def up_delta(self, state_delta):
@@ -136,15 +139,15 @@ if __name__ == "__main__":
     import sys
     try:
         assert len(sys.argv) == 2, "Wrong number of arguments."
-        board_size = int(sys.argv[1])
-        assert board_size > 0, "Board size must be >= 1."
+        BOARD_SIZE = int(sys.argv[1])
+        assert BOARD_SIZE > 0, "Board size must be >= 1."
     except Exception as exc:
         print(exc)
-        raise SystemExit(
-            "Usage: backtracker <n>\nSolve the n x n queen problem.")
-    print("Solving the queens problem with board size %d" % board_size)
-    board = QueensBoard(board_size)
-    if do_search(board):
-        print(board)
+        MSG = "Usage: backtracker <n>\nSolve the n x n queen problem."
+        raise SystemExit(MSG) from exc
+    print("Solving the queens problem with board size %d" % BOARD_SIZE)
+    BOARD = QueensBoard(BOARD_SIZE)
+    if do_search(BOARD):
+        print(BOARD)
     else:
         print("No solution found.")

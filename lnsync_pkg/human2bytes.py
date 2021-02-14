@@ -11,6 +11,8 @@
 Convert numbers to and from human-readable form, using common suffixes.
 """
 
+# pylint: disable=redefined-builtin,invalid-name
+
 # see: http://goo.gl/kTQMs
 SYMBOLS = {
     'customary'     : ('B', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y'),
@@ -122,8 +124,8 @@ def human2bytes(s):
         else:
             raise ValueError("can't interpret %r" % init)
     prefix = {sset[0]:1}
-    for i, s in enumerate(sset[1:]):
-        prefix[s] = 1 << (i+1)*10
+    for i, st in enumerate(sset[1:]):
+        prefix[st] = 1 << (i+1)*10
     return int(num * prefix[letter])
 
 

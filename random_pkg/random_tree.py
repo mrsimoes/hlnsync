@@ -7,7 +7,7 @@ import tempfile
 import os
 import shutil
 
-from lnsync_pkg.p23compat import fstr
+from lnsync_pkg.fstr_type import fstr
 from lnsync_pkg.filetree import FileTree
 
 DIR_PREFIX = "d-"

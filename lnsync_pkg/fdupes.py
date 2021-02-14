@@ -20,7 +20,6 @@ And for FileItem:
 
 from collections import defaultdict
 
-from lnsync_pkg.p23compat import fstr
 from lnsync_pkg.proptree import FileItem, TreeError
 import lnsync_pkg.printutils as pr
 
@@ -215,4 +214,5 @@ def located_files_onfirstonly_of_size(all_trees, file_sz):
             yield None, {first_tree: first_tree.size_to_files(file_sz)}
         else:
             for prop in _props_onfirstonly_of_size(all_trees, file_sz):
-                yield prop, _located_files_by_prop_of_size(all_trees, prop, file_sz)
+                yield prop, \
+                      _located_files_by_prop_of_size(all_trees, prop, file_sz)

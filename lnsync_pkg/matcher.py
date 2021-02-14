@@ -16,20 +16,18 @@ operations that, applied to the target FileTree, will bring it in sync with the
 source, as much as possible.
 """
 
-import os
+# pylint: disable=too-many-instance-attributes
+
 import itertools
 import copy
 from collections import namedtuple
 
 from lnsync_pkg.human2bytes import bytes2human
-from lnsync_pkg.p23compat import fstr, fstr2str
+from lnsync_pkg.fstr_type import fstr2str
+from lnsync_pkg.miscutils import is_subdir
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.onegraph import OneGraph
 from lnsync_pkg.backtracker import SearchState, do_search
-from lnsync_pkg.thread_utils import thread_executor_terminator
-
-
-MIN_WORK_FOR_THREADED_HASHING = 16 * 2**20 # Min bytes to hash with src an tgt threads.
 
 SrcTgt = namedtuple("SrcTgt", ["src", "tgt"])
 
@@ -44,10 +42,6 @@ class TreePairMatcher:
     def __init__(self, src_tree, tgt_tree):
         assert tgt_tree.db.mode == "online", "TreePairMatcher: not online db."
         # Do not match a tree against a subtree.
-        def is_subdir(path, directory):
-            "Test if path is under directory."
-            relative = os.path.relpath(path, directory)
-            return not relative.startswith(fstr(os.pardir + os.sep))
         if src_tree.db.mode == "online" and \
             (is_subdir(src_tree.root_path, tgt_tree.root_path) \
              or is_subdir(tgt_tree.root_path, src_tree.root_path)):
@@ -311,15 +305,6 @@ class State(SearchState):
             # If there are single source and target files for this size,
             # and the paths are the same, do nothing (no hashing required).
             return
-        if file_sz * (min(len(sz_src_files), len(sz_tgt_files))) > \
-                MIN_WORK_FOR_THREADED_HASHING:
-            # There's enough work to hash src and tgs files in two threads.
-            def preget_props(tree_files):
-                tree, files = tree_files
-                tree.preget_props_async(files)
-            thread_executor_terminator(preget_props,
-                                       ( (self.trees.src, sz_src_files),
-                                         (self.trees.tgt, sz_tgt_files) ) )
         src_hashes = {self.trees.src.get_prop(f) for f in sz_src_files}
         tgt_hashes = {self.trees.tgt.get_prop(f) for f in sz_tgt_files}
         sz_common_hashes = set.intersection(src_hashes, tgt_hashes)

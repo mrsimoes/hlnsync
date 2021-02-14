@@ -20,11 +20,12 @@ import abc
 
 from psutil import disk_partitions
 
-from lnsync_pkg.p23compat import fstr
+from lnsync_pkg.fstr_type import fstr
 import lnsync_pkg.blockhash as blockhash
 
 def get_fs_type(path):
-    """Return file_system for a path.
+    """
+    Return file_system for a path.
     Expects path to be fstr compatibility type.
     """
     sep = fstr(os.sep)
@@ -73,7 +74,9 @@ class IDComputer:
 
     @abc.abstractmethod
     def get_id(self, rel_path, stat_data=None):
-        """Return serial number for file at relative path from the root."""
+        """
+        Return serial number for file at relative path from the root.
+        """
 
 class InodeIDComputer(IDComputer):
     """

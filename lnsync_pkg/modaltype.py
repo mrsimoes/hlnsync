@@ -102,6 +102,8 @@ reimplementation of the C3 MRO.)
 registered globally at modaltype.
 """
 
+# pylint: disable=bad-mcs-method-argument, protected-access
+# pylint: disable=bad-mcs-classmethod-argument, invalid-name
 
 class modaltype(type):
     """
@@ -149,8 +151,8 @@ class modaltype(type):
         Create a new modal type.
          -bases is either empty or a single class.
         If mode is None, create a mode None class derived from the given base,
-        which must be either mode none or non-modal.
-        Otherwise, create a declension of the given mode none base.
+        which must be either mode none or non-modal. Otherwise, create a
+        declension of the given mode none base.
         """
         if len(bases) > 1:
             raise TypeError("modal: multiple inheritance not supported")

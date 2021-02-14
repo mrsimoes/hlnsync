@@ -1,5 +1,13 @@
 #!/usr/bin/env python
 
+# Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
+# For conditions of distribution and use, see copyright notice in lnsync.py
+
+"""
+Output lines that are logically grouped, either separated by empty lines, or
+concatenated on a single line, optionally sorting the groups.
+"""
+
 import lnsync_pkg.printutils as pr
 
 class GroupedFileListPrinter:
@@ -43,8 +51,8 @@ class GroupedFileListPrinter:
                 for file_list in located_files.values(): # Use any.
                     return file_list[0].file_metadata.size
             self.groups.sort(key=get_size)
-            for g in self.groups:
-                self._print_group(g)
+            for group in self.groups:
+                self._print_group(group)
 
     def _print_group(self, located_files):
         if self.sameline:
@@ -73,9 +81,9 @@ class GroupedFileListPrinter:
                     include = False
                 if include:
                     pr_path = tree.printable_path(relpath)
-                    # Escape single backslashes.
-                    pr_path = pr_path.replace("\\", "\\\\")
-                    pr_path = pr_path.replace(r" ", r"\ ")
+                    # Escape a few choice characters.
+                    for char in ("\\", " ", "'", '"', "(", ")"):
+                        pr_path = pr_path.replace(char, "\\"+char)
                     self._built_line += prefix + pr_path
         else:
             for k, relpath in enumerate(fobj.relpaths):

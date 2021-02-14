@@ -2,6 +2,8 @@
 
 import lnsync_pkg.metadata as metadata
 
+# pylint: disable-all
+
 __version__ = metadata.version
 __author__ = metadata.authors[0]
 __license__ = metadata.license

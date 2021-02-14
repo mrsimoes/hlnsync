@@ -4,27 +4,31 @@
 # For conditions of distribution and use, see copyright notice in lnsync.py
 
 """
-FileHashTree inherits from FilePropertyTree and manages a database of file hash
-values.
+FileHashTree inherits from FilePropertyTree and uses the provided dbmanager to
+store and retrieve hash values.
 
-__init accepts new size_as_hash kw argument.
+The basic mode of operation is to compute the quick xxhash on file contents
+when required. The computation effort is essentially the same as reading the
+file.
+
+If a custom hasher is provided, then set size always to 1.
+
+#TODO Implement filter with e.g. FIFO.
 """
 
+# pylint: disable=unused-import, no-self-use
 
-from lnsync_pkg.p23compat import fstr2str
+import subprocess
+
+import abc
+from lnsync_pkg.fstr_type import fstr2str, fstr
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.blockhash import hash_file
 from lnsync_pkg.modaltype import onofftype, OFFLINE, ONLINE
 from lnsync_pkg.proptree import \
     FilePropTree, PropDBManager, TreeError, \
-    PropDBException, PropDBError, PropDBNoValue
-
-class EmptyDBManager(PropDBManager, metaclass=onofftype):
-    def __enter__():
-        pass
-
-    def __exit__(*args):
-        return False
+    PropDBException, PropDBError, PropDBNoValue, \
+    FileItemProp
 
 class FileHashTree(FilePropTree, metaclass=onofftype):
     def __init__(self, **kwargs):
@@ -57,8 +61,45 @@ class FileHashTree(FilePropTree, metaclass=onofftype):
         # from scanning the source file tree (disk or offline).
         return file_obj.file_metadata.size
 
+    @abc.abstractmethod
+    def prop_from_source(self, file_obj):
+        pass
+
+class NoSizeFileItem(FileItemProp):
+    __slots__ = ()
+
+    def __init__(self, file_id, metadata):
+        super().__init__(file_id, metadata)
+        self.file_metadata.size = 1
+
+MAX_POS_INT = 2**63 - 1
 
 class FileHashTreeOnline(FileHashTree, mode=ONLINE):
+    def __init__(self, *args, hasher_exec=None, filter_exec=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if hasher_exec is not None:
+            self._file_type = NoSizeFileItem
+        self._hasher_exec = hasher_exec
+        self._filter_exec = filter_exec
+
+    def _prop_from_hasher_exec(self, abspath):
+        try:
+            procres = subprocess.run(
+                [self._hasher_exec, fstr2str(abspath)],
+                capture_output=True, check=True)
+        except subprocess.CalledProcessError as exc:
+            msg = "failed hashing: %s (%s)." % (abspath, procres.stderr, )
+            raise RuntimeError(msg) from exc
+        try:
+            res = int(procres.stdout)
+        except ValueError as msg:
+            msg = "invalid hasher output for %s (%s)." % \
+                    (abspath, procres.stdout)
+            raise RuntimeError(msg) from exc
+        if res > MAX_POS_INT:
+            res = MAX_POS_INT - res
+        return res
+
     def prop_from_source(self, file_obj):
         """
         Recompute and return prop for source file at relpath (online mode only).
@@ -67,11 +108,13 @@ class FileHashTreeOnline(FileHashTree, mode=ONLINE):
         relpath = file_obj.relpaths[0]
         abspath = self.rel_to_abs(relpath)
         pr.progress("hashing:%s" % self.printable_path(relpath))
-        try:
-            val = hash_file(abspath)
-        except OSError as exc:
-            raise RuntimeError("while hashing") from exc
+        if not self._hasher_exec:
+            try:
+                val = hash_file(abspath, filter_exec=self._filter_exec)
+            except OSError as exc:
+                raise RuntimeError("while hashing") from exc
+        else:
+            val = self._prop_from_hasher_exec(abspath)
         if not isinstance(val, int):
             raise  RuntimeError("bad property value %s" % (val,))
         return val
-

@@ -11,7 +11,7 @@ import os
 import random
 import re
 
-from lnsync_pkg.p23compat import fstr, fstr2str
+from lnsync_pkg.fstr_type import fstr, fstr2str
 
 def mode_from_location(location, mandatory_mode=None):
     """
@@ -46,12 +46,6 @@ def mode_from_location(location, mandatory_mode=None):
                 raise ValueError(msg)
         mode = "offline"
     return mode
-
-DB_PREFIX = "prop-"
-
-def set_prefix(prefix):
-    global DB_PREFIX
-    DB_PREFIX = prefix
 
 def pick_db_basename(dir_path, dbprefix):
     """

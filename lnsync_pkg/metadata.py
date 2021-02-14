@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
-"""lnsync project metadata.
 """
+lnsync project metadata.
+"""
+
+# pylint: disable-all
 
 # The package name, which is also the "UNIX name" for the project.
 package = 'lnsync'
-version = '0.6.0'
+version = '0.7.0'
 description = 'Sync by content with hard link support, fast fdupes, and much more.'
 summary = description
 project = 'lnsync dir sync tool'

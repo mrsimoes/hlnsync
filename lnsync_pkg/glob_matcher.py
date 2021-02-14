@@ -4,27 +4,32 @@
 # For conditions of distribution and use, see copyright notice in lnsync.py
 
 """
-Implement a glob pattern to match files and dirs, as in rsync --exclude and
---include, in a way suited to recursive file tree walking.
+Pattern - a glob pattern with the rsync-link ability to match at the root dir
+    only (anchoring with / prefix) and to match only dirs (trailing /)/.
+    Patterns may be set to exclude or to include.
 
-Each pattern is a list of one or more basename glob pattern strings, with
-optional elements anchoring head '/' and dir matching trailing indicator '/'.
-
-The rsync ** matcher is supported.
+GlobMatcher - a set of patterns suited to match when traversing a tree
+    starting at the root.
 """
 
+# pylint: disable=invalid-name, protected-access, misplaced-comparison-constant
+
 import fnmatch
-from lnsync_pkg.p23compat import fstr
+
+from lnsync_pkg.fstr_type import fstr, fstr2str
+import lnsync_pkg.printutils as pr
 
 _SEP = fstr("/")
 _STST = fstr("**")
 
 class Pattern:
-    __slots__ = ("_pattern", "_inner_str", "_type",
+    __slots__ = ("_inner_str", "_type",
                  "_sep_pos", "_stst_pos",
                  "_anchored", "_dir_matcher")
-    # _type is either "i" or "e"
     def __init__(self, glob_string, pattern_type=None):
+        """
+        pattern_type _type is either "i" or "e", for exclude or include.
+        """
         self._type = pattern_type
         if glob_string[:1] == _SEP:
             self._anchored = True
@@ -48,8 +53,8 @@ class Pattern:
     def to_fstr(self, inner_str=None):
         if inner_str is None:
             inner_str = self._inner_str
-        prefix = _SEP if self.is_anchored() else fstr("")
-        postfix = _SEP if self.is_dir_matcher() else fstr("")
+        prefix = _SEP if self._anchored else fstr("")
+        postfix = _SEP if self._dir_matcher else fstr("")
         return prefix + inner_str + postfix
 
     def __hash__(self):
@@ -66,74 +71,91 @@ class Pattern:
         return self._dir_matcher
 
     def is_empty(self):
+        """
+        Test if we match only the empty string.
+        """
         return len(self._inner_str) == 0
+
+    def matches_empty(self):
+        """
+        Test if we match the empty string.
+        """
+        return self._sep_pos < 0 and fnmatch.fnmatch(fstr(""), self._inner_str)
 
     def head_to_tails(self, component):
         """
-        Return a list of new patterns that match the possible tail of path
-        names for which the first component matches the given component.
+        Given a non-empty path component, return a list of new tail patterns
+        such that we match <component>/<tail> iff some tail pattern matches
+        <tail>.
         """
-        tails = set()
+        tails_pats = set()
         if 0 <= self._sep_pos < self._stst_pos \
                 or self._stst_pos < 0 <= self._sep_pos:
             # There is some / before any **.
             if fnmatch.fnmatch(component, self._inner_str[:self._sep_pos]):
                 tail_str = self._inner_str[self._sep_pos+1:]
-                tails.add(self.clone(tail_str))
+                tails_pats.add(self.clone(tail_str))
         elif 0 <= self._stst_pos:
             # There is some ** before any /.
-            if self._sep_pos < 0:
-                # No /: match everything.
-                if fnmatch.fnmatch(component, self._inner_str):
-                    tails.add(self.clone(fstr("")))
-            else:
-                # Some /: match everything up to  the /
-                if fnmatch.fnmatch(component, self._inner_str[:self._sep_pos]):
-                    tails.add(self.clone(self._inner_str[self._sep_pos+1:]))
-            # Now match against each prefix up to every **.
-            nxt_stst = self._stst_pos
+            # First:
+            # Match everything up to either a / or the end, whichever is first.
             stop_pos = self._sep_pos if self._sep_pos > 0 \
-                                        else len(self._inner_str)
+                       else len(self._inner_str)
+            if fnmatch.fnmatch(component, self._inner_str[:stop_pos]):
+                tails_pats.add(self.clone(self._inner_str[stop_pos+1:]))
+            # Next, match up to every ** before any /.
+            nxt_stst = self._stst_pos
             while 0 <= nxt_stst < stop_pos:
                 if fnmatch.fnmatch(component, self._inner_str[:nxt_stst+1]):
                     tail_str = self._inner_str[nxt_stst:]
-                    tails.add(self.clone(tail_str))
+                    tails_pats.add(self.clone(tail_str))
                 nxt_stst = self._inner_str.find(_STST, nxt_stst+2)
         else:  # No ** and no /
             if fnmatch.fnmatch(component, self._inner_str):
-                tails.add(self.clone(fstr("")))
-        return tails
-
-    def matches_head(self, component):
-        """
-        True if basename matches as first component.
-        """
-        return self.head_to_tails(component)
+                tails_pats.add(self.clone(fstr("")))
+        return tails_pats
 
     def matches_exactly(self, component):
         """
         True if basename matches the full pattern.
         """
         tails = self.head_to_tails(component)
-        return any(t.is_empty() for t in tails)
+        return any(t.matches_empty() for t in tails)
 
     def matches_path(self, path):
+        """
+        Match a pattern against a path literal.
+        The path is taken to be a directory iff it has a trailing slash.
+        """
+        path = fstr(path)
         if path[0:1] == _SEP:
             path = path[1:]
-        path = fstr(path)
+        if path[-1:] == _SEP:
+            path = path[:-1]
+            path_is_dir = True
+        else:
+            path_is_dir = False
+        if not path_is_dir and self._dir_matcher:
+            return False
         patterns = [self]
         for component in path.split(_SEP):
             new_pats = []
             for p in patterns:
                 new_pats += p.head_to_tails(component)
             patterns = new_pats
-        return any(p.is_empty for p in patterns)
+        return any(p.matches_empty() for p in patterns)
 
     def is_exclude(self):
         return self._type == "e"
 
     def is_include(self):
         return self._type == "i"
+
+    def __str__(self):
+        return "{%s|%s%s%s}" % (self._type,
+                                "/" if self._anchored else "",
+                                self._inner_str,
+                                "/" if self._dir_matcher else "")
 
 class ExcludePattern(Pattern):
     __slots__ = ()
@@ -174,7 +196,7 @@ class GlobMatcher:
         for pat in self.all_patterns_iter():
             if pat.is_dir_matcher():
                 continue
-            if pat.matches_head(file_bname):
+            if pat.matches_exactly(file_bname):
                 if pat.is_include():
                     res = False
                 else:
@@ -189,7 +211,7 @@ class GlobMatcher:
         """
         res = False
         for pat in self.all_patterns_iter():
-            if pat.matches_head(dir_bname):
+            if pat.matches_exactly(dir_bname):
                 if pat.is_include():
                     res = False
                 else:
@@ -215,3 +237,48 @@ class GlobMatcher:
         else:
             res = None
         return res
+
+    def __str__(self):
+        return "{g|%s}" % (",".join(str(p) for p in self._patterns))
+
+def merge_pattern_lists(pats1, pats2):
+    """
+    Given two lists of exclude/include patterns, merge them.
+    """
+    # Make sure the exclusions are kept in sync.
+    def prnt_pats(plist):
+        def pre(p):
+            return "--exclude" if p.is_exclude() else "--include"
+        return " ".join("%s %s" % \
+            (pre(p), fstr2str(p.to_fstr())) for p in plist)
+    def merge_lists(l1, l2):
+        # Input lists may be altered.
+        if not l1:
+            return l2
+        if not l2:
+            return l1
+        e1, e2 = l1[0], l2[0]
+        if e1 == e2:
+            return [e1, *merge_lists(l1[1:], l2[1:])]
+        elif e1 in l2 and e2 in l1:
+            raise ValueError(
+                "cannot preserve order of exclusions: %s %s" % \
+                (prnt_pats(l1), prnt_pats(l2)))
+        elif e1 in l2:
+            return [e2, *merge_lists(l1, l2[1:])]
+        elif e2 in l1:
+            return [e1, *merge_lists(l1[1:], l2)]
+        else:
+            return [e1, e2, *merge_lists(l1[1:], l2[1:])]
+    common_pats = merge_lists(list(pats1), list(pats2))
+    if common_pats != pats1 or common_pats != pats1:
+        if any(all(all(getattr(p, f)() for p in pset)
+                   for pset in (pats1, pats2))
+               for f in ("is_include", "is_exclude")):
+            outf = pr.info
+        else:
+            outf = pr.warning
+        outf("merged rules [%s] and [%s] to [%s]" % \
+            (prnt_pats(pats1), prnt_pats(pats2),
+             prnt_pats(common_pats)))
+    return common_pats
