@@ -7,7 +7,6 @@ import tempfile
 import os
 import shutil
 
-from lnsync_pkg.fstr_type import fstr
 from lnsync_pkg.filetree import FileTree
 
 DIR_PREFIX = "d-"
@@ -29,15 +28,15 @@ class FileTreeCreator(FileTree):
             content_maker = lambda n: ("content for file %d" % n)
         self._content_maker = content_maker
         if basename_maker is None:
-            basename_maker = lambda n: fstr("f-%03d" % n)
-        root_path = kwargs.pop("root_path")
+            basename_maker = lambda n: "f-%03d" % n
+        topdir_path = kwargs.pop("topdir_path")
         self._basename_maker = basename_maker
         self._all_dirs = []
         self._next_file_number = 1
         self._files_removed = {} # For undoing rm operations.
-        if not dir_is_empty(root_path):
+        if not dir_is_empty(topdir_path):
             raise RuntimeError("FileTreeCreator: root dir must be empty.")
-        super(FileTreeCreator, self).__init__(root_path=root_path, **kwargs)
+        super(FileTreeCreator, self).__init__(topdir_path=topdir_path, **kwargs)
         assert self.writeback
 
     def _new_dir_obj(self, dir_id=None):
@@ -68,7 +67,7 @@ class FileTreeCreator(FileTree):
         Create a subdir at dir_obj, return the new subdir obj.
         """
         reldir = dir_obj.get_relpath()
-        dname = fstr("%s%d" % (DIR_PREFIX, len(self._all_dirs)))
+        dname = "%s%d" % (DIR_PREFIX, len(self._all_dirs))
         new_rel_subdir = os.path.join(reldir, dname)
         os.makedirs(self.rel_to_abs(new_rel_subdir))
         newd_obj = self._new_dir_obj(None)
@@ -122,7 +121,7 @@ class FileTreeCreator(FileTree):
             assert self.writeback, "cannot rm file without writeback"
             dirname = os.path.dirname(cmd[1])
             bname = os.path.basename(cmd[1])
-            d_obj = self.follow_path(dirname)
+            d_obj = self.path_to_obj(dirname)
             assert d_obj is not None
             f_obj = d_obj.get_entry(bname)
             assert f_obj is not None
@@ -148,7 +147,7 @@ class FileTreeCreator(FileTree):
         elif cmd_name == "rm" and fn_to is None:
             assert self.writeback, "cannot undo rm file without writeback"
             dirname = os.path.dirname(fn_from)
-            d_obj = self.follow_path(dirname)
+            d_obj = self.path_to_obj(dirname)
             assert d_obj is not None
             bname = os.path.basename(fn_from)
             contents = self._files_removed[fn_from]
@@ -197,7 +196,7 @@ class RandomTree(FileTreeCreator):
         dir_obj = self.pick_random_dir()
         dir_relpath = dir_obj.get_relpath()
         while True:
-            bname = fstr("%s%03d" % (FILE_PREFIX, random.randint(0, 999)))
+            bname = "%s%03d" % (FILE_PREFIX, random.randint(0, 999))
             if bname in dir_obj.entries:
                 continue
             free_relpath = os.path.join(dir_relpath, bname)
@@ -264,12 +263,13 @@ class RandomTree(FileTreeCreator):
 
 class TmpTree(FileTree):
     def __init__(self, group_dir=None, **kwargs):
-        """The new random tree will be rooted in a subdir of group_dir.
         """
-        self._group_dir = fstr(group_dir)
+        The new random tree will be rooted in a subdir of group_dir.
+        """
+        self._group_dir = group_dir
         self._temp_dir = None
-        self._temp_dir = fstr(tempfile.mkdtemp(prefix=fstr("tr-"), dir=group_dir))
-        super(TmpTree, self).__init__(root_path=self._temp_dir, **kwargs)
+        self._temp_dir = tempfile.mkdtemp(prefix="tr-", dir=group_dir)
+        super(TmpTree, self).__init__(topdir_path=self._temp_dir, **kwargs)
 
     def __enter__(self):
         return self
@@ -285,9 +285,9 @@ class TmpTree(FileTree):
         Create a clone random tree in the same group dir by copying content.
         """
         clone = type(other_tmp_tree)(group_dir=other_tmp_tree._group_dir)
-        for en in os.listdir(other_tmp_tree.root_path):
-            other_path = os.path.join(other_tmp_tree.root_path, en)
-            new_path = os.path.join(clone.root_path, en)
+        for en in os.listdir(other_tmp_tree.topdir_path):
+            other_path = os.path.join(other_tmp_tree.topdir_path, en)
+            new_path = os.path.join(clone.topdir_path, en)
             if os.path.isfile(other_path):
                 shutil.copy2(other_path, new_path)
             else: # Copytree needs to create the new target topdir.

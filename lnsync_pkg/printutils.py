@@ -1,7 +1,19 @@
-#!/usr/bin/env python
+#!/usr/bin/python3
 
 # Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
-# For conditions of distribution and use, see copyright notice in lnsync.py
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 """
 Provide printing service with verbosity-controlled output levels
@@ -16,6 +28,8 @@ Default verbosity is 0, but can be set negative.
 A context may be setup during which a prefix is prepended to progress messages.
 These contexts may be nested.
 A prefix may be set for each non-progress message.
+
+If the content to be printed contains escaped Unicode surrogate pairs, decode them.
 """
 
 # pylint: disable=global-statement, redefined-builtin, broad-except
@@ -24,6 +38,8 @@ import sys
 import atexit
 from collections import defaultdict
 import threading
+
+FSE = sys.getfilesystemencoding() # Always UTF8 on Linux.
 
 # Make printing sequences of terminal ctrl codes thread-safe.
 PRINT_LOCK = threading.RLock()
@@ -88,8 +104,13 @@ def progress(*args):
         line = _progress_prefix + "".join(args)
         line = line.replace("\n", "")
         _print('\033[?7l', end="") # Wrap off.
-        _print(line, end="\033[0K\r") # Erase to end of line.
-        _print('\033[?7h', end="") # Wrap on.
+        try:
+            _print(line, end="")
+        except UnicodeEncodeError:
+            # Fallback to binary.
+            _print(line.encode(FSE, "surrogateescape"), end="")
+        _print("\033[0K\r", end="") # Erase to end of line, return.
+        _print("\033[?7h", end="")  # Wrap on.
         _progress_was_printed = True
         sys.stdout.flush()
 
@@ -117,11 +138,13 @@ def _print_main(*args, **kwargs):
     with PRINT_LOCK:
         if is_tty and _progress_was_printed:
             _print("\r\033[2K", end="") # Erase current line.
-    #    for line in "".join(map(str, args)).splitlines():
-    #        _print(line, file=file, **kwargs)
         for arg in args:
             out_arg = str(arg)
-            file.write(out_arg)
+            try:
+                file.write(out_arg)
+            except UnicodeEncodeError:
+                # Fallback to binary.
+                file.buffer.write(out_arg.encode(FSE, "surrogateescape"))
         if end:
             file.write(end)
         file.flush()

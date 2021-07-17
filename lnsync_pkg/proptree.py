@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python3
 
 # Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
 # For conditions of distribution and use, see copyright notice in lnsync.py
@@ -15,12 +15,12 @@ prop_from_source) and stored in the persistent cache.
 There are two modes of operation: ONLINE and OFFLINE.
 
 - In ONLINE mode, access to the disk file tree is needed and the database may
-be updated. In this mode, root_path must be a dir, the root of the disk file
+be updated. In this mode, topdir_path must be a dir, the root of the disk file
 tree.
 
 - In OFFLINE mode, all property values as well as the tree data structure is
 stored in the database. Access to the original source file tree is unneeded. In
-this mode, root_path is set to None.
+this mode, topdir_path is set to None.
 
 To use, implement online/offline alternative hierarchies for subclasses of
 PropDBManager and FilePropTree using the protocol described in onlineoffline.py.
@@ -55,35 +55,14 @@ Create multiple trees at once using:
 import os
 import abc
 
-from lnsync_pkg.fstr_type import fstr2str, fstr
-
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.fileid import make_id_computer
 from lnsync_pkg.miscutils import ListContextManager
 from lnsync_pkg.modaltype import onofftype, ONLINE, OFFLINE
 from lnsync_pkg.filetree import \
     FileTree, FileItem, DirItem, ExcludedItem, TreeError
-
-class PropDBException(Exception):
-    pass
-
-class PropDBError(PropDBException):
-    pass
-
-class PropDBNoValue(PropDBException):
-    pass
-
-class PropDBStaleValue(PropDBException):
-    pass
-
-class PropDBManager(metaclass=onofftype):
-
-    @staticmethod
-    def get_glob_patterns():
-        return []
-
-    def __init__(self, *args, **kwargs):
-        pass
+from lnsync_pkg.propdbmanager import PropDBException, PropDBError, PropDBNoValue, PropDBStaleValue
+from lnsync_pkg.sqlpropdb import SQLPropDBManager
 
 class FileItemProp(FileItem):
     """
@@ -112,9 +91,9 @@ class FilePropTree(FileTree, metaclass=onofftype):
                 **dbkwargs to return a database manager object.
                 (This delays connecting to the db as much as possible.)
         kwargs passed upwards to FileTree:
-            - root_path: path disk file tree (may be None if FileTree is somehow
+            - topdir_path: path disk file tree (may be None if FileTree is somehow
                 virtual).
-            - exclude_pattern: None or a list of glob patterns for
+            - exclude_patterns: None or a list of glob patterns for
                 relative paths to ignore when reading from disk.
             - use_metadata: if True read metadata index files by size
             - maxsize: ignore files larger than this, is positive and not None
@@ -122,17 +101,17 @@ class FilePropTree(FileTree, metaclass=onofftype):
             - writeback: if True, path operation methods update the disk tree.
             - file_type, dir_type: classes to instantiate.
         """
-        root_path = kwargs.pop("root_path")
+        topdir_path = kwargs.pop("topdir_path")
         self._enter_count = 0 # Context manager entry count.
         self.db = None
         use_metadata = kwargs.pop("use_metadata", True)
         assert use_metadata
         super(FilePropTree, self).__init__(
-            root_path=root_path,
+            topdir_path=topdir_path,
             use_metadata=use_metadata,
             file_type=FileItemProp,
             **kwargs)
-        dbmaker = kwargs.get("dbmaker")
+        dbmaker = kwargs.get("dbmaker", SQLPropDBManager)
         if dbmaker:
             assert callable(dbmaker)
             dbobj = dbmaker(
@@ -145,7 +124,7 @@ class FilePropTree(FileTree, metaclass=onofftype):
         self.add_glob_patterns(db.get_glob_patterns())
         if self.mode == ONLINE:
             dbdir = os.path.dirname(db.dbpath)
-            if  dbdir != self.root_path:
+            if  dbdir != self.topdir_path:
                 self._id_computer = make_id_computer(dbdir)
 
     @abc.abstractmethod
@@ -154,6 +133,12 @@ class FilePropTree(FileTree, metaclass=onofftype):
         Obtain file property value from tree source.
         Raise RuntimeError if something goes wrong.
         """
+
+    def open(self):
+        self.db.open()
+
+    def close(self):
+        self.db.close()
 
     def __enter__(self):
         """
@@ -168,7 +153,7 @@ class FilePropTree(FileTree, metaclass=onofftype):
         self._enter_count -= 1
         res = False # Do not suppress any exception.
         if self._enter_count == 0:
-            res = res or self.db.__exit__(exc_type, exc_val, exc_tb)
+            res = self.db.__exit__(exc_type, exc_val, exc_tb)
         return res
 
     @classmethod
@@ -209,7 +194,7 @@ class FilePropTree(FileTree, metaclass=onofftype):
         else:
             pr.debug(
                 "file %s md (id %d) changed from %s to %s, update_db: %s",
-                fstr2str(f_obj.relpaths[0]), f_obj.file_id,
+                f_obj.relpaths[0], f_obj.file_id,
                 f_obj.prop_metadata, f_obj.file_metadata,
                 str(delete_stale))
             if delete_stale:
@@ -223,9 +208,9 @@ class FilePropTreeOffline(FilePropTree, mode=OFFLINE):
     """
 
     def __init___(self, **kwargs):
-        root_path = kwargs.pop("root_path")
-        assert root_path is None
-        super().__init__(root_path=root_path, **kwargs)
+        topdir_path = kwargs.pop("topdir_path")
+        assert topdir_path is None
+        super().__init__(topdir_path=topdir_path, **kwargs)
 
     def db_get_uptodate_prop(self, f_obj, delete_stale):
         """
@@ -252,14 +237,14 @@ class FilePropTreeOffline(FilePropTree, mode=OFFLINE):
                 glob_matcher.exclude_file_bname(obj_basename):
                 pr.info(
                     "excluded file %s at %s" % (
-                        fstr2str(obj_basename),
+                        obj_basename,
                         self.printable_path(dir_obj.get_relpath())))
                 yield (obj_basename, None, ExcludedItem, None)
             elif obj_type == DirItem and glob_matcher and \
                 glob_matcher.exclude_dir_bname(obj_basename):
                 pr.info(
                     "excluded dir %s at %s" % (
-                        fstr2str(obj_basename),
+                        obj_basename,
                         self.printable_path(dir_obj.get_relpath())))
                 yield (obj_basename, None, ExcludedItem, None)
             else:
@@ -280,9 +265,9 @@ class FilePropTreeOffline(FilePropTree, mode=OFFLINE):
         If rel_path is None, default to root directory.
         """
         if rel_path is None:
-            rel_path = fstr("")
+            rel_path = ""
         return "{%s}%s" % \
-                (pprint(fstr2str(self.db.dbpath)), pprint(fstr2str(rel_path)))
+                (pprint(self.db.dbpath), pprint(rel_path))
 
 class FilePropTreeOnline(FilePropTree, mode=ONLINE):
     """
@@ -290,9 +275,9 @@ class FilePropTreeOnline(FilePropTree, mode=ONLINE):
     updates a persistent cache database.
     """
     def __init__(self, **kwargs):
-        root_path = kwargs.pop("root_path")
-        assert os.path.isdir(root_path)
-        super().__init__(root_path=root_path, **kwargs)
+        topdir_path = kwargs.pop("topdir_path")
+        assert os.path.isdir(topdir_path)
+        super().__init__(topdir_path=topdir_path, **kwargs)
 
     def get_prop(self, f_obj):
         """
@@ -352,7 +337,7 @@ class FilePropTreeOnline(FilePropTree, mode=ONLINE):
                 except (PropDBNoValue, PropDBStaleValue):
                     update_files.add(fobj)
                 except PropDBError as exc:
-                    pr.error("processing file %s: %s" % (fstr2str(path), exc))
+                    pr.error("processing file %s: %s" % (path, exc))
                     error_files.add(fobj)
             for err_fobj in error_files:
                 self._rm_file(err_fobj)
@@ -374,8 +359,8 @@ class FilePropTreeOnline(FilePropTree, mode=ONLINE):
         assert file_obj is not None and file_obj.is_file()
         db_prop = self.db_get_uptodate_prop(file_obj, delete_stale=False)
         if db_prop is None:
-            msg = "no uptodate prop/metadata for '%s'." % \
-                  fstr2str(file_obj.relpaths[0])
+            msg = "no uptodate prop/metadata for " + \
+                  file_obj.relpaths[0]
             raise PropDBNoValue(msg)
         live_prop_value = self.prop_from_source(file_obj)
         return db_prop == live_prop_value
@@ -398,7 +383,7 @@ class FilePropTreeOnline(FilePropTree, mode=ONLINE):
         If rel_path is None, default to root directory.
         """
         if rel_path is None:
-            rel_path = fstr("")
+            rel_path = ""
         return super(FilePropTreeOnline, self).printable_path(
             rel_path, pprint=pprint)
 
@@ -408,7 +393,7 @@ class FilePropTreeOnline(FilePropTree, mode=ONLINE):
         """
         assert self._use_metadata
         self.scan_subtree() # Scan the full tree.
-        if os.path.samefile(self.root_path, os.path.dirname(self.db.dbpath)):
+        if os.path.samefile(self.topdir_path, os.path.dirname(self.db.dbpath)):
             filter_fn = None
         else:
             def filter_fn(fid):

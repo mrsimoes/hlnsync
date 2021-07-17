@@ -1,7 +1,19 @@
-#!/usr/bin/env python
+#!/usr/bin/python3
 
-# Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
-# For conditions of distribution and use, see copyright notice in lnsync.py
+# Copyright (C) 2021 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 """
 Output lines that are logically grouped, either separated by empty lines, or
@@ -15,19 +27,19 @@ class GroupedFileListPrinter:
     Output filepaths in groups, either separated by empty lines or by empty
     spaces, sorted or not.
     """
-    def __init__(self, hardlinks, alllinks, sameline, sort):
+    def __init__(self, hard_links, all_links, sameline, sort):
         """
          - sameline: if True, filenames in each group are printed in the same
         line, separated by spaces, with filename spaces and backslashes escaped;
         other print one file per line, with an empty line separating groups.
-        - hardlinks: if True, print all aliases for each file as if they were
+        - hard_links: if True, print all aliases for each file as if they were
         different files; if False, print for each file a single path alias,
         arbitrarily chosen.
-        - alllinks: if True (and assuming hardlinksis False), print all links
+        - all_links: if True (and assuming hard_links is False), print all links
         to each file.
         """
-        self.hardlinks = hardlinks
-        self.alllinks = alllinks
+        self.hard_links = hard_links
+        self.all_links = all_links
         self.sameline = sameline
         self.sort = sort
         if self.sort:
@@ -75,7 +87,7 @@ class GroupedFileListPrinter:
             for k, relpath in enumerate(fobj.relpaths):
                 if k == 0:
                     include, prefix = (True, "")
-                elif self.hardlinks or self.alllinks:
+                elif self.hard_links or self.all_links:
                     include, prefix = (True, " ")
                 else:
                     include = False
@@ -89,9 +101,9 @@ class GroupedFileListPrinter:
             for k, relpath in enumerate(fobj.relpaths):
                 if k == 0:
                     include, prefix = (True, "")
-                elif self.hardlinks:
+                elif self.hard_links:
                     include, prefix = (True, "")
-                elif self.alllinks:
+                elif self.all_links:
                     include, prefix = (True, " ")
                 else:
                     include = False

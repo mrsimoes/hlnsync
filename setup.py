@@ -22,7 +22,7 @@ setup(
 	long_description = long_description,
 	long_description_content_type = 'text/markdown',
 	keywords = metadata.keywords,
-	install_requires = ['pyhashxx', 'six', 'psutil'],
+	install_requires = ['xxhash', 'psutil'],
 	packages = find_packages(exclude=['tests']),
 	entry_points = {
 		'console_scripts': [

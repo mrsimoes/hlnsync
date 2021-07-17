@@ -1,48 +1,50 @@
-# Overview
+## Overview
 
-_lnsync_ provides sync-by-content of local file trees with support for hard links.
+_lnsync_ provides sync-by-content of local file trees, with support for hard links.
 
-##  Features
+###  Features
 
-This program provides partial one-way sync of local directories by only renaming, linking and delinking, without copying or deleting file data. (Empty directories not on the source are also removed.)
+The main feature is partial, one-way sync of local directories by renaming, linking and delinking only, without copying or deleting file content data. (Though empty target directories not on the source are also removed.)
 
-Arbitrary renaming, linking/delinking (but not deleting) in the source is quickly replicated in the target.
+This alows very quick target replication of arbitrary source renaming, linking/delinking (but not deleting) and may be used as a preprocessing step for full sync tools such as _rsync_.
 
-While not providing full syncing, _lnsync_ may be used as a preprocessing step for other tools such as _rsync_.
+Other operations include finding duplicate files, checking for file content changes, and listing all hard links to a file.
 
-## Hashes
+Files may be included or excluded using glob pattersn, much like rsync.
 
-Files are identified by their content hash, using xxHash (a fast, non-cryptographic hash function).
+Configuration is possible via very flexible config files.
 
-To avoid recomputation, hash values are stored in local databases, one file per top directory.
+### Hashes
 
-By default, the hash database is a file at the base directory with basename matching `lnsync-[0-9]+.db`. Only one such file should exist there. (A different prefix or an altogether different file may be specified.)
+Files are identified by their content hash, using xxHash (a fast, non-cryptographic hash function). Both 32bit and 64bit hashes xxHash functions are available, with 32bit as default.
+
+To avoid recomputation, hash values are stored in local databases, a single file per file tree. Each database is a single file, by default with a name matching `lnsync-[0-9]+.db`. Only one such file should exist at each location. (A different naming pattern or an altogether different file location may be specified.)
 
 File modification times are used to detect stale hash values. Modification times are not synced to the target.
 
-Based on these hashes, additional features are provided, including duplicate detection.
+Hash databases are ignored by _lnsync_ operations.Care should be taken not to overwrite them when syncing with other tools.
 
-## Files vs File Paths
+## Files, File Paths, and Hard Links
 
-On most file systems, a file may be reached by multiple paths, which are aliases, or _hard links_, to that file. Removing the last hard link to a file means deleting it.
+On most file systems, the same _file_ may be reached by multiple _file paths_, also called aliases, or _hard links_. If there is a single hard link to a file, removing it deletes the file.
 
-_lnsync_ operations refer to files, not file paths. If a file has two links, it will not come up as a duplicate.
+Operations are on files, not file paths. E.g., if a file has two hard links, then by itself it does not count as a duplicate.
 
-## Offline Trees
+### Offline Trees
 
-There is also an option to save the file structure (not contents) under a directory to a combined hash/metadata database. These offline trees can be used in most _lnsync_ commands in place of an local directory, e.g. as the source in a sync command.
+There is also an option to save the file structure (not file contents, and not all attributes) under a directory in a combined hash/metadata database. These _offline trees_ can be used in most _lnsync_ commands in place of a local directory, e.g. as the source in a sync command, to reorganize a target tree according to a certain source pattern.
 
-## Files Handled
+### Files Handled
 
-Hash databases are ignored by _lnsync_ operations and care should be taken not to overwrite them when syncing with other tools.
+Files which cannot be read are skipped. File ownership and permissions are otherwise ignored.
 
-File ownership and permissions are ignored. Files which cannot be read are skipped, as are symbolic links.
+Symbolic links and any other file system objects are ignored.
 
-# Installing
+## Installing
 
-Install the latest version from the PyPI repository with `pip install -U lnsync` or clone the repo with `git clone https://github.com/mrsimoes/lnsync.git` and run `python setup.py install`.
+Install the latest version from the PyPI repository with `pip install -U lnsync` or else clone the repo with `git clone https://github.com/mrsimoes/lnsync.git` and then run `python setup.py install`.
 
-## Alternatives for Linux
+### Alternatives for Linux
 
 Some of the many tools for syncing with rename detection:
 
@@ -58,9 +60,9 @@ Some of the many tools for syncing with rename detection:
 
 In addition to syncing, _lnsync_ allows using the file hash database to search for files according to a variety of criteria.
 
-# Usage Scenarios
+## Usage Scenarios
 
-## Syncing
+### Syncing
 
 If your photos are at `/home/you/Photos` and its backup is at `/mnt/disk/Photos`, then `lnsync sync /home/you/Photos /mnt/disk/Photos` will sync the target. For a dry run, use the `-n` switch.
 
@@ -70,7 +72,7 @@ To obtain an _rsync_ command that will complete syncing, skipping `lnsync` datab
 
 Finally, to compare source and target, run `lnsync cmp /home/you/Photos /mnt/disk/Photos`.
 
-## Other Operations
+### Other Operations
 
 To find duplicate files, run `lnsync fdupes /home/you/Photos`. Use `-z` to compare by size only.
 
@@ -82,11 +84,21 @@ To have any operation on a subdir of `/home/you/Photos` use the hash database at
 
 For example, to sync the subdir `/home/you/Photos/Best` to another target, using the hash database at `/home/you/Photos`: `lnsync sync /home/you/Photos/Best --root=/home/you/Photos /mnt/eframe/`.
 
-# Command Reference
+## Command Reference
 
 All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [<cmd-parameters>]`.
 
-## Syncing
+### Specifying the Database Location
+
+By default, the database file corresponding to an online file tree is the unique file located in that directory and with basename matching `<PREFIX>[0-9]*.db`.
+
+To specify another prefix for all following online file trees, `--dbprefix <PREFIX>`.
+
+To specify a different database directory possibly for all online file trees where to look for the database file, `--dbrootdir DBDIR`. Each online file tree corresponding to a subdir of DBDIR will use the database file at DBDIR.
+
+To specify the database file for the following online file tree, `--dblocation FILEPATH`.
+
+### Syncing
 
 - `sync [options] <source> <target>` syncs a target dir from a source dir (or offline tree).
 
@@ -118,7 +130,7 @@ For each matched target file, its pathnames are made to match those of the corre
 
 - `syncr` This convenience command is like `sync`, but follows it by executing the command created by `rsync` just above.
 
-## Creating, Updating, and Accessing the Hash Database
+### Creating, Updating, and Accessing the Hash Database
 
 - `update <dir>` Update the hash database, creating a new database if none exists, and rehashing all new files and those with a changed modification time (mtime). Accepts `--exclude=<pattern>` options.
 - `rehash <dir> [<relpath>]+` Force rehashing files specified by paths relative to the root `dir`.
@@ -127,26 +139,19 @@ For each matched target file, its pathnames are made to match those of the corre
 - `cleandb <dir>` Remove outdated entries and re-compact the database.
 - `lookup <tree> [<relpath>+]` Returns (either from db or by recomputing) the hash value for the files, where `tree` may be a a directory or an offline tree.
 
-## Finding Files
+### Finding Files and Paths
 
-### Files vs Paths
-These commands operate on files, as opposed to paths.
-
-Two paths to the same file do not consitute by themselves a duplication and, if there are two identical file, then fdupes will output a single, arbitrarily picked path for each file when outputing the result.
-
-To instead operate on paths, use the `--hardlinks` switch on these commands.
-
-To operate on files, but print all hardlinks, instead a of picking one, use  `--alllinks`.
+These commands operate on files, as opposed to paths. To instead operate on paths, use the `--hard-links` switch on these commands. To operate on files, but print all hard links, instead a of picking one, use  `--all-links`.
  
 - `cmp <tree1> <tree2>` Recursively compares two file trees. Accepts `--exclude=<pattern>` .
 - `fdupes [-h] [<tree>]+` Find files duplicated anywhere on the given trees.
 - `onall [<tree>]+`, `lnsync onfirstonly [<tree>]+`, `lnsync onlastonly [<tree>]+` Find files as advertised. Some options: `-M` prunes by maximum size; `-0` prunes empty files; `-1` prints each group of files in a single line, separated by spaces and with escaped backslashes and spaces, like `fdupes`; `-s` sorts output by size.
 - `search <tree> [<globpat>]+` Find files one of whose relative paths matches one of the given glob patterns (which are as in `--exclude`).
 
-## Other Commands
+### Other Commands
 - `check [<tree>] [<path>]*` Recompute hashes for given files and compare to the hash stored in the database, to check for changes/bitrot.
 
-## Configuration Files
+### Configuration Files
 
 Optional command-line arguments are read from an INI-style configuration file. (The format is not very suitable to store default options, at most one entry per key.)
 
@@ -164,7 +169,7 @@ For example, to have an option applied to all locations, include it in a section
 
 To specify another configuration file altogether, `--config FILENAME`. To not load any config file: `--no-config`.
 
-# Origin, Status, and Future Development
+## Origin, Status, and Future Development
 
 This package started as a learning project. I've found it useful enough to polish for publication, but as with any work in progress, it should be used with adequate caution.
 
@@ -174,7 +179,7 @@ You can support this project with bitcoin at [17HS828pkQMiXZGy7UNbA49TYCz7LAQ2ze
 
 This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you are welcome to redistribute it under certain conditions. See the GNU General Public Licence v3 for details.
 
-## Caveats and Limitations
+### Caveats and Limitations
 
 - Linux only.
 
@@ -188,12 +193,13 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 
 - Minimal support for case-insensitive but case-preserving file systems like vfat: if a target file name differs from source match in case only, target is not updated.
 
-## Release Notes
+### Release Notes
 
-- v0.7.0: Custom hashing function, better command line argument parsing, custom db location, bug fixes.
+- v0.7.2: Support for 64bit hashing functions. Option `--dbdir` renamed to `--dbroot`. Internal changes: use xxhash instead of pyhashxx, refactoring, bug fixes.
+- v0.7.0: Custom hashing functions, better command line argument parsing, custom db location, bug fixes.
 - v0.6.1: Thread improvements and bug fixes.
 - v0.6.0: Threaded hashing and tree scanning for much better performance. Internal refactoring.
-- v0.5.3: New `syncr`. Changed `mkoffline` syntax. More output options (`--alllinks`). Hard link-aware `check` and `cmp`, improved `search`. 
+- v0.5.3: New `syncr`. Changed `mkoffline` syntax. More output options (`--all-links`). Hard link-aware `check` and `cmp`, improved `search`. 
 - v0.5.2: Search files by file path glob pattern. Multiple patterns on --exclude. More powerful configuration files. `--root` now allowed in `mkoffline` and `rehash`. Major rewrite of the command line and config file parsers. Optimize onfirstonly and sync to do less hashing. Fix bugs in `--root`, `cmp`, `check`, and more. Wildcards in config section names.
 - v0.4.0: Drop Python 2 compatibility. Add config files. Bug fixes.
 - v0.3.8: Less hashing on `onfirstonly`. Sort file search output by size. Adjust user output levels.
@@ -206,8 +212,10 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 - v0.1.9: Improved sync algorithm. Remove directories left empty after sync.
 - v0.1.0: Initial version.
 
-## Possible Improvements
+### Possible Improvements
 
+- Support the newer xxhash3 hashes, or other, including 128bit hashes.
+- Stamp hash databases with the hash function used.
 - Better configuration file format.
 - More parallel hashing, multiprocessing instead of threads.
 - More output sorting options, e.g. by name or mtime.

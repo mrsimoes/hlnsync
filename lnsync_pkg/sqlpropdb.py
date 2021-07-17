@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 # Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
 # For conditions of distribution and use, see copyright notice in lnsync.py
 
@@ -7,7 +5,13 @@
 Implement an SQLite3 database suited  to FileProp, with ONLINE and OFFLINE
 modes.
 
+Prop values are SQLite3 INT values, meaning int64 (signed).
+
 In offline mode, it stores a file tree structure as well as file metadata.
+
+Tree structure information includes dirnames and filenames. These are
+stored in raw encoding, decoded from the surrogate-escaped Unicode,
+binary equal the names in the file system.
 
 Open/close is achieved by managing a context. This is mandatory.
 
@@ -26,6 +30,9 @@ All databases are EXCLUSIVE lock, i.e. lock on read.
 Raise PropDBError if something goes wrong.
 
 TODO DROP vs TRUNCATE
+
+user_version, 31 bit non-negative integer
+
 """
 
 # pylint: disable=unused-import # Fails to detect metaclass parameters.
@@ -34,23 +41,76 @@ import os
 import sqlite3
 import abc
 import sys
+from enum import IntEnum
 
-from lnsync_pkg.fstr_type import fstr, fstr2str
-from lnsync_pkg.miscutils import is_subdir
+from lnsync_pkg.miscutils import BitField, is_subdir, int32_to_uint32, uint32_to_int32
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.glob_matcher import ExcludePattern
 from lnsync_pkg.filetree import Metadata
 from lnsync_pkg.modaltype import ONLINE, OFFLINE
-from lnsync_pkg.proptree import PropDBManager, PropDBError, PropDBNoValue
+from lnsync_pkg.propdbmanager import PropDBManager, PropDBError, PropDBNoValue
+from lnsync_pkg.blockhash import BlockHasher, HasherAlgo
 
-CUR_DB_FORMAT_VERSION = 1
+# From str (surrogates escaped) to db (binary) value and back.
+FSE = sys.getfilesystemencoding() # Always UTF8 on Linux.
+def _SQL_TEXT_FACTORY(stored_bin):
+    return stored_bin.decode(FSE, "surrogateescape")
+def _SQL_TEXT_STORER(string):
+    return string.encode(FSE, "surrogateescape")
 
-# From fstr to db value and back.
-_SQL_TEXT_FACTORY = lambda x: x
-_SQL_TEXT_STORER = lambda x: x
+#def mk_online_db(dir_path, db_basename):
+#    return SQLHashDBManager(os.path.join(dir_path, db_basename), mode=ONLINE)
 
-def mk_online_db(dir_path, db_basename):
-    return SQLPropDBManager(os.path.join(dir_path, db_basename), mode=ONLINE)
+class HasherFunction(IntEnum):
+    """
+    Enum which mathematical hashing function.
+    """
+    XXHASH32 = 0
+    XXHASH64 = 1
+    CUSTOM = 2
+
+    @classmethod
+    def from_current_hasher_algo(cls):
+        return cls.from_hasher_algo(BlockHasher.get_algo())
+
+    @classmethod
+    def from_hasher_algo(cls, hasher_algo):
+        table = {HasherAlgo.PYHASHXX: cls.XXHASH32,
+                 HasherAlgo.XXHASH32: cls.XXHASH32,
+                 HasherAlgo.XXHASH64: cls.XXHASH64,
+                 HasherAlgo.CUSTOM:   cls.CUSTOM,
+                 }
+        if not hasher_algo in table:
+            raise RuntimeError("Unknown blockhash algorithm:", hasher_algo)
+        return table[hasher_algo]
+
+class UserVersion(BitField):
+    """
+    SQLite user_version field, a 31 bit non-negative integer, as bit struct:
+    Bits 0-3: database version (currently  1)
+    Bits 4-7: Hasher function used in this database.
+        (Default value 0 is XXHASH32 for backwards compatibility.)
+    """
+    CUR_DB_FORMAT_VERSION = 1
+    def __init__(self, value=0):
+        super().__init__(value)
+        self.get_hasher_function() # Test for valid value.
+    def get_db_version(self):
+        return self[0:4]
+    def set_db_version(self, db_version=None):
+        if db_version is None:
+            db_version = self.CUR_DB_FORMAT_VERSION
+        self[0:4] = db_version
+    def get_hasher_function(self):
+        """
+        May raise an exception if the code does not match any hasher.
+        """
+        hasher_funcion = HasherFunction(self[4:8])
+        return hasher_funcion
+    def set_hasher_function(self, hasher_function):
+        self[4:8] = hasher_function
+    def get_raw_value(self):
+        return self._d
 
 class SQLPropDBManager(PropDBManager):
     """
@@ -72,7 +132,7 @@ class SQLPropDBManager(PropDBManager):
         self._cx = None
         self._enter_count = 0
         self.dbpath = dbpath
-        super(SQLPropDBManager, self).__init__(dbpath, **kwargs)
+        super().__init__(dbpath, **kwargs)
 
     # (table_name, fields_including_key, optional_index)
     _tables_prop = \
@@ -94,6 +154,14 @@ class SQLPropDBManager(PropDBManager):
           None)]
 
     def __enter__(self):
+        self.open()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False # Do not suppress any exception.
+
+    def open(self):
         sql_db_path = self.dbpath
         if sql_db_path in self._current_online_cx:
             cx_info = self._current_online_cx[sql_db_path]
@@ -102,28 +170,16 @@ class SQLPropDBManager(PropDBManager):
         else:
             if not os.path.isfile(sql_db_path):
                 self._create_empty()
-            ver = self.which_db_version()
-            if ver is None:
-                raise PropDBError("unreadable DB at %s" % fstr2str(sql_db_path))
-            elif ver < CUR_DB_FORMAT_VERSION:
-                msg = "outdated db version=%d at %s" \
-                      % (ver, fstr2str(sql_db_path))
-                raise PropDBError(msg)
+            self._check_user_version()
             try:
-                self._cx = sqlite3.connect(fstr2str(sql_db_path))
-#                def factory(string):
-#                    print("factory: ", string)
-#                    import pdb; pdb.set_trace()
-#                    return sql_text_factory(string)
-#                self._cx.text_factory = factory
-# #text_factory not used under Python 3, apparently
+                self._cx = sqlite3.connect(sql_db_path)
             except sqlite3.Error as exc:
-                msg = "cannot open DB at %s" % fstr2str(sql_db_path)
+                msg = "cannot open DB at " + sql_db_path
                 raise PropDBError(msg) from exc
             self._current_online_cx[sql_db_path] = [1, self._cx]
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def close(self):
         if self._cx:
             sql_db_path = self.dbpath
             if sql_db_path in self._current_online_cx:
@@ -133,7 +189,10 @@ class SQLPropDBManager(PropDBManager):
                     del self._current_online_cx[sql_db_path]
                     self._cx.commit()
                     self._cx.close()
-        return False # Do not suppress any exception.
+
+    @abc.abstractmethod
+    def _all_tables(self):
+        pass
 
     def set_prop_metadata(self, file_id, prop_value, metadata):
         cmd = "INSERT INTO prop VALUES (?, ?, ?, ?, ?);"
@@ -141,8 +200,9 @@ class SQLPropDBManager(PropDBManager):
                     metadata.size, metadata.mtime, metadata.ctime)
         try:
             self._cx.execute(cmd, cmd_args)
-        except sqlite3.Error as exc:
-            msg = "setting metadata: %s" % (fstr2str(self.dbpath),)
+        except Exception as exc:
+            msg = "setting metadata of: " + self.dbpath
+            msg += ": " + str(exc)
             raise PropDBError(msg) from exc
 
     def get_prop_metadata(self, file_id):
@@ -155,10 +215,10 @@ class SQLPropDBManager(PropDBManager):
             cmd = "SELECT value, size, mtime, ctime FROM prop WHERE file_id=?;"
             res = self._cx.execute(cmd, (file_id,)).fetchone()
         except sqlite3.Error as exc:
-            raise PropDBError("reading: %s" % (fstr2str(self.dbpath),)) from exc
+            raise PropDBError("reading: " + self.dbpath) from exc
         if res is None:
             raise PropDBNoValue("no value for file id %d at DB %s" % \
-                    (file_id, fstr2str(self.dbpath)))
+                    (file_id, self.dbpath))
         elif not isinstance(res[0], int):
             raise PropDBError("prop value not integer for file id %d" % (file_id,))
         res = (res[0], Metadata(res[1], res[2], res[3]))
@@ -170,48 +230,82 @@ class SQLPropDBManager(PropDBManager):
         """
         dbpath = self.dbpath
         assert not os.path.exists(dbpath)
-        pr.progress("Creating new database %s ..." % (fstr2str(dbpath)))
+        pr.progress("Creating new database %s ..." % (dbpath,))
         temp_cx = None
         try:
-            temp_cx = sqlite3.connect(fstr2str(dbpath))
+            temp_cx = sqlite3.connect(dbpath)
             SQLPropDBManager._reset_db_tables(temp_cx, self._all_tables())
-            temp_cx.execute(
-                "PRAGMA user_version=%d;" % int(CUR_DB_FORMAT_VERSION))
+            self._set_user_version(temp_cx)
             temp_cx.execute("PRAGMA locking_mode=EXCLUSIVE;")
             temp_cx.execute("PRAGMA foreign_keys=ON;")
         except sqlite3.Error as exc:
-            msg = "cannot create database at %s", fstr2str(dbpath)
+            msg = "cannot create database at " + dbpath
             raise PropDBError(msg) from exc
         finally:
             if temp_cx is not None:
                 temp_cx.commit()
                 temp_cx.close()
 
-    @abc.abstractmethod
-    def _all_tables(self):
-        pass
+    def _set_user_version(self, cx):
+        """
+        Stamp a new database.
+        """
+        user_version = UserVersion()
+        user_version.set_db_version()
+        hasher_function = HasherFunction.from_current_hasher_algo()
+        user_version.set_hasher_function(hasher_function)
+        user_version = user_version.get_raw_value()
+        cx.execute("PRAGMA user_version=%d;" % user_version)
 
-    def which_db_version(self):
+    def _get_user_version(self):
         """
-        Return db version number or None if not recognized.
+        Return user version number or raise PropDBError if it cannot be read.
         """
-        db_path = self.dbpath
         sql_cx = None
-        db_ver = None
         try:
-            sql_cx = sqlite3.connect(fstr2str(db_path))
-            db_ver_rec = sql_cx.execute("PRAGMA user_version;").fetchone()
-            if db_ver_rec is not None:
-                db_ver = db_ver_rec[0]
-            else:
-                db_ver = 0
+            sql_cx = sqlite3.connect(self.dbpath)
+            user_ver_rec = sql_cx.execute("PRAGMA user_version;").fetchone()
+            if user_ver_rec is None:
+                raise PropDBError("could not read version")
+            user_ver = user_ver_rec[0]
+            if user_ver < 0:
+                raise PropDBError("negative user_version")
+            try:
+                user_ver = UserVersion(user_ver)
+            except Exception:
+                raise PropDBError("invalid user_version")
         except sqlite3.Error as exc:
-            msg = "cannot open DB at %s" % fstr2str(db_path)
+            msg = "cannot open DB at " + self.dbpath
             raise PropDBError(msg) from exc
         finally:
             if sql_cx:
                 sql_cx.close()
-        return db_ver
+        return user_ver
+
+    def _check_user_version(self):
+        ver = self._get_user_version()
+        if ver is None:
+            raise PropDBError("unreadable DB at " + self.dbpath)
+        db_ver = ver.get_db_version()
+        try:
+            db_hasher_func = ver.get_hasher_function()
+        except Exception as exc: # TODO: be more specific
+            msg = "unknown hasher function for %s" % (self.dbpath,)
+            raise PropDBError(msg) from exc
+        curr_hasher_func = HasherFunction.from_current_hasher_algo()
+        pr.info("Checking:", db_hasher_func, curr_hasher_func)
+        if db_hasher_func != curr_hasher_func:
+            errstr = "incompatible hash functions: %s and %s" % \
+                     (str(db_hasher_func), str(curr_hasher_func))
+            raise PropDBError(errstr)
+        if db_ver < UserVersion.CUR_DB_FORMAT_VERSION:
+            msg = "update old database format=%d at %s" \
+                  % (ver, self.dbpath)
+            raise PropDBError(msg)
+        elif db_ver > UserVersion.CUR_DB_FORMAT_VERSION:
+            msg = "cannot handle new database format=%d at %s" \
+                  % (ver, self.dbpath)
+            raise PropDBError(msg)
 
     def rm_offline_tree(self):
         """
@@ -231,9 +325,8 @@ class SQLPropDBManager(PropDBManager):
         sql_cx.execute("DROP TABLE IF EXISTS %s;" % tab_name)
         sql_cx.execute("CREATE TABLE %s (%s);" % (tab_name, fields))
         if index is not None:
-            cmd = \
-                "CREATE INDEX %sidx ON %s (%s);" % (tab_name, tab_name, index)
-            sql_cx.execute(cmd)
+            cmd = "CREATE INDEX %sidx ON %s (%s);"
+            sql_cx.execute(cmd % (tab_name, tab_name, index))
         sql_cx.commit()
 
     def commit(self):
@@ -254,12 +347,10 @@ class SQLPropDBManager(PropDBManager):
         if remap_id_fn is None and filter_fn is None:
             tgt_cx.execute("ATTACH ? AS SOURCE;", (self.dbpath,))
             cmd = ("DELETE FROM %s "
-                   "WHERE file_id IN (SELECT file_id FROM SOURCE.%s) ;") \
-                    % (tab_name, tab_name)
-            tgt_cx.execute(cmd)
-            cmd = "INSERT INTO %s SELECT * FROM SOURCE.%s ;" \
-                  % (tab_name, tab_name)
-            tgt_cx.execute(cmd)
+                   "WHERE file_id IN (SELECT file_id FROM SOURCE.%s) ;")
+            tgt_cx.execute(cmd % (tab_name, tab_name))
+            cmd = "INSERT INTO %s SELECT * FROM SOURCE.%s ;"
+            tgt_cx.execute(cmd % (tab_name, tab_name))
         else:
             get_cmd = "SELECT * FROM %s;" % (tab_name,)
             get_cursor = self._cx.cursor()
@@ -291,13 +382,13 @@ class SQLPropDBManagerOffline(SQLPropDBManager, mode=OFFLINE):
     """
     def __enter__(self):
             # Make sure we have the root directory contents, at least.
-        super(SQLPropDBManagerOffline, self).__enter__()
+        super().__enter__()
         try:
             _res = list(self.get_dir_entries(0)) # Force evaluation.
         except Exception as exc:
             self.__exit__(*sys.exc_info())
-            msg = "not an offline database, was it created with mkoffline? %s"
-            raise PropDBError(msg % (fstr2str(self.dbpath),)) from exc
+            msg = "not an offline database, was it created with mkoffline? "
+            raise PropDBError(msg + self.dbpath) from exc
         return self
 
     def _all_tables(self):
@@ -321,7 +412,7 @@ class SQLPropDBManagerOffline(SQLPropDBManager, mode=OFFLINE):
             size, mtime, ctime = self._cx.execute(cmd, (file_id,)).fetchone()
         except Exception as exc:
             msg = "Cannot read database %s offline metadata for file id %d." \
-                % (fstr2str(self.dbpath), file_id,)
+                % (self.dbpath, file_id)
             raise PropDBError(msg) from exc
         return Metadata(size, mtime, ctime)
 
@@ -331,7 +422,7 @@ class SQLPropDBManagerOffline(SQLPropDBManager, mode=OFFLINE):
         """
         # Escape single quotes for sqlite3.
         def storer(string):
-            string.replace(fstr("'"), fstr("''"))
+            string.replace("'", "''")
             return _SQL_TEXT_STORER(string)
         cmd = "INSERT INTO dir_contents VALUES (?, ?, ?, ?);"
         self._cx.execute(
@@ -355,10 +446,9 @@ class SQLPropDBManagerOnline(SQLPropDBManager, mode=ONLINE):
     - File ids may be removed.
     - File property values may be merged in.
     """
-    def __init__(self, dbpath, root_path=None, **kwargs):
-        self.treeroot = root_path
-        super(SQLPropDBManagerOnline, self).__init__(
-            dbpath, root=root_path, **kwargs)
+    def __init__(self, dbpath, topdir_path=None, **kwargs):
+        self.treeroot = topdir_path
+        super().__init__(dbpath, root=topdir_path, **kwargs)
 
     def get_glob_patterns(self):
         """
@@ -368,8 +458,8 @@ class SQLPropDBManagerOnline(SQLPropDBManager, mode=ONLINE):
         """
         if self.treeroot and is_subdir(self.dbpath, self.treeroot):
             relpath = os.path.relpath(self.dbpath, self.treeroot)
-            return [ExcludePattern(fstr("/") + relpath),
-                    ExcludePattern(fstr("/") + relpath + fstr("-*"))]
+            return [ExcludePattern("/" + relpath),
+                    ExcludePattern("/" + relpath + "-*")]
         else:
             return []
 
@@ -388,7 +478,7 @@ class SQLPropDBManagerOnline(SQLPropDBManager, mode=ONLINE):
             self._cx.executemany(del_prop_cmd, vals)
         except sqlite3.Error as exc:
             msg = "could not delete from %s file ids: %s (%s)" % \
-                (fstr2str(self.dbpath), file_ids, exc)
+                (self.dbpath, file_ids, exc)
             raise PropDBError(msg) from exc
 
     def delete_ids_except(self, file_ids_to_keep):

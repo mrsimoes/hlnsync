@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python3
 
 # Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
 # For conditions of distribution and use, see copyright notice in lnsync.py
@@ -11,7 +11,7 @@ import os
 import random
 import re
 
-from lnsync_pkg.fstr_type import fstr, fstr2str
+DEFAULT_DBPREFIX = "lnsync-"
 
 def mode_from_location(location, mandatory_mode=None):
     """
@@ -26,41 +26,40 @@ def mode_from_location(location, mandatory_mode=None):
         elif os.path.isfile(location):
             mandatory_mode = "offline"
         else:
-            msg = "expected file or dir: %s" % (fstr2str(location),)
+            msg = "expected file or dir: " + location
             raise ValueError(msg)
     if mandatory_mode == "online":
         if not os.path.isdir(location):
-            msg = "expected tree root dir: %s" % (fstr2str(location),)
+            msg = "expected tree root dir: " + location
             raise ValueError(msg)
         elif not os.access(location, os.R_OK):
-            msg = "cannot read from: %s" % (fstr2str(location),)
+            msg = "cannot read from: " + location
             raise ValueError(msg)
         mode = "online"
     elif mandatory_mode == "offline":
         if os.path.exists(location):
             if not os.path.isfile(location):
-                msg = "expected offline tree file: %s" % (fstr2str(location),)
+                msg = "expected offline tree file: " + location
                 raise ValueError(msg)
             elif not os.access(location, os.R_OK):
-                msg = "cannot read from: %s" % (fstr2str(location),)
+                msg = "cannot read from: " + location
                 raise ValueError(msg)
         mode = "offline"
     return mode
 
-def pick_db_basename(dir_path, dbprefix):
+def pick_db_basename(dir_path, dbprefix=DEFAULT_DBPREFIX):
     """
     Find or create a unique basename matching <dbprefix>[0-9]*.db in the
     directory. Raise EnvironmentError if there are too many files matching the
     database basename pattern or if there are none and the given dir is not
     writable.
-    dir_path should be fstr type.
     Raise EnvironmentError if too many db files or no write access.
     """
     assert os.path.isdir(dir_path), \
-            "pick_db_basename: not a directory: %s" % fstr2str(dir_path)
-    if dbprefix.endswith(fstr(".db")):
+            "pick_db_basename: not a directory: " + dir_path
+    if dbprefix.endswith(".db"):
         dbprefix = dbprefix[:-3]
-    pattern = fstr("^%s[0-9]*.db$" % fstr2str(dbprefix))
+    pattern = "^%s[0-9]*.db$" % (dbprefix,)
     regex = re.compile(pattern)
     candidates_base = []
     for basename in os.listdir(dir_path):
@@ -71,12 +70,12 @@ def pick_db_basename(dir_path, dbprefix):
         db_basename = candidates_base[0]
     elif candidates_base == []:
         if not os.access(dir_path, os.W_OK):
-            msg = "no write access to %s" % fstr2str(dir_path)
+            msg = "no write access to " + dir_path
             raise EnvironmentError(msg)
         def random_digit_str(ndigit=3):
             """Return a random string of digits of length ndigit."""
             return ("%%0%dd" % ndigit) % random.randint(0, 10**ndigit-1)
-        db_basename = dbprefix + fstr(random_digit_str()) + fstr(".db")
+        db_basename = dbprefix + random_digit_str() + ".db"
     else:
-        raise EnvironmentError("too many db files at %s" % fstr2str(dir_path))
+        raise EnvironmentError("too many db files at " + dir_path)
     return db_basename

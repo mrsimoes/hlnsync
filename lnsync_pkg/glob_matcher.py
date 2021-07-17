@@ -1,7 +1,19 @@
-#!/usr/bin/env python
+#!/usr/bin/python3
 
 # Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
-# For conditions of distribution and use, see copyright notice in lnsync.py
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 """
 Pattern - a glob pattern with the rsync-link ability to match at the root dir
@@ -16,11 +28,10 @@ GlobMatcher - a set of patterns suited to match when traversing a tree
 
 import fnmatch
 
-from lnsync_pkg.fstr_type import fstr, fstr2str
 import lnsync_pkg.printutils as pr
 
-_SEP = fstr("/")
-_STST = fstr("**")
+_SEP = "/"
+_STST = "**"
 
 class Pattern:
     __slots__ = ("_inner_str", "_type",
@@ -46,22 +57,25 @@ class Pattern:
         self._stst_pos = glob_string.find(_STST)
 
     def clone(self, new_inner_str):
-        new_inner_str = self.to_fstr(inner_str=new_inner_str)
+        new_inner_str = self.to_str(inner_str=new_inner_str)
         new_pat = (type(self))(new_inner_str)
         return new_pat
 
-    def to_fstr(self, inner_str=None):
+    def to_str(self, inner_str=None):
+        """
+        Return the pattern as a string.
+        """
         if inner_str is None:
             inner_str = self._inner_str
-        prefix = _SEP if self._anchored else fstr("")
-        postfix = _SEP if self._dir_matcher else fstr("")
+        prefix = _SEP if self._anchored else ""
+        postfix = _SEP if self._dir_matcher else ""
         return prefix + inner_str + postfix
 
     def __hash__(self):
-        return hash(self.to_fstr())
+        return hash(self.to_str())
 
     def __eq__(self, other):
-        return self.to_fstr() == other.to_fstr() \
+        return self.to_str() == other.to_str() \
                 and self._type == other._type
 
     def is_anchored(self):
@@ -80,7 +94,7 @@ class Pattern:
         """
         Test if we match the empty string.
         """
-        return self._sep_pos < 0 and fnmatch.fnmatch(fstr(""), self._inner_str)
+        return self._sep_pos < 0 and fnmatch.fnmatch("", self._inner_str)
 
     def head_to_tails(self, component):
         """
@@ -112,7 +126,7 @@ class Pattern:
                 nxt_stst = self._inner_str.find(_STST, nxt_stst+2)
         else:  # No ** and no /
             if fnmatch.fnmatch(component, self._inner_str):
-                tails_pats.add(self.clone(fstr("")))
+                tails_pats.add(self.clone(""))
         return tails_pats
 
     def matches_exactly(self, component):
@@ -127,7 +141,6 @@ class Pattern:
         Match a pattern against a path literal.
         The path is taken to be a directory iff it has a trailing slash.
         """
-        path = fstr(path)
         if path[0:1] == _SEP:
             path = path[1:]
         if path[-1:] == _SEP:
@@ -250,7 +263,7 @@ def merge_pattern_lists(pats1, pats2):
         def pre(p):
             return "--exclude" if p.is_exclude() else "--include"
         return " ".join("%s %s" % \
-            (pre(p), fstr2str(p.to_fstr())) for p in plist)
+            (pre(p), p.to_str()) for p in plist)
     def merge_lists(l1, l2):
         # Input lists may be altered.
         if not l1:

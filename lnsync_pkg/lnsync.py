@@ -1,7 +1,8 @@
-#!/usr/bin/env python
+#!/usr/bin/python3
 
 """
-Sync target file tree with source tree using hardlinks.
+Sync target file tree with source tree using hard links.
+
 Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
 
 This program is free software: you can redistribute it and/or modify
@@ -27,7 +28,6 @@ import argparse
 from sqlite3 import Error as SQLError
 from functools import reduce
 
-from lnsync_pkg.fstr_type import fstr, fstr2str
 import lnsync_pkg.printutils as pr
 import lnsync_pkg.metadata as metadata
 
@@ -41,9 +41,17 @@ from lnsync_pkg.glob_matcher import Pattern, IncludePattern, ExcludePattern
 from lnsync_pkg.lnsync_treeargs import TreeLocation, TreeLocationOnline, \
     TreeLocationAction, TreeOptionAction, ConfigTreeOptionAction, \
     DEFAULT_DBPREFIX
+from lnsync_pkg.blockhash import BlockHasher, HasherAlgo
 import lnsync_pkg.lnsync_cmd_handlers as lnsync_cmd_handlers
 
-if __debug__:
+####################
+# Global variables and settings.
+####################
+
+TRAP_EXCEPTIONS = False # Set sys.excepthook handler.
+HELP_SPACING = 30
+
+if TRAP_EXCEPTIONS:
     def info(type, value, tb):
         if hasattr(sys, 'ps1') or not sys.stderr.isatty():
         # we are in interactive mode or we don't have a tty-like
@@ -59,11 +67,6 @@ if __debug__:
             pdb.post_mortem(tb) # more "modern"
     sys.excepthook = info
 
-####################
-# Global variables and settings.
-####################
-
-HELP_SPACING = 30
 
 def wrap(text, width):
     """
@@ -79,6 +82,7 @@ def wrap(text, width):
                                ) >= width)],
                    word,),
                   text.split(' '),)
+
 DESCRIPTION = wrap(
     "lnsync %s (python %d.%d).\n%s\n"
     "Home: http://github.com/mrsimoes/lnsync "
@@ -103,11 +107,11 @@ DESCRIPTION = wrap(
 
 def relative_path(value):
     """
-    Argument type: exclude absolute paths and convert to fstr.
+    Argument type: exclude absolute paths.
     """
     if os.path.isabs(value):
         raise argparse.ArgumentTypeError("not a relative path: %s." % value)
-    return fstr(value)
+    return value
 
 # Verbosity control, a top level parser.
 
@@ -132,7 +136,19 @@ verbosity_options_parser.add_argument(
     help="decrease/increase verbosity")
 
 
-# Debug flag (another top-level parser.)
+# Set xxhash variant (another top-level parser).
+
+class SetXXHasher(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        BlockHasher.set_algo(getattr(HasherAlgo, values)) # Get value from name.
+
+xxhash_option_parser = ArgumentParser(add_help=False)
+xxhash_option_parser.add_argument(
+    "--xxhash", choices=HasherAlgo.get_values(),
+    action=SetXXHasher, default=None,
+    help="set xxhash hasher variant hasher")
+
+# Debug flag (another top-level parser).
 
 debugtrees_option_parser = ArgumentParser(add_help=False)
 debugtrees_option_parser.add_argument(
@@ -194,7 +210,7 @@ maxsize_option_parser = ArgumentParser(add_help=False)
 maxsize_option_parser.add_argument(
     "-M", "--maxsize", type=human2bytes, default=-1,
     action=ConfigTreeOptionAction, sc_scope="all", sc_action="store",
-    help="ignore files larger than MAXSIZE (default: no limit)"
+    help="ignore files larger than MAXSIZE (default: no limit), "
          "suffixes allowed: K, M, G, etc.")
 
 bysize_option_parser = ArgumentParser(add_help=False)
@@ -212,17 +228,17 @@ skipempty_option_parser.add_argument(
     default=False,
     help="ignore empty files")
 
-hardlinks_option_parser = ArgumentParser(add_help=False)
-hardlinks_option_parser.add_argument(
-    "-H", "--hardlinks", "--no-hardlinks",
+hard_links_option_parser = ArgumentParser(add_help=False)
+hard_links_option_parser.add_argument(
+    "-H", "--hard-links", "--no-hard-links",
     action=ConfigTreeOptionAction, sc_scope="all", sc_action="store_true",
     default=False,
-    help="treat hardlinks/paths to the same file as distinct")
-hardlinks_option_parser.add_argument(
-    "-A", "--alllinks", "--no-alllinks",
+    help="treat hard links/paths to the same file as distinct")
+hard_links_option_parser.add_argument(
+    "-A", "--all-links", "--no-all-links",
     action=ConfigTreeOptionAction, sc_scope="all", sc_action="store_true",
     default=False,
-    help="on results, print all hardlinks, not just one")
+    help="on results, print all hard links, not just one")
 
 ##########
 # Pick alternative hasher or filter functions.
@@ -240,6 +256,11 @@ def valid_executable_str(path):
     elif not os.stat(path).st_mode & stat.S_IXUSR:
         raise argparse.ArgumentTypeError("not an executable: %s" % (path,))
     return path
+
+class HasherExecOption(TreeOptionAction):
+    @staticmethod
+    def sc_action(_parser, _namespace, pos_val, _opt_val, _option_string=None):
+        BlockHasher.set_algo(HasherAlgo.CUSTOM, pos_val)
 
 hasher_option_parser = ArgumentParser(add_help=False)
 
@@ -283,7 +304,7 @@ class DBPrefixTreeOption(TreeOptionAction):
         pos_val.set_dbprefix(dbprefix)
 
 dblocation_option_parser.add_argument(
-    "-p", "--dbprefix", metavar="PREFIX", type=fstr,
+    "-p", "--dbprefix", metavar="PREFIX", type=str,
     action=DBPrefixTreeOption, sc_scope="following",
     help="database filename prefix for following online trees")
 
@@ -304,9 +325,9 @@ class DBLocationTreeOption(TreeOptionAction):
             pos_val.set_dblocation(dblocation)
 
 dblocation_option_parser.add_argument(
-    "-b", "--dblocation", metavar="LOCATION", type=fstr,
+    "-b", "--dblocation", metavar="LOCATION", type=str,
     action=DBLocationTreeOption, sc_scope="next",
-    help="database file location")
+    help="database file location for following online tree")
 
 ##########
 # Include/exclude pattern options.
@@ -372,35 +393,35 @@ class IncOnlyPatternOption(IncExcPatternOptionBase):
         """
         Transform a list of pattern strings into a list of pattern objects.
         """
-        return [IncludePattern(fstr("*/"))] + \
+        return [IncludePattern("*/")] + \
                [IncludePattern(p) for p in pattern_strings] + \
-               [ExcludePattern(fstr("*"))]
+               [ExcludePattern("*")]
 
 exclude_option_parser = ArgumentParser(add_help=False)
 exclude_option_parser.add_argument(
     "--exclude", "--include", metavar="GLOBPATTERN",
-    type=fstr, nargs="+", dest="exclude_patterns",
+    type=str, nargs="+", dest="exclude_patterns",
     action=IncExcPatternOption, sc_scope="all", sc_action="append",
     help="exclude/include files and dirs")
 
 excludeonce_option_parser = ArgumentParser(add_help=False)
 excludeonce_option_parser.add_argument(
     "--once-exclude", "--once-include", metavar="GLOBPATTERN",
-    type=fstr, nargs="+", dest="exclude_patterns",
+    type=str, nargs="+", dest="exclude_patterns",
     action=IncExcOncePatternOption, sc_scope="next", sc_action="append",
     help="for the following tree only")
 
 includeonly_option_parser = ArgumentParser(add_help=False)
 includeonly_option_parser.add_argument(
     "--only-include", metavar="GLOBPATTERN",
-    type=fstr, nargs="+", dest="exclude_patterns",
+    type=str, nargs="+", dest="exclude_patterns",
     action=IncOnlyPatternOption, sc_scope="all", sc_action="append",
     help="include only the given patterns")
 
 includeonlyonce_option_parser = ArgumentParser(add_help=False)
 includeonlyonce_option_parser.add_argument(
     "--once-only-include", metavar="GLOBPATTERN",
-    type=fstr, nargs="+", dest="exclude_patterns",
+    type=str, nargs="+", dest="exclude_patterns",
     action=IncOnlyPatternOption, sc_scope="next", sc_action="append")
 
 exclude_all_options_parser = ArgumentParser(
@@ -413,22 +434,22 @@ exclude_all_options_parser = ArgumentParser(
     )
 
 ##########
-# root option.
+# dbrootdir option.
 ##########
 
 # Specify directories where the hash database actually is.
 
-root_option_parser = ArgumentParser(add_help=False)
+dbrootdir_option_parser = ArgumentParser(add_help=False)
 
 def readable_dir(path):
     if not os.path.exists(path) or not os.path.isdir(path):
         msg = "not a directory at %s" % (path,)
         raise argparse.ArgumentTypeError(msg)
-    return fstr(path)
+    return path
 
-class RootOption(TreeOptionAction):
+class DBRootDirOption(TreeOptionAction):
     """
-    Store a list of root locations: update a TreeLocation and save it to self.dest
+    Store a list of dbrootdir locations: update a TreeLocation and save it to self.dest
     but do not save to the full location list. # TODO docs
     """
 
@@ -436,28 +457,28 @@ class RootOption(TreeOptionAction):
         if pos_val.mode == OFFLINE:
             return
         try:
-            root_trees = \
+            dbrootdir_trees = \
                 self.get_from_tree_section(pos_val,
-                                           "root",
+                                           "dbrootdir",
                                            type=readable_dir,
                                            merge_sections=False)
-            assert isinstance(root_trees, list) and 0 <= len(root_trees) <= 1
-            if root_trees:
-                pos_val.set_root_option(root_trees[0])
+            assert isinstance(dbrootdir_trees, list) and 0 <= len(dbrootdir_trees) <= 1
+            if dbrootdir_trees:
+                pos_val.set_dbrootdir_option(dbrootdir_trees[0])
         except (NoSectionError, NoOptionError):
             pass
 
     @staticmethod
     def sc_action(_parser, _namespace, pos_arg, opt_val, _option_string):
         assert isinstance(opt_val, list)
-        for root_dir in opt_val:
-            pos_arg.set_root_option(root_dir)
+        for dbrootdir in opt_val:
+            pos_arg.set_dbrootdir_option(dbrootdir)
 
-root_option_parser.add_argument(
-    "--root", metavar="DIR",
-    type=readable_dir, nargs=1, dest="root",
-    action=RootOption, sc_scope="all",
-    help="read and update root database for all subtree locations")
+dbrootdir_option_parser.add_argument(
+    "--dbrootdir", metavar="DBROOTDIR",
+    type=readable_dir, nargs=1, dest="dbrootdir",
+    action=DBRootDirOption, sc_scope="all",
+    help="database directory for all online locations")
 
 ####################
 # Other shared options parsers, unrelated to trees.
@@ -500,6 +521,7 @@ top_parser = ArgumentParser(\
     description=DESCRIPTION,
     parents=[configfile_option_parser, # In this order.
              verbosity_options_parser,
+             xxhash_option_parser,
              debugtrees_option_parser],
     add_help=False, usage=argparse.SUPPRESS,
     formatter_class=lambda prog: argparse.HelpFormatter(
@@ -513,12 +535,12 @@ cmd_parsers = top_parser.add_subparsers(dest="cmdname", help="sub-command help")
 
 parser_sync = cmd_parsers.add_parser(
     'sync',
-    parents=[dryrun_option_parser,
-             root_option_parser, exclude_option_parser,
-             maxsize_option_parser, dblocation_option_parser,
-             bysize_option_parser, skipempty_option_parser],
+    parents=[dryrun_option_parser, exclude_option_parser,
+             maxsize_option_parser,
+             bysize_option_parser, skipempty_option_parser,
+             dbrootdir_option_parser, dblocation_option_parser],
     help="sync-by-rename target to best match source, no "
-         "file content copied to or deleted from target")
+         "file content deleted from or copied to target")
 parser_sync.add_argument(
     "source", type=TreeLocation, action=TreeLocationAction)
 parser_sync.add_argument(
@@ -531,9 +553,9 @@ cmd_handlers["sync"] = lnsync_cmd_handlers.do_sync
 
 parser_rsync = cmd_parsers.add_parser(
     'rsync',
-    parents=[dryrun_option_parser,
-             root_option_parser, exclude_option_parser,
-             dblocation_option_parser, maxsize_option_parser],
+    parents=[dryrun_option_parser, exclude_option_parser,
+             hard_links_option_parser, maxsize_option_parser,
+             dbrootdir_option_parser, dblocation_option_parser],
     help="generate an rsync command to complete sync")
 parser_rsync.add_argument(
     "-x", "--execute", default=False, action="store_true",
@@ -548,29 +570,37 @@ cmd_handlers_extra_args["rsync"] = lnsync_cmd_handlers.do_rsync
 
 parser_syncr = cmd_parsers.add_parser(
     'syncr',
-    parents=[dryrun_option_parser,
-             root_option_parser, exclude_option_parser,
-             dblocation_option_parser, maxsize_option_parser],
+    parents=[dryrun_option_parser, exclude_option_parser,
+             hard_links_option_parser, maxsize_option_parser,
+             dbrootdir_option_parser, dblocation_option_parser, ],
     help="sync and then execute the rsync command")
 parser_syncr.add_argument(
     "source", type=TreeLocation, action=TreeLocationAction)
 parser_syncr.add_argument(
     "target", type=TreeLocationOnline, action=TreeLocationAction)
+parser_syncr.add_argument(
+    "--cmp", default=False, action="store_true",
+    help="compare source and target after rsync")
 def do_syncr(args, more_args):
     lnsync_cmd_handlers.do_sync(args)
     args.execute = True
     lnsync_cmd_handlers.do_rsync(args, more_args)
+    if args.cmp:
+        args.leftlocation = args.source
+        args.rightlocation = args.target
+        lnsync_cmd_handlers.do_cmp(args)
 cmd_handlers_extra_args["syncr"] = do_syncr
 
 ##########
 # Search commands
 ##########
 
-_SEARCH_CMD_PARENTS = [root_option_parser, exclude_all_options_parser,
-                       hardlinks_option_parser, bysize_option_parser,
+_SEARCH_CMD_PARENTS = [exclude_all_options_parser,
+                       hard_links_option_parser, bysize_option_parser,
                        hasher_option_parser, maxsize_option_parser,
-                       skipempty_option_parser, dblocation_option_parser,
-                       sameline_option_parser, sort_option_parser]
+                       skipempty_option_parser,
+                       sameline_option_parser, sort_option_parser,
+                       dbrootdir_option_parser, dblocation_option_parser]
 
 # fdupes
 
@@ -619,11 +649,9 @@ parser_search = cmd_parsers.add_parser(
     'search',
     parents=_SEARCH_CMD_PARENTS,
     help="Search for files by relative path glob pattern")
-def pattern_fstr(arg):
-    return Pattern(fstr(arg))
 parser_search.add_argument(
     "locations", type=TreeLocation, action=TreeLocationAction, nargs="+")
-parser_search.add_argument("glob", type=pattern_fstr, action="store")
+parser_search.add_argument("glob", type=Pattern, action="store")
 cmd_handlers["search"] = lnsync_cmd_handlers.do_search
 
 ##########
@@ -632,9 +660,9 @@ cmd_handlers["search"] = lnsync_cmd_handlers.do_search
 
 parser_update = cmd_parsers.add_parser(
     'update',
-    parents=[root_option_parser, exclude_all_options_parser,
-             dblocation_option_parser, skipempty_option_parser,
-             maxsize_option_parser],
+    parents=[exclude_all_options_parser,
+             skipempty_option_parser, maxsize_option_parser,
+             dbrootdir_option_parser, dblocation_option_parser],
     help='update hashes of new and modified files')
 parser_update.add_argument(
     "dirs", type=TreeLocationOnline, action=TreeLocationAction, nargs="+")
@@ -649,7 +677,7 @@ cmd_handlers["update"] = do_update
 ##########
 
 parser_rehash = cmd_parsers.add_parser(
-    'rehash', parents=[root_option_parser, dblocation_option_parser],
+    'rehash', parents=[dbrootdir_option_parser, dblocation_option_parser],
     help='force hash updates for given files')
 parser_rehash.add_argument("topdir",
                            type=TreeLocationOnline, action=TreeLocationAction)
@@ -666,7 +694,7 @@ cmd_handlers["rehash"] = do_rehash
 parser_lookup = \
     cmd_parsers.add_parser(
         'lookup',
-        parents=[root_option_parser, dblocation_option_parser],
+        parents=[dbrootdir_option_parser, dblocation_option_parser],
         help='retrieve file hashes')
 parser_lookup.add_argument("location",
                            type=TreeLocation, action=TreeLocationAction)
@@ -683,8 +711,8 @@ cmd_handlers["lookup"] = do_lookup
 parser_aliases = \
     cmd_parsers.add_parser(
         'aliases',
-        parents=[root_option_parser, dblocation_option_parser],
-        help='find all hardlinks to a file')
+        parents=[dbrootdir_option_parser, dblocation_option_parser],
+        help='find all hard links to a file')
 parser_aliases.add_argument("location",
                             type=TreeLocation, action=TreeLocationAction)
 parser_aliases.add_argument("relpath", type=relative_path)
@@ -696,10 +724,10 @@ cmd_handlers["aliases"] = lnsync_cmd_handlers.do_aliases
 
 parser_cmp = cmd_parsers.add_parser(
     'cmp',
-    parents=[root_option_parser, exclude_all_options_parser,
-             hardlinks_option_parser, bysize_option_parser,
+    parents=[exclude_all_options_parser,
+             hard_links_option_parser, bysize_option_parser,
              maxsize_option_parser, skipempty_option_parser,
-             dblocation_option_parser,
+             dbrootdir_option_parser, dblocation_option_parser,
             ],
     help='recursively compare two trees')
 parser_cmp.add_argument(
@@ -714,10 +742,10 @@ cmd_handlers["cmp"] = lnsync_cmd_handlers.do_cmp
 
 parser_check_files = cmd_parsers.add_parser(
     'check',
-    parents=[root_option_parser, exclude_all_options_parser,
-             hardlinks_option_parser, bysize_option_parser,
+    parents=[exclude_all_options_parser,
+             hard_links_option_parser, bysize_option_parser,
              maxsize_option_parser, skipempty_option_parser,
-             dblocation_option_parser],
+             dbrootdir_option_parser, dblocation_option_parser],
     help='rehash and compare against stored hash')
 
 parser_check_files.add_argument(
@@ -738,7 +766,6 @@ parser_subdir = \
         parents=[dblocation_option_parser],
         help='copy hashes to new database at relative subdir')
 
-#parser_subdir.add_argument("topdir", type=fstr)
 parser_subdir.add_argument("topdir",
                            type=TreeLocationOnline, action=TreeLocationAction)
 
@@ -767,13 +794,13 @@ def writable_file_or_empty_path(path):
     else:
         msg = "not a file at %s" % (path,)
         raise argparse.ArgumentTypeError(msg)
-    return fstr(path)
+    return path
 
 parser_mkoffline = cmd_parsers.add_parser(
     'mkoffline',
     parents=[exclude_all_options_parser, maxsize_option_parser,
-             root_option_parser, skipempty_option_parser,
-             dblocation_option_parser],
+             skipempty_option_parser,
+             dbrootdir_option_parser, dblocation_option_parser],
     help="create offline file tree from dir")
 
 parser_mkoffline.add_argument(
@@ -812,7 +839,7 @@ def debug_tree_info(args):
     xargs = vars(args)
     def excstr(tr):
         if not hasattr(tr, "dbprefix"):
-            tr.kws = "No kws, path=" + fstr2str(tr.real_location)
+            tr.kws = "No kws, path=" + tr.real_location
         elif callable(tr.kws):
             tr.kws = tr.kws()
         if "exclude_patterns" in tr.kws:
@@ -883,8 +910,6 @@ def main():
         pr.error("not implemented on your system: %s", str(exc))
     except (RuntimeError, AssertionError, Exception) as exc:
         pr.error("internal error: %s" % str(exc))
-        if __debug__:
-            raise
     finally:
         sys.exit(exit_error)
 

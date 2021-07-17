@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python3
 
 # Copyright (C) 2018 Miguel Simoes, miguelrsimoes[a]yahoo[.]com
 # For conditions of distribution and use, see copyright notice in lnsync.py
@@ -23,7 +23,6 @@ import copy
 from collections import namedtuple
 
 from lnsync_pkg.human2bytes import bytes2human
-from lnsync_pkg.fstr_type import fstr2str
 from lnsync_pkg.miscutils import is_subdir
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.onegraph import OneGraph
@@ -43,8 +42,8 @@ class TreePairMatcher:
         assert tgt_tree.db.mode == "online", "TreePairMatcher: not online db."
         # Do not match a tree against a subtree.
         if src_tree.db.mode == "online" and \
-            (is_subdir(src_tree.root_path, tgt_tree.root_path) \
-             or is_subdir(tgt_tree.root_path, src_tree.root_path)):
+            (is_subdir(src_tree.topdir_path, tgt_tree.topdir_path) \
+             or is_subdir(tgt_tree.topdir_path, src_tree.topdir_path)):
             raise ValueError("Source tree cannot be a subdirectory of target.")
         self.trees = SrcTgt(src_tree, tgt_tree)
         self.mt_state = State(self.trees)
@@ -88,13 +87,13 @@ class TreePairMatcher:
         ln_map = self.mt_state.total_path_op.ln_map
         for ln_ref_path in ln_map:
             for new_link_path in ln_map[ln_ref_path]:
-                if self.trees.tgt.follow_path(new_link_path):
+                if self.trees.tgt.path_to_obj(new_link_path):
                     if new_link_path in self.mt_state.total_path_op.unln_set:
                         self._rm_in_advance.add(new_link_path)
                         yield self._mk_rm_cmd(new_link_path)
                     else:
-                        pr.warning("cannot create hardlink at %s" % \
-                            fstr2str(new_link_path))
+                        pr.warning("cannot create hardlink at " + \
+                            new_link_path)
                         continue
                 yield ("ln", ln_ref_path, new_link_path)
 
@@ -117,12 +116,12 @@ class TreePairMatcher:
                 curr_path = new_path
             final_mv_pair = reversed_rel_mv_pairs[-1]
             final_mv_dest = final_mv_pair[1]
-            if self.trees.tgt.follow_path(final_mv_pair[1]):
+            if self.trees.tgt.path_to_obj(final_mv_pair[1]):
                 if final_mv_dest in self.mt_state.total_path_op.unln_set:
                     self._rm_in_advance.add(final_mv_dest)
                     yield self._mk_rm_cmd(final_mv_dest)
                 else:
-                    pr.warning("cannot mv to %s" % fstr2str(final_mv_pair[1]))
+                    pr.warning("cannot mv to " + final_mv_pair[1])
                     continue
             reversed_rel_mv_pairs.reverse()
             rel_mv_pairs = reversed_rel_mv_pairs
@@ -144,7 +143,7 @@ class TreePairMatcher:
         A rm command includes an alternative path to the same file as its
         second paramater, to allow undoing.
         """
-        f_obj = self.trees.tgt.follow_path(relpath)
+        f_obj = self.trees.tgt.path_to_obj(relpath)
         witness_path = f_obj.relpaths[0]
         if witness_path == relpath:
             witness_path = f_obj.relpaths[1]
