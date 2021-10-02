@@ -8,35 +8,83 @@ Odds and ends.
 """
 
 import os
+import sys
+from functools import reduce
 
-MAX_INT64 = 1<<63 - 1
+MAX_UINT64 = 2**64 - 1
+MAX_INT64 = 2**63 - 1
+MIN_INT64 = -2**63
 
 def uint64_to_int64(value):
     if value <= MAX_INT64:
-        return value
+        res = value
     else:
-        return MAX_INT64 - value
+        res = MAX_INT64 - value
+    assert MIN_INT64 <= res <= MAX_INT64, \
+        f"uint64_to_int64 overflow: {value}"
+    return res
 
 def int64_to_uint64(value):
     if value >= 0:
-        return value
+        res = value
     else:
-        return MAX_INT64 - value
+        res = MAX_INT64 - value
+    assert 0 <= res <= MAX_UINT64, \
+        f"int64_to_uint64 overflow: {value}"
+    return res
 
-MAX_INT32 = 1<<31 - 1
+MAX_UINT32 = 2**32 - 1
+MAX_INT32 = 2**31 - 1
+MIN_INT32 = -2**31
 
 def uint32_to_int32(value):
-    if value <= MAX_INT32:
-        return value
+    if value <= MAX_INT64:
+        res = value
     else:
-        return MAX_INT32 - value
+        res = MAX_INT32 - value
+    assert MIN_INT32 <= res <= MAX_INT32, \
+        f"uint32_to_int32 overflow: {value}"
+    return res
 
 def int32_to_uint32(value):
     if value >= 0:
-        return value
+        res = value
     else:
-        return MAX_INT32 - value
+        res = MAX_INT32 - value
+    assert 0 <= res <= MAX_UINT32, \
+        f"int32_to_uint32 overflow: {value}"
+    return res
 
+def wrap_text(text, width):
+    """
+    A word-wrap function that preserves existing line breaks
+    and most spaces in the text. Expects that existing line
+    breaks are posix newlines (\n).
+    By Mike Brown, licensed under the PSF.
+    """
+    return reduce(lambda line, word, width=width: '%s%s%s' %
+                  (line,
+                   ' \n'[(len(line)-line.rfind('\n')-1
+                          + len(word.split('\n', 1)[0]
+                               ) >= width)],
+                   word,),
+                  text.split(' '),)
+
+def set_exception_hook():
+    def info(type, value, tb):
+        if hasattr(sys, 'ps1') or not sys.stderr.isatty():
+        # we are in interactive mode or we don't have a tty-like
+        # device, so we call the default hook
+            sys.__excepthook__(type, value, tb)
+        else:
+            import traceback, pdb
+            # we are NOT in interactive mode, print the exception...
+            traceback.print_exception(type, value, tb)
+            print()
+            # ...then start the debugger in post-mortem mode.
+            # pdb.pm() # deprecated
+            pdb.post_mortem(tb) # more "modern"
+    sys.excepthook = info
 
 def is_subdir(subdir, topdir):
     """

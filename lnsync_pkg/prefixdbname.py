@@ -5,13 +5,15 @@
 
 """
 Uniquely specify a database file at dirpath by file prefix.
+
+Database filenames match <PREFIX>-[0-9]*.db
 """
 
 import os
 import random
 import re
 
-DEFAULT_DBPREFIX = "lnsync-"
+DEFAULT_DBPREFIX = "lnsync"
 
 def mode_from_location(location, mandatory_mode=None):
     """
@@ -49,7 +51,7 @@ def mode_from_location(location, mandatory_mode=None):
 
 def pick_db_basename(dir_path, dbprefix=DEFAULT_DBPREFIX):
     """
-    Find or create a unique basename matching <dbprefix>[0-9]*.db in the
+    Find or create a unique basename matching <dbprefix>-[0-9]+.db in the
     directory. Raise EnvironmentError if there are too many files matching the
     database basename pattern or if there are none and the given dir is not
     writable.
@@ -57,15 +59,13 @@ def pick_db_basename(dir_path, dbprefix=DEFAULT_DBPREFIX):
     """
     assert os.path.isdir(dir_path), \
             "pick_db_basename: not a directory: " + dir_path
-    if dbprefix.endswith(".db"):
-        dbprefix = dbprefix[:-3]
-    pattern = "^%s[0-9]*.db$" % (dbprefix,)
+    pattern = r"^%s-\d+.db$" % (dbprefix,)
     regex = re.compile(pattern)
     candidates_base = []
     for basename in os.listdir(dir_path):
         if os.path.isfile(os.path.join(dir_path, basename)) \
            and regex.match(basename):
-            candidates_base.append(basename)
+           candidates_base.append(basename)
     if len(candidates_base) == 1:
         db_basename = candidates_base[0]
     elif candidates_base == []:
@@ -75,7 +75,7 @@ def pick_db_basename(dir_path, dbprefix=DEFAULT_DBPREFIX):
         def random_digit_str(ndigit=3):
             """Return a random string of digits of length ndigit."""
             return ("%%0%dd" % ndigit) % random.randint(0, 10**ndigit-1)
-        db_basename = dbprefix + random_digit_str() + ".db"
+        db_basename = dbprefix + "-" + random_digit_str() + ".db"
     else:
         raise EnvironmentError("too many db files at " + dir_path)
     return db_basename

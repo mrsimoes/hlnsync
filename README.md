@@ -1,12 +1,12 @@
 ## Overview
 
-_lnsync_ provides sync-by-content of local file trees, with support for hard links.
+_lnsync_ provides sync-by-content of local file trees (including hard link syncing), plus other search and compare features.
 
 ###  Features
 
-The main feature is partial, one-way sync of local directories by renaming, linking and delinking only, without copying or deleting file content data. (Though empty target directories not on the source are also removed.)
+The main feature is partial, one-way sync of local directories by renaming, linking and delinking only, without copying or deleting file content data.
 
-This alows very quick target replication of arbitrary source renaming, linking/delinking (but not deleting) and may be used as a preprocessing step for full sync tools such as _rsync_.
+This alows quick target replication of arbitrary source renaming/linking/delinking (but not deleting), and may be used as a preprocessing step for full a sync tool such as _rsync_.
 
 Other operations include finding duplicate files, checking for file content changes, and listing all hard links to a file.
 
@@ -14,15 +14,19 @@ Files may be included or excluded using glob pattersn, much like rsync.
 
 Configuration is possible via very flexible config files.
 
+### Offline Trees
+
+There is also an option to save the file structure (not file contents, and not all attributes) under a directory in a combined hash/metadata database. These _offline trees_ can be used in most _lnsync_ commands in place of a local directory, e.g. as the source in a sync command, to reorganize a target tree according to a certain source pattern.
+
 ### Hashes
 
-Files are identified by their content hash, using xxHash (a fast, non-cryptographic hash function). Both 32bit and 64bit hashes xxHash functions are available, with 32bit as default.
+Files are identified by their content hash, using xxHash (a fast, non-cryptographic hash function). Both 32-bit and 64-bit hashes xxHash functions are available, with 32-bit as default. Custom hashing functions are supported.
 
-To avoid recomputation, hash values are stored in local databases, a single file per file tree. Each database is a single file, by default with a name matching `lnsync-[0-9]+.db`. Only one such file should exist at each location. (A different naming pattern or an altogether different file location may be specified.)
+To avoid recomputation, hash values are stored in local databases, one single file per tree, by default matching `lnsync-[0-9]+.db`. Only one such file should exist at each location. (A different naming pattern or an altogether different file location may be specified.)
 
 File modification times are used to detect stale hash values. Modification times are not synced to the target.
 
-Hash databases are ignored by _lnsync_ operations.Care should be taken not to overwrite them when syncing with other tools.
+Hash databases are ignored by _lnsync_ operations. Care should be taken not to overwrite them when syncing with other tools.
 
 ## Files, File Paths, and Hard Links
 
@@ -30,19 +34,19 @@ On most file systems, the same _file_ may be reached by multiple _file paths_, a
 
 Operations are on files, not file paths. E.g., if a file has two hard links, then by itself it does not count as a duplicate.
 
-### Offline Trees
-
-There is also an option to save the file structure (not file contents, and not all attributes) under a directory in a combined hash/metadata database. These _offline trees_ can be used in most _lnsync_ commands in place of a local directory, e.g. as the source in a sync command, to reorganize a target tree according to a certain source pattern.
-
 ### Files Handled
 
 Files which cannot be read are skipped. File ownership and permissions are otherwise ignored.
 
 Symbolic links and any other file system objects are ignored.
 
+### Directories
+
+When syncing, directories are created as needed on the target, and also empty target directories not on the source are removed.
+
 ## Installing
 
-Install the latest version from the PyPI repository with `pip install -U lnsync` or else clone the repo with `git clone https://github.com/mrsimoes/lnsync.git` and then run `python setup.py install`.
+Install the latest version from the PyPI repository with `pip install --user -U lnsync` or else clone the repo with `git clone https://github.com/mrsimoes/lnsync.git` and then run `python setup.py install`.
 
 ### Alternatives for Linux
 
@@ -80,9 +84,28 @@ Use `-H` to treat hard links to the same file as distinct. If this option is not
 
 To find all files in Photos which are not in the backup (under any name): `lnsync onfirstonly /home/you/Photos /mnt/disk/Photos`. To find all files with jpg extension, `lnsync search /home/you/Photos "*.jpg"`.
 
-To have any operation on a subdir of `/home/you/Photos` use the hash database at `/home/you/Photos`, include the option `root=/home/you/Photos` under section `/home/you/Photos/**` of your config file. (See Configuration Files below.)
+To have any operation on a subdir of `/home/you/Photos` use the hash database at `/home/you/Photos`, include `root=/home/you/Photos` under section `/home/you/Photos/**` of your config file. (See Configuration Files below.)
 
 For example, to sync the subdir `/home/you/Photos/Best` to another target, using the hash database at `/home/you/Photos`: `lnsync sync /home/you/Photos/Best --root=/home/you/Photos /mnt/eframe/`.
+
+## Custom Hash Functions
+
+A custom hasher is any executable that takes a single argument and outputs an hash value as a 64-bit unsigned integer (in decimal). To set a custom hasher: `--hasher=<EXECUTABLE>`. It may be advisable to also change the database prefix or location.
+
+As an example, if `hashmp3.sh` computes the hash of only the sound content of an mp3 (and not any included metadata), then the following `lnsync-mp3.cfg` config file may be used to find duplicate mp3 content:
+
+```
+[DEFAULT]
+    dbprefix = lnsync-mp3
+    hasher = ~/bin/hashmp3.sh
+
+[**]
+    only_include = *.mp3
+```
+
+The second section applies the `--only-include="*.mp3"` to ALL online tree locations.
+
+Invoke this mode with `lnsync --config <PATH TO lnsync-mp3.cfg> <COMMAND> [<ARG> ...]`.
 
 ## Command Reference
 
@@ -90,7 +113,7 @@ All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [
 
 ### Specifying the Database Location
 
-By default, the database file corresponding to an online file tree is the unique file located in that directory and with basename matching `<PREFIX>[0-9]*.db`.
+By default, the database file corresponding to an online file tree is the unique file located in that directory and with basename matching `<PREFIX>-[0-9]+.db`.
 
 To specify another prefix for all following online file trees, `--dbprefix <PREFIX>`.
 
@@ -133,7 +156,7 @@ For each matched target file, its pathnames are made to match those of the corre
 ### Creating, Updating, and Accessing the Hash Database
 
 - `update <dir>` Update the hash database, creating a new database if none exists, and rehashing all new files and those with a changed modification time (mtime). Accepts `--exclude=<pattern>` options.
-- `rehash <dir> [<relpath>]+` Force rehashing files specified by paths relative to the root `dir`.
+- `rehash <dir> [<relpath>]+` Force rehashing specified files and subdirs.
 - `subdir <dir> <relsubdir>` Update the database at `relsubdir` using any hash value already present in the hash database for `dir`.
 - `mkoffline <dir> <outputfile>` Update database at `dir` and create corresponding offline database at `outputfile`. Use `-f` to force overwriting the output file.
 - `cleandb <dir>` Remove outdated entries and re-compact the database.
@@ -195,7 +218,7 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 
 ### Release Notes
 
-- v0.7.2: Support for 64bit hashing functions. Option `--dbdir` renamed to `--dbroot`. Internal changes: use xxhash instead of pyhashxx, refactoring, bug fixes.
+- v0.7.2: Support for 64-bit hashing functions. Option `--dbdir` renamed to `--dbrootdir`. Internal changes: use xxhash over pyhashxx, refactoring, bug fixes.
 - v0.7.0: Custom hashing functions, better command line argument parsing, custom db location, bug fixes.
 - v0.6.1: Thread improvements and bug fixes.
 - v0.6.0: Threaded hashing and tree scanning for much better performance. Internal refactoring.
@@ -214,15 +237,14 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 
 ### Possible Improvements
 
-- Support the newer xxhash3 hashes, or other, including 128bit hashes.
-- Stamp hash databases with the hash function used.
+- Support the newer xxhash3 hashes, or other, including 128-bit hashes.
 - Better configuration file format.
 - More parallel hashing, multiprocessing instead of threads.
-- More output sorting options, e.g. by name or mtime.
+- More output options, e.g. sort by name or mtime.
 - Make `--include` and `--exclude` patterns more compatible with `rsync`.
 - Store Unicode file names in offline database to support other operating systems. Currently stored as-is.
 - Detect renamed directories for a compact sync schedule.
 - Partial hashes for quicker comparison of same-size files.
-- Check for duplicates by content, not just content hash.
+- Check for duplicates by actual content, not just content hash.
 - Update target mtimes.
-- argparsecomplete support
+- Support argparsecomplete.

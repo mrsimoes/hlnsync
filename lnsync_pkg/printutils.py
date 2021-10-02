@@ -138,13 +138,17 @@ def _print_main(*args, **kwargs):
     with PRINT_LOCK:
         if is_tty and _progress_was_printed:
             _print("\r\033[2K", end="") # Erase current line.
+        need_space = False
         for arg in args:
             out_arg = str(arg)
             try:
+                if need_space:
+                    file.write(" ")
                 file.write(out_arg)
             except UnicodeEncodeError:
                 # Fallback to binary.
                 file.buffer.write(out_arg.encode(FSE, "surrogateescape"))
+            need_space = True
         if end:
             file.write(end)
         file.flush()
@@ -156,7 +160,7 @@ def print(*args, **kwargs):
 
 def fatal(*args, **kwargs):
     if option_verbosity >= FATAL_LEVEL:
-        _print_main(_app_prefix, "fatal: ", *args, file=sys.stderr, **kwargs)
+        _print_main(_app_prefix, "fatal:", *args, file=sys.stderr, **kwargs)
 
 def error(*args, **kwargs):
     with PRINT_LOCK:
@@ -165,7 +169,7 @@ def error(*args, **kwargs):
                 if _stderr_is_tty:
                     _print("\033[31m", file=sys.stderr, end="") # Red forgr.
                 _print_main(_app_prefix,
-                            "error: ", *args, file=sys.stderr, **kwargs)
+                            "error:", *args, file=sys.stderr, **kwargs)
             finally:
                 if _stderr_is_tty:
                     _print("\033[39m", file=sys.stderr, end="") # Std foreg.
@@ -182,7 +186,7 @@ def warning(*args, **kwargs):
                 if _stderr_is_tty:
                     _print("\033[33m", file=sys.stderr, end="") # Red forgr.
                 _print_main(_app_prefix,
-                            "warning: ", *args, file=sys.stderr, **kwargs)
+                            "warning:", *args, file=sys.stderr, **kwargs)
             finally:
                 if _stderr_is_tty:
                     _print("\033[39m", file=sys.stderr, end="") # Std foreg.
@@ -191,13 +195,13 @@ def warning(*args, **kwargs):
 def debug(template_str, *str_args, **kwargs):
     """Templace with % placeholders and respective are given separately."""
     if option_verbosity >= DEBUG_LEVEL:
-        _print_main("debug: ",
+        _print_main("debug:",
                     template_str % str_args, file=sys.stderr, **kwargs)
 
 def trace(template_str, *str_args, **kwargs):
     """Templace with % placeholders and respective are given separately."""
     if option_verbosity >= TRACE_LEVEL:
-        _print_main("trace: ",
+        _print_main("trace:",
                     template_str % str_args, file=sys.stderr, **kwargs)
 
 def _exit_func():

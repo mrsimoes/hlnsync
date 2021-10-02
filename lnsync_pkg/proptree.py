@@ -359,10 +359,15 @@ class FilePropTreeOnline(FilePropTree, mode=ONLINE):
         assert file_obj is not None and file_obj.is_file()
         db_prop = self.db_get_uptodate_prop(file_obj, delete_stale=False)
         if db_prop is None:
-            msg = "no uptodate prop/metadata for " + \
-                  file_obj.relpaths[0]
+            msg = "no up-to-date prop/metadata for " + \
+                  self.printable_path(file_obj.relpaths[0])
             raise PropDBNoValue(msg)
-        live_prop_value = self.prop_from_source(file_obj)
+        try:
+            live_prop_value = self.prop_from_source(file_obj)
+        except RuntimeError:
+            msg = "error hashing " + \
+                  self.printable_path(file_obj.relpaths[0])
+            raise PropDBError(msg)
         return db_prop == live_prop_value
 
     def db_purge_old_entries(self):

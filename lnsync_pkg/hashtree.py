@@ -23,14 +23,14 @@ import subprocess
 import abc
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.miscutils import uint64_to_int64
-from lnsync_pkg.blockhash import BlockHasher, hash_file
+from lnsync_pkg.blockhash import BlockHasher
 from lnsync_pkg.modaltype import onofftype, OFFLINE, ONLINE
 from lnsync_pkg.propdbmanager import PropDBManager, PropDBException, PropDBError, PropDBNoValue
 from lnsync_pkg.proptree import FilePropTree, TreeError, FileItemProp
 from lnsync_pkg.sqlpropdb import SQLPropDBManager
 
 class FileHashTree(FilePropTree, metaclass=onofftype):
-    def __init__(self, filter_exec=None, **kwargs):
+    def __init__(self, **kwargs):
         """
         kwargs passed upwards to FilePropTree:
             - dbmaker, a callable that accepts kwargs dbpath, and root.
@@ -53,13 +53,6 @@ class FileHashTree(FilePropTree, metaclass=onofftype):
         self._size_as_hash = size_as_hash
         if size_as_hash:
             self.get_prop = self._get_prop_as_size
-# TODO
-#        if "dbkwargs" not in kwargs:
-#            kwargs["dbkwargs"] = {}
-#        if hasher_exec is not None:
-#            kwargs["dbkwargs"]["hasher"] = blockhash.Hashers.CUSTOM
-#        else:
-#            kwargs["dbkwargs"]["hasher"] = blockhash.get_hasher()
         super(FileHashTree, self).__init__(dbmaker=dbmaker, **kwargs)
         self._print_progress = None
 
@@ -97,28 +90,10 @@ class NoSizeFileItem(FileItemProp):
         self.file_metadata.size = 1
 
 class FileHashTreeOnline(FileHashTree, mode=ONLINE):
-    def __init__(self, *args, hasher_exec=None, filter_exec=None, **kwargs):
-        super().__init__(*args, hasher_exec=hasher_exec, filter_exec=filter_exec, **kwargs)
-        if hasher_exec is not None:
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not BlockHasher.is_full_content_hasher():
             self._file_type = NoSizeFileItem
-        self._hasher_exec = hasher_exec
-        self._filter_exec = filter_exec
-
-    def _prop_from_hasher_exec(self, abspath):
-        try:
-            procres = subprocess.run(
-                [self._hasher_exec, abspath],
-                capture_output=True, check=True)
-        except subprocess.CalledProcessError as exc:
-            msg = "failed hashing: %s (%s)." % (abspath, procres.stderr, )
-            raise RuntimeError(msg) from exc
-        try:
-            res = int(procres.stdout)
-        except ValueError as msg:
-            msg = "invalid hasher output for %s (%s)." % \
-                    (abspath, procres.stdout)
-            raise RuntimeError(msg) from exc
-        return uint64_to_int64(res)
 
     def prop_from_source(self, file_obj):
         """
@@ -128,13 +103,10 @@ class FileHashTreeOnline(FileHashTree, mode=ONLINE):
         relpath = file_obj.relpaths[0]
         abspath = self.rel_to_abs(relpath)
         pr.progress("hashing:%s" % self.printable_path(relpath))
-        if not self._hasher_exec:
-            try:
-                val = hash_file(abspath, filter_exec=self._filter_exec)
-            except OSError as exc:
-                raise RuntimeError("while hashing") from exc
-        else:
-            val = self._prop_from_hasher_exec(abspath)
+        try:
+            val = BlockHasher.hash_file(abspath)
+        except Exception as exc: # TODO tighten this.
+            raise RuntimeError("while hashing") from exc
         if not isinstance(val, int):
             raise  RuntimeError("bad property value %s" % (val,))
         return val

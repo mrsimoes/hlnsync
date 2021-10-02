@@ -24,17 +24,19 @@ Operations include finding root nodes and checking for cycles.
 
 class OneGraph:
     """
-    A (directed) 1-graph - at most one arrow out of each node.
+    Implement a directed 1-graph with efficient operations on cycles,
+    but no direct access to the node set.
 
+    A directed 1-graph has at most one arrow out of each node.
     A node is any hashable value, except None.
-    - add_arrow(a,b) creates a new arrow and either 0, 1, or 2 nodes.
-    - remove_arrow(a,b) removes an arrow and either 0, 1, or 2 nodes.
+    Operations:
+    - add_arrow(a, b) creates a new arrow a->b.
+    - remove_arrow(a, b) removes the arrow a->b.
     """
 
     def __init__(self):
-        self._arrows = {}
-        self._root_to_cycle = {}
-        self._cycles = [] # Each cycle in the list is a set of nodes.
+        self._arrows = {} # Set of arrows as dictionary {node_from:node_to, ...}.
+        self._cycles = [] # List of cycles, each cycle a set of nodes.
 
     def __str__(self):
         return str(self._arrows)
@@ -49,9 +51,9 @@ class OneGraph:
             return None
 
     def has_cycle(self):
-        return len(self._cycles) > 0
+        return self._cycles
 
-    def iterarrows(self):
+    def iter_arrows(self):
         for node_a, node_b in self._arrows.items():
             yield (node_a, node_b)
 
@@ -70,7 +72,7 @@ class OneGraph:
         Add to self all arrows in other_one_g.
         """
         assert self is not other_one_g
-        for node_a, node_b in other_one_g.iterarrows():
+        for node_a, node_b in other_one_g.iter_arrows():
             self.add_arrow(node_a, node_b)
 
     def remove_arrow(self, node_a, node_b):
@@ -88,12 +90,13 @@ class OneGraph:
         Remove from self all arrows in other_one_g.
         """
         assert self is not other_one_g
-        for node_a, node_b in other_one_g.iterarrows():
+        for node_a, node_b in other_one_g.iter_arrows():
             self.remove_arrow(node_a, node_b)
 
     def get_all_roots(self):
         """
         Return the set of all roots (minimal elements).
+        Called infrequently in our application - computed on a need-to basis.
         """
         roots = set(self._arrows)
         for _, node_to in self._arrows.items():

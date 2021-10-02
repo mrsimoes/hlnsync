@@ -41,7 +41,7 @@ def sizes_repeated(all_trees, hard_links):
     """
     Yield all file sizes for which more than two or more files of that
     size exist somewhere across all dbs.
-    If hard_links is True, consider different paths to the same file as distinct
+    If hard_links is False, consider different paths to the same file as distinct
     for this purpose.
     """
     sizes_seen_once, sizes_seen_twice = set(), set()
@@ -58,8 +58,8 @@ def sizes_repeated(all_trees, hard_links):
             else:
                 files_this_sz = tree.size_to_files(file_sz)
                 if len(files_this_sz) > 1 or \
-                        (hard_links and len(files_this_sz[0].relpaths) > 1):
-                # If hard_links, a size value seen once for an id
+                        (not hard_links and len(files_this_sz[0].relpaths) > 1):
+                # If not hard_links, a size value seen once for an id
                 # with multiple paths is recorded as a dupe.
                     sizes_seen_twice.add(file_sz)
                     yield file_sz
@@ -70,7 +70,7 @@ def located_files_repeated_of_size(all_trees, file_sz, hard_links):
     """
     Yield all tuples (prop, {tree1: [files_1],... {tree_k, [files_k]})
     over all file props which correspond to more than one file across all trees.
-    If hard_links is True, count multiple paths to the same file as repeats of
+    If hard_links is False, count multiple paths to the same file as repeats of
     the prop.
     """
     # For size sz and all trees, these are {prop: {tree: [fobjs]}}
@@ -89,7 +89,7 @@ def located_files_repeated_of_size(all_trees, file_sz, hard_links):
                 del props_once_tree_fobjs[prop_val]
                 props_twice_tree_fobjs[prop_val][tree].append(fobj)
             else:
-                if hard_links and len(fobj.relpaths) > 1:
+                if not hard_links and len(fobj.relpaths) > 1:
                     props_twice_tree_fobjs[prop_val][tree] = [fobj]
                 else:
                     props_once_tree_fobjs[prop_val][tree] = [fobj]

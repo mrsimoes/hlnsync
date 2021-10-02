@@ -32,7 +32,7 @@ class GroupedFileListPrinter:
          - sameline: if True, filenames in each group are printed in the same
         line, separated by spaces, with filename spaces and backslashes escaped;
         other print one file per line, with an empty line separating groups.
-        - hard_links: if True, print all aliases for each file as if they were
+        - hard_links: if False, print all aliases for each file as if they were
         different files; if False, print for each file a single path alias,
         arbitrarily chosen.
         - all_links: if True (and assuming hard_links is False), print all links
@@ -87,7 +87,7 @@ class GroupedFileListPrinter:
             for k, relpath in enumerate(fobj.relpaths):
                 if k == 0:
                     include, prefix = (True, "")
-                elif self.hard_links or self.all_links:
+                elif not self.hard_links or self.all_links:
                     include, prefix = (True, " ")
                 else:
                     include = False
@@ -101,7 +101,7 @@ class GroupedFileListPrinter:
             for k, relpath in enumerate(fobj.relpaths):
                 if k == 0:
                     include, prefix = (True, "")
-                elif self.hard_links:
+                elif not self.hard_links:
                     include, prefix = (True, "")
                 elif self.all_links:
                     include, prefix = (True, " ")

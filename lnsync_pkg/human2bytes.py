@@ -1,11 +1,14 @@
 #!/usr/bin/python3
 
-# Based on:
 # Bytes-to-human / human-to-bytes converter.
+#
 # Based on: http://goo.gl/kTQMs
-# Working with Python 2.x and 3.x.
-# Author: Giampaolo Rodola' <g.rodola [AT] gmail [DOT] com>
-# License: MIT
+#           Author: Giampaolo Rodola' <g.rodola [AT] gmail [DOT] com>
+#           License: MIT
+#
+# Modified by mrsimoes to:
+# - Work on Python 3.
+# - Cache the threshold values instead used on bytes2human.
 
 """
 Convert numbers to and from human-readable form, using common suffixes.
@@ -24,7 +27,12 @@ SYMBOLS = {
                        'zebi', 'yobi'),
 }
 
-def bytes2human(value, format='%(value).1f%(symbol)s', symbols='customary'):
+MAXVALUE = {}
+for sset in SYMBOLS.keys():
+    MAXVALUE[sset] = 1 << 10 * (len(SYMBOLS[sset]) - 1)
+
+def bytes2human(value, format='%(value).1f%(symbol)s', symbols='customary',
+                singular_format='%(value).0f%(symbol)s'):
     """
     (Changed default format string from '%(value).1 f%(symbol)s' )
     Convert n bytes into a human readable string based on format.
@@ -65,15 +73,14 @@ def bytes2human(value, format='%(value).1f%(symbol)s', symbols='customary'):
     value = int(value)
     if value < 0:
         raise ValueError("value < 0")
+    threshold = MAXVALUE[symbols]
     symbols = SYMBOLS[symbols]
-    prefix = {}
-    for i, sym in enumerate(symbols[1:]):
-        prefix[sym] = 1 << (i+1)*10
     for symbol in reversed(symbols[1:]):
-        if value >= prefix[symbol]:
-            value = float(value) / prefix[symbol]
-            return format % locals()
-    return format % dict(symbol=symbols[0], value=value)
+        if value >= threshold:
+            value = float(value) / threshold
+            return format % {'symbol': symbol, 'value':value}
+        threshold >>= 10
+    return singular_format % {'symbol':symbols[0], 'value':value} # Faster than dict.
 
 def human2bytes(s):
     """

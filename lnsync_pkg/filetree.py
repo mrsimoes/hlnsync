@@ -555,12 +555,12 @@ class FileTree:
         """
         assert self.rootdir_obj is not None, "path_to_obj: no rootdir_obj."
         curdir_obj = self.rootdir_obj
-        if relpath in (".", ""):
-            return curdir_obj
         components = relpath.split(os.sep)
         while components and curdir_obj:
             comp = components[0]
             components = components[1:]
+            if comp in (".", ""):
+                continue
             if curdir_obj.is_dir() and not curdir_obj.was_scanned():
                 self.scan_dir(curdir_obj)
             next_obj = curdir_obj.get_entry(comp)
@@ -700,14 +700,18 @@ class FileTree:
     def rm_dir_writeback(self, dir_obj):
         """
         Execute a rmdir, write back to source tree if self.writeback is set.
+        dir_obj cannot be the root directory.
+        If self.writeback, an OSError may be thrown if the dir cannot be removed.
+        If the dir_obj is non-empty, also throw OSError.
         """
-        assert not dir_obj.entries, "trying to remove non-empty dir."
         assert dir_obj.parent, "trying to remove rootdir,"
+        if dir_obj.entries:
+            raise OSError("trying to remove non-empty dir: %s" % (relpath,))
         relpath = dir_obj.get_relpath()
-        basename = os.path.basename(relpath)
-        dir_obj.parent.rm_entry(basename)
         if self.writeback:
             os.rmdir(self.rel_to_abs(relpath))
+        basename = os.path.basename(relpath)
+        dir_obj.parent.rm_entry(basename)
 
     def _create_dir_if_needed_writeback(self, dir_relpath):
         """

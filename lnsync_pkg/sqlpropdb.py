@@ -43,13 +43,13 @@ import abc
 import sys
 from enum import IntEnum
 
-from lnsync_pkg.miscutils import BitField, is_subdir, int32_to_uint32, uint32_to_int32
+from lnsync_pkg.miscutils import BitField, is_subdir
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.glob_matcher import ExcludePattern
 from lnsync_pkg.filetree import Metadata
 from lnsync_pkg.modaltype import ONLINE, OFFLINE
 from lnsync_pkg.propdbmanager import PropDBManager, PropDBError, PropDBNoValue
-from lnsync_pkg.blockhash import BlockHasher, HasherAlgo
+from lnsync_pkg.blockhash import BlockHasher, HasherAlgo, HasherFunction
 
 # From str (surrogates escaped) to db (binary) value and back.
 FSE = sys.getfilesystemencoding() # Always UTF8 on Linux.
@@ -60,29 +60,6 @@ def _SQL_TEXT_STORER(string):
 
 #def mk_online_db(dir_path, db_basename):
 #    return SQLHashDBManager(os.path.join(dir_path, db_basename), mode=ONLINE)
-
-class HasherFunction(IntEnum):
-    """
-    Enum which mathematical hashing function.
-    """
-    XXHASH32 = 0
-    XXHASH64 = 1
-    CUSTOM = 2
-
-    @classmethod
-    def from_current_hasher_algo(cls):
-        return cls.from_hasher_algo(BlockHasher.get_algo())
-
-    @classmethod
-    def from_hasher_algo(cls, hasher_algo):
-        table = {HasherAlgo.PYHASHXX: cls.XXHASH32,
-                 HasherAlgo.XXHASH32: cls.XXHASH32,
-                 HasherAlgo.XXHASH64: cls.XXHASH64,
-                 HasherAlgo.CUSTOM:   cls.CUSTOM,
-                 }
-        if not hasher_algo in table:
-            raise RuntimeError("Unknown blockhash algorithm:", hasher_algo)
-        return table[hasher_algo]
 
 class UserVersion(BitField):
     """
@@ -103,7 +80,7 @@ class UserVersion(BitField):
         self[0:4] = db_version
     def get_hasher_function(self):
         """
-        May raise an exception if the code does not match any hasher.
+        May raise an exception if the code does not match any hasher function.
         """
         hasher_funcion = HasherFunction(self[4:8])
         return hasher_funcion
@@ -293,10 +270,9 @@ class SQLPropDBManager(PropDBManager):
             msg = "unknown hasher function for %s" % (self.dbpath,)
             raise PropDBError(msg) from exc
         curr_hasher_func = HasherFunction.from_current_hasher_algo()
-        pr.info("Checking:", db_hasher_func, curr_hasher_func)
         if db_hasher_func != curr_hasher_func:
-            errstr = "incompatible hash functions: %s and %s" % \
-                     (str(db_hasher_func), str(curr_hasher_func))
+            errstr = "incompatible hash functions: required %s, but found %s at %s" % \
+                     (str(curr_hasher_func), str(db_hasher_func), self.dbpath)
             raise PropDBError(errstr)
         if db_ver < UserVersion.CUR_DB_FORMAT_VERSION:
             msg = "update old database format=%d at %s" \

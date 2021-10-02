@@ -26,7 +26,6 @@ import sys
 import os
 import argparse
 from sqlite3 import Error as SQLError
-from functools import reduce
 
 import lnsync_pkg.printutils as pr
 import lnsync_pkg.metadata as metadata
@@ -43,47 +42,20 @@ from lnsync_pkg.lnsync_treeargs import TreeLocation, TreeLocationOnline, \
     DEFAULT_DBPREFIX
 from lnsync_pkg.blockhash import BlockHasher, HasherAlgo
 import lnsync_pkg.lnsync_cmd_handlers as lnsync_cmd_handlers
+from lnsync_pkg.miscutils import wrap_text, set_exception_hook
 
 ####################
 # Global variables and settings.
 ####################
 
-TRAP_EXCEPTIONS = False # Set sys.excepthook handler.
 HELP_SPACING = 30
 
-if TRAP_EXCEPTIONS:
-    def info(type, value, tb):
-        if hasattr(sys, 'ps1') or not sys.stderr.isatty():
-        # we are in interactive mode or we don't have a tty-like
-        # device, so we call the default hook
-            sys.__excepthook__(type, value, tb)
-        else:
-            import traceback, pdb
-            # we are NOT in interactive mode, print the exception...
-            traceback.print_exception(type, value, tb)
-            print()
-            # ...then start the debugger in post-mortem mode.
-            # pdb.pm() # deprecated
-            pdb.post_mortem(tb) # more "modern"
-    sys.excepthook = info
+if False: # Set sys.excepthook handler to help debugging.
+    set_exception_hook()
 
-
-def wrap(text, width):
-    """
-    A word-wrap function that preserves existing line breaks
-    and most spaces in the text. Expects that existing line
-    breaks are posix newlines (\n).
-    By Mike Brown, licensed under the PSF.
-    """
-    return reduce(lambda line, word, width=width: '%s%s%s' %
-                  (line,
-                   ' \n'[(len(line)-line.rfind('\n')-1
-                          + len(word.split('\n', 1)[0]
-                               ) >= width)],
-                   word,),
-                  text.split(' '),)
-
-DESCRIPTION = wrap(
+# NB: A new version of argparse reformats the description string to fit the
+# terminal width, undoing any formatting here.
+DESCRIPTION = wrap_text(
     "lnsync %s (python %d.%d).\n%s\n"
     "Home: http://github.com/mrsimoes/lnsync "
     "Copyright (C) 2018 Miguel Simoes. "
@@ -96,9 +68,6 @@ DESCRIPTION = wrap(
     80
     )
 
-# NB: A new version of argparse reformats the description string to fit the
-# terminal width, undoing any formatting here.
-
 ####################
 # Argument parsing
 ####################
@@ -107,7 +76,7 @@ DESCRIPTION = wrap(
 
 def relative_path(value):
     """
-    Argument type: exclude absolute paths.
+    Argument type function: accept relative paths, exclude absolute paths.
     """
     if os.path.isabs(value):
         raise argparse.ArgumentTypeError("not a relative path: %s." % value)
@@ -146,7 +115,46 @@ xxhash_option_parser = ArgumentParser(add_help=False)
 xxhash_option_parser.add_argument(
     "--xxhash", choices=HasherAlgo.get_values(),
     action=SetXXHasher, default=None,
-    help="set xxhash hasher variant hasher")
+    help="set built-in xxhash hasher variant")
+
+# Pick alternative hasher or filter functions (top-level parser)
+
+def valid_executable_str(path):
+    """
+    Exclude non-executables.
+    """
+    #TODO: permissions.
+    import stat
+    path = os.path.expanduser(path)
+    if not os.path.isfile(path):
+        raise argparse.ArgumentTypeError("not a file: %s" % path)
+    elif not os.stat(path).st_mode & stat.S_IXUSR:
+        raise argparse.ArgumentTypeError("not an executable: %s" % (path,))
+    return path
+
+class HasherExecOption(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        BlockHasher.set_algo(HasherAlgo.CUSTOM, values) # Get value from name.
+
+hasher_option_parser = ArgumentParser(add_help=False)
+
+hasher_option_parser.add_argument(
+    "--hasher",
+    type=valid_executable_str, action=HasherExecOption,
+    default=None, help="set custom hasher executable")
+
+class FilterExecOption(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        BlockHasher.set_filter(values) # Get value from name.
+
+filter_option_parser = ArgumentParser(add_help=False)
+
+filter_option_parser.add_argument(
+    "--filter",
+    type=valid_executable_str, #dest="filter_exec",
+    action=FilterExecOption,
+    default=None, #sc_action="store", sc_scope="all",
+    help="set file content filter for on-line file trees")
 
 # Debug flag (another top-level parser).
 
@@ -213,72 +221,34 @@ maxsize_option_parser.add_argument(
     help="ignore files larger than MAXSIZE (default: no limit), "
          "suffixes allowed: K, M, G, etc.")
 
+# sc_action="store_bool" interprets --no- prefixes
+
 bysize_option_parser = ArgumentParser(add_help=False)
 bysize_option_parser.add_argument(
     "-z", "--bysize", "--no-bysize", dest="bysize",
     action=ConfigTreeOptionAction, sc_scope="all",
-    sc_action="store_true", sc_dest="size_as_hash",
+    sc_action="store_bool", sc_dest="size_as_hash",
     default=False,
     help="compare files by size only")
 
 skipempty_option_parser = ArgumentParser(add_help=False)
 skipempty_option_parser.add_argument(
     "-0", "--skipempty", "--no-skipempty",
-    action=ConfigTreeOptionAction, sc_scope="all", sc_action="store_true",
+    action=ConfigTreeOptionAction, sc_scope="all", sc_action="store_bool",
     default=False,
     help="ignore empty files")
 
 hard_links_option_parser = ArgumentParser(add_help=False)
 hard_links_option_parser.add_argument(
     "-H", "--hard-links", "--no-hard-links",
-    action=ConfigTreeOptionAction, sc_scope="all", sc_action="store_true",
-    default=False,
-    help="treat hard links/paths to the same file as distinct")
+    action=ConfigTreeOptionAction, sc_scope="all", sc_action="store_bool",
+    default=True,
+    help="treat hard links/paths to the same file as the same file (default: True)")
 hard_links_option_parser.add_argument(
     "-A", "--all-links", "--no-all-links",
-    action=ConfigTreeOptionAction, sc_scope="all", sc_action="store_true",
-    default=False,
+    action=ConfigTreeOptionAction, sc_scope="all", sc_action="store_bool",
+    default=True,
     help="on results, print all hard links, not just one")
-
-##########
-# Pick alternative hasher or filter functions.
-##########
-
-def valid_executable_str(path):
-    """
-    Exclude non-executables.
-    """
-    #TODO: permissions.
-    import stat
-    path = os.path.expanduser(path)
-    if not os.path.isfile(path):
-        raise argparse.ArgumentTypeError("not a file: %s" % path)
-    elif not os.stat(path).st_mode & stat.S_IXUSR:
-        raise argparse.ArgumentTypeError("not an executable: %s" % (path,))
-    return path
-
-class HasherExecOption(TreeOptionAction):
-    @staticmethod
-    def sc_action(_parser, _namespace, pos_val, _opt_val, _option_string=None):
-        BlockHasher.set_algo(HasherAlgo.CUSTOM, pos_val)
-
-hasher_option_parser = ArgumentParser(add_help=False)
-
-hasher_option_parser.add_argument(
-    "--hasher",
-    type=valid_executable_str, dest="hasher_exec",
-    action=TreeOptionAction,
-    default=None, sc_action="store", sc_scope="all",
-    help="choose hasher executable for on-line file trees")
-
-filter_option_parser = ArgumentParser(add_help=False)
-
-filter_option_parser.add_argument(
-    "--filter",
-    type=valid_executable_str, dest="filter_exec",
-    action=TreeOptionAction,
-    default=None, sc_action="store", sc_scope="all",
-    help="choose file content filter for on-line file trees")
 
 ####################
 # Options applying to one or more tree args.
@@ -434,7 +404,7 @@ exclude_all_options_parser = ArgumentParser(
     )
 
 ##########
-# dbrootdir option.
+# dbrootdir options.
 ##########
 
 # Specify directories where the hash database actually is.
@@ -475,10 +445,10 @@ class DBRootDirOption(TreeOptionAction):
             pos_arg.set_dbrootdir_option(dbrootdir)
 
 dbrootdir_option_parser.add_argument(
-    "--dbrootdir", metavar="DBROOTDIR",
-    type=readable_dir, nargs=1, dest="dbrootdir",
+    "--dbrootdirs", "--dbroots", metavar="DBROOTDIR",
+    type=readable_dir, nargs='+', dest="dbrootdir",
     action=DBRootDirOption, sc_scope="all",
-    help="database directory for all online locations")
+    help="database directories for all online locations that are subdirs")
 
 ####################
 # Other shared options parsers, unrelated to trees.
@@ -522,6 +492,8 @@ top_parser = ArgumentParser(\
     parents=[configfile_option_parser, # In this order.
              verbosity_options_parser,
              xxhash_option_parser,
+             hasher_option_parser,
+# TODO             filter_option_parser
              debugtrees_option_parser],
     add_help=False, usage=argparse.SUPPRESS,
     formatter_class=lambda prog: argparse.HelpFormatter(
@@ -597,7 +569,7 @@ cmd_handlers_extra_args["syncr"] = do_syncr
 
 _SEARCH_CMD_PARENTS = [exclude_all_options_parser,
                        hard_links_option_parser, bysize_option_parser,
-                       hasher_option_parser, maxsize_option_parser,
+                       maxsize_option_parser,
                        skipempty_option_parser,
                        sameline_option_parser, sort_option_parser,
                        dbrootdir_option_parser, dblocation_option_parser]
@@ -683,8 +655,7 @@ parser_rehash.add_argument("topdir",
                            type=TreeLocationOnline, action=TreeLocationAction)
 parser_rehash.add_argument("relpaths", type=relative_path, nargs='+')
 def do_rehash(args):
-    return lnsync_cmd_handlers.do_lookup_and_rehash( \
-                args.topdir, args.relpaths, force_rehash=True)
+    return lnsync_cmd_handlers.do_rehash(args.topdir, args.relpaths)
 cmd_handlers["rehash"] = do_rehash
 
 ##########
@@ -694,14 +665,14 @@ cmd_handlers["rehash"] = do_rehash
 parser_lookup = \
     cmd_parsers.add_parser(
         'lookup',
-        parents=[dbrootdir_option_parser, dblocation_option_parser],
+        parents=[dbrootdir_option_parser,
+                 dblocation_option_parser],
         help='retrieve file hashes')
 parser_lookup.add_argument("location",
                            type=TreeLocation, action=TreeLocationAction)
 parser_lookup.add_argument("relpaths", type=relative_path, nargs="*")
 def do_lookup(args):
-    return lnsync_cmd_handlers.do_lookup_and_rehash( \
-                args.location, args.relpaths, force_rehash=False)
+    return lnsync_cmd_handlers.do_lookup(args.location, args.relpaths)
 cmd_handlers["lookup"] = do_lookup
 
 ##########
@@ -892,7 +863,7 @@ def main():
     if len(sys.argv) == 1:
         top_parser.print_help(sys.stderr)
         sys.exit(1)
-    pr.set_app_prefix("lnsync: ")
+    pr.set_app_prefix("lnsync:")
     cmd_handler = get_handler_fn()
     try:
         exit_error = 1
