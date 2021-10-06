@@ -119,6 +119,8 @@ To specify another prefix for all following online file trees, `--dbprefix <PREF
 
 To specify a different database directory possibly for all online file trees where to look for the database file, `--dbrootdir DBDIR`. Each online file tree corresponding to a subdir of DBDIR will use the database file at DBDIR.
 
+To specify a directory containing database root directories to be used for any contained onlien tree, `--dbrootmounr DBMOUNTSLOCATION`. This is useful e.g. for removable media, which are all mounted at `/mnt/user`. Then `--dbrootmounr /mnt/user` will use `/mnt/user/somedrive` for the online tree at `/mnt/user/somedrive/some/subdir/`.
+
 To specify the database file for the following online file tree, `--dblocation FILEPATH`.
 
 ### Syncing
@@ -218,6 +220,8 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 
 ### Release Notes
 
+- v0.7.4: New `--dbrootmount` option.
+- v0.7.3: Ignore all files matching `lnsync-*.db`. Bug fixes, notably on handling 64-bit xxhash values.
 - v0.7.2: Support for 64-bit hashing functions. Option `--dbdir` renamed to `--dbrootdir`. Internal changes: use xxhash over pyhashxx, refactoring, bug fixes.
 - v0.7.0: Custom hashing functions, better command line argument parsing, custom db location, bug fixes.
 - v0.6.1: Thread improvements and bug fixes.

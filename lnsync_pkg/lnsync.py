@@ -417,7 +417,7 @@ def readable_dir(path):
         raise argparse.ArgumentTypeError(msg)
     return path
 
-class DBRootDirOption(TreeOptionAction):
+class DBRootDirOptions(TreeOptionAction):
     """
     Store a list of dbrootdir locations: update a TreeLocation and save it to self.dest
     but do not save to the full location list. # TODO docs
@@ -427,28 +427,38 @@ class DBRootDirOption(TreeOptionAction):
         if pos_val.mode == OFFLINE:
             return
         try:
-            dbrootdir_trees = \
+            dbrootdir_tree = \
                 self.get_from_tree_section(pos_val,
-                                           "dbrootdir",
+                                           self.dest,
                                            type=readable_dir,
                                            merge_sections=False)
-            assert isinstance(dbrootdir_trees, list) and 0 <= len(dbrootdir_trees) <= 1
-            if dbrootdir_trees:
-                pos_val.set_dbrootdir_option(dbrootdir_trees[0])
+            self.send_dbroot_option(pos_val, dbrootdir_tree)
         except (NoSectionError, NoOptionError):
             pass
 
     @staticmethod
     def sc_action(_parser, _namespace, pos_arg, opt_val, _option_string):
-        assert isinstance(opt_val, list)
-        for dbrootdir in opt_val:
-            pos_arg.set_dbrootdir_option(dbrootdir)
+        pos_arg.set_alt_dbrootdir(opt_val)
+
+class DBRootDirOption(DBRootDirOptions):
+    def send_dbroot_option(self, pos_arg, opt_val):
+        pos_arg.set_alt_dbrootdir(opt_val)
 
 dbrootdir_option_parser.add_argument(
-    "--dbrootdirs", "--dbroots", metavar="DBROOTDIR",
-    type=readable_dir, nargs='+', dest="dbrootdir",
+    "--dbrootdir", metavar="DBROOTDIR",
+    type=readable_dir,
     action=DBRootDirOption, sc_scope="all",
     help="database directories for all online locations that are subdirs")
+
+class DBRootMountLocationOption(DBRootDirOptions):
+    def send_dbroot_option(self, pos_arg, opt_val):
+        pos_arg.set_alt_dbrootdir_parent(opt_val)
+
+dbrootdir_option_parser.add_argument(
+    "--dbrootmount", metavar="DBROOTS_MOUNTS_LOCATION",
+    type=readable_dir,
+    action=DBRootMountLocationOption, sc_scope="all",
+    help="directory whose immediate subdirs will be database directories for online trees contained within")
 
 ####################
 # Other shared options parsers, unrelated to trees.
