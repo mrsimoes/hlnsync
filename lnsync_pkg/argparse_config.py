@@ -260,7 +260,6 @@ class ArgumentParserConfig(argparse.ArgumentParser):
                    and full_switch.startswith(cli_arg)
         if namespace is None:
             namespace = argparse.Namespace()
-#        configfile_option_parser = self.configfile_option_parser
         if switch_match(sys.argv[1], "--no-conf", "--no-config"):
             fo_val = CLIConfig.SET_NO_CONFIG_FILE
         elif switch_match(sys.argv[1], "--conf", "-config"):
@@ -268,12 +267,12 @@ class ArgumentParserConfig(argparse.ArgumentParser):
             self._read_config_files(file_expanduser(sys.argv[2]))
         else:
             fo_val = CLIConfig.NO_CHOICE
-            self._read_config_files(*self._default_config_files)
+            try:
+                self._read_config_files(*self._default_config_files)
+            except NoValidConfigFile:
+                pass
         if ArgumentParserConfig._cfg_mgr is not None:
             self._config_file_exec_all_actions(namespace)
-#        assert not hasattr(namespace, "_config_file_option"), \
-#            "parse_known_args: unexpected attribute clash in namespace"
-#        setattr(namespace, "_config_file_option", fo_val)
         ChooseConfigAction._config_file_option = fo_val
         return super().parse_known_args(args, namespace)
 
