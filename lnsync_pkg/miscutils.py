@@ -7,8 +7,11 @@
 Odds and ends.
 """
 
+# pylint: disable=import-outside-toplevel
+
 import os
 import sys
+import argparse
 from functools import reduce
 
 MAX_UINT64 = 2**64 - 1
@@ -55,6 +58,19 @@ def int32_to_uint32(value):
         f"int32_to_uint32 overflow: {value}"
     return res
 
+
+class HelperAppError(Exception):
+    def __init__(self, cmd, error_msg):
+        super().__init__()
+        if isinstance(cmd, (list, tuple)):
+            assert all(lambda x: isinstance(x, str), cmd)
+            cmd = " ".join(cmd)
+        self.cmd = cmd
+        self.error_msg = error_msg
+    def __str__(self):
+        return "while running %s: %s" %(self.cmd, self.error_msg)
+
+
 def wrap_text(text, width):
     """
     A word-wrap function that preserves existing line breaks
@@ -77,7 +93,8 @@ def set_exception_hook():
         # device, so we call the default hook
             sys.__excepthook__(type, value, tb)
         else:
-            import traceback, pdb
+            import traceback
+            import pdb
             # we are NOT in interactive mode, print the exception...
             traceback.print_exception(type, value, tb)
             print()
@@ -88,19 +105,20 @@ def set_exception_hook():
 
 def is_subdir(subdir, topdir):
     """
-    Test if subdir is topdir or in topdir.
+    Test if subdir is topdir or is a subdit of topdir.
     Return either False or the relative path (which is never an empty string).
     """
     relative = os.path.relpath(subdir, topdir) # (path, start)
     if relative.startswith(os.pardir + os.sep):
-        return None
+        return False
     else:
         return relative
 
 class ListContextManager:
     """
-    Manage a context that creates a list of classref instances
-    initialized from a given list of init_args dicts.
+    A context manager that enters a sequence of classref instance context
+    managers, initialized from a given list of init_args dictionaries,
+    and exits them in reverse.
     """
     def __init__(self, classref, init_args_list):
         self.classref = classref
@@ -119,6 +137,20 @@ class ListContextManager:
         for obj in reversed(self.objs_entered):
             res = res or obj.__exit__(exc_type, exc_value, traceback)
         return res
+
+class StoreBoolAction(argparse.Action):
+    """
+    argparse.Action that store true by default and stores false if option switch
+    starts with '--no-'.
+    """
+    def __init__(self, *args, nargs=0, **kwargs):
+        super().__init__(*args, nargs=0, **kwargs)
+    def __call__(self, parser, namespace, pos_arg, option_string=None):
+        if option_string and option_string[0:5] == "--no-":
+            val = False
+        else:
+            val = True
+        setattr(namespace, self.dest, val)
 
 class BitField:
     """

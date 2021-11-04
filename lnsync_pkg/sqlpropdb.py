@@ -47,19 +47,12 @@ from lnsync_pkg.miscutils import BitField, is_subdir
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.glob_matcher import ExcludePattern
 from lnsync_pkg.filetree import Metadata
-from lnsync_pkg.modaltype import ONLINE, OFFLINE
+from lnsync_pkg.modaltype import Mode
 from lnsync_pkg.propdbmanager import PropDBManager, PropDBError, PropDBNoValue
 from lnsync_pkg.blockhash import BlockHasher, HasherAlgo, HasherFunction
 
 # From str (surrogates escaped) to db (binary) value and back.
 FSE = sys.getfilesystemencoding() # Always UTF8 on Linux.
-def _SQL_TEXT_FACTORY(stored_bin):
-    return stored_bin.decode(FSE, "surrogateescape")
-def _SQL_TEXT_STORER(string):
-    return string.encode(FSE, "surrogateescape")
-
-#def mk_online_db(dir_path, db_basename):
-#    return SQLHashDBManager(os.path.join(dir_path, db_basename), mode=ONLINE)
 
 class UserVersion(BitField):
     """
@@ -69,23 +62,29 @@ class UserVersion(BitField):
         (Default value 0 is XXHASH32 for backwards compatibility.)
     """
     CUR_DB_FORMAT_VERSION = 1
+
     def __init__(self, value=0):
         super().__init__(value)
         self.get_hasher_function() # Test for valid value.
+
     def get_db_version(self):
         return self[0:4]
+
     def set_db_version(self, db_version=None):
         if db_version is None:
             db_version = self.CUR_DB_FORMAT_VERSION
         self[0:4] = db_version
+
     def get_hasher_function(self):
         """
         May raise an exception if the code does not match any hasher function.
         """
         hasher_funcion = HasherFunction(self[4:8])
         return hasher_funcion
+
     def set_hasher_function(self, hasher_function):
         self[4:8] = hasher_function
+
     def get_raw_value(self):
         return self._d
 
@@ -101,6 +100,15 @@ class SQLPropDBManager(PropDBManager):
     database temp files need to be excluded.
     """
     _current_online_cx = {} # dbpath -> [enter_count, db_cx].
+
+    @staticmethod
+    def _sql_text_factory(stored_bin):
+        return stored_bin.decode(FSE, "surrogateescape")
+
+    @staticmethod
+    def _sql_text_storer(string):
+        # Escape single quotes for sqlite3.
+        return string.replace("'", "''").encode(FSE, "surrogateescape")
 
     def __init__(self, dbpath, **kwargs):
         """
@@ -206,7 +214,8 @@ class SQLPropDBManager(PropDBManager):
         Create a new SQL database file and close it.
         """
         dbpath = self.dbpath
-        assert not os.path.exists(dbpath)
+        assert not os.path.exists(dbpath), \
+            "redefining dbpath"
         pr.progress("Creating new database %s ..." % (dbpath,))
         temp_cx = None
         try:
@@ -349,7 +358,7 @@ class SQLPropDBManager(PropDBManager):
                     put_cursor.execute(cmd_insert, resout)
         tgt_db.compact()
 
-class SQLPropDBManagerOffline(SQLPropDBManager, mode=OFFLINE):
+class SQLPropDBManagerOffline(SQLPropDBManager, mode=Mode.OFFLINE):
     """
     Manage an SQLite3 file property db for FilePropertyTree.
 
@@ -396,13 +405,9 @@ class SQLPropDBManagerOffline(SQLPropDBManager, mode=OFFLINE):
         """
         Store a dir entry into the database-stores file tree.
         """
-        # Escape single quotes for sqlite3.
-        def storer(string):
-            string.replace("'", "''")
-            return _SQL_TEXT_STORER(string)
         cmd = "INSERT INTO dir_contents VALUES (?, ?, ?, ?);"
         self._cx.execute(
-            cmd, (dir_id, storer(obj_basename), obj_id, obj_is_file))
+            cmd, (dir_id, self._sql_text_storer(obj_basename), obj_id, obj_is_file))
 
     def get_dir_entries(self, dir_id):
         """
@@ -412,9 +417,16 @@ class SQLPropDBManagerOffline(SQLPropDBManager, mode=OFFLINE):
               "FROM dir_contents WHERE parent_id=?;"
         cur = self._cx.execute(cmd, (dir_id,))
         for db_rec in cur.fetchall():
-            yield (_SQL_TEXT_FACTORY(db_rec[0]), db_rec[1], db_rec[2])
+            yield (self._sql_text_factory(db_rec[0]), db_rec[1], db_rec[2])
 
-class SQLPropDBManagerOnline(SQLPropDBManager, mode=ONLINE):
+    def get_glob_patterns(self):
+        """
+        Exclude anything matching "/lnsync-*.db"
+        """
+        return [ExcludePattern("/lnsync-*.db"),]
+
+
+class SQLPropDBManagerOnline(SQLPropDBManager, mode=Mode.ONLINE):
     """
     In online mode:
     - Files related to SQL database are ignored--exclude.
@@ -432,12 +444,15 @@ class SQLPropDBManagerOnline(SQLPropDBManager, mode=ONLINE):
         files. The database may be located anywhere, even away from the tree
         root.
         """
+        common_excludes = super().get_glob_patterns()
         if self.treeroot and is_subdir(self.dbpath, self.treeroot):
             relpath = os.path.relpath(self.dbpath, self.treeroot)
-            return [ExcludePattern("/" + relpath),
-                    ExcludePattern("/" + relpath + "-*")]
+            return common_excludes + \
+                   [ExcludePattern("/" + relpath),
+                    ExcludePattern("/" + relpath + "-*"),
+                    ]
         else:
-            return []
+            return common_excludes
 
     def _all_tables(self):
         return SQLPropDBManager._tables_prop
@@ -465,8 +480,7 @@ class SQLPropDBManagerOnline(SQLPropDBManager, mode=ONLINE):
         if not isinstance(file_ids_to_keep, set):
             file_ids_to_keep = set(file_ids_to_keep)
         pr.progress("reading from database")
-        tot_file_records = self._cx.execute(
-            "SELECT count(*) FROM prop;").fetchone()[0]
+        tot_file_records = self.count_prop_entries()
         curr_record = 0
         with pr.ProgressPrefix("pruning: "):
             for fileid_record in self._cx.execute(
@@ -477,3 +491,6 @@ class SQLPropDBManagerOnline(SQLPropDBManager, mode=ONLINE):
                 if not this_id in file_ids_to_keep:
                     ids_to_delete.add(this_id)
         self.delete_ids(ids_to_delete)
+
+    def count_prop_entries(self):
+        return self._cx.execute("SELECT count(*) FROM prop;").fetchone()[0]

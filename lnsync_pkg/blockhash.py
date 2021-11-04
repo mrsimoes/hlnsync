@@ -24,11 +24,11 @@ Values returned are always converted to *signed* int64.
 For very large files (>1 GiB), use a reader/hasher thread combo.
 
 The hashing algorithm is either:
+    - xxhash: supports xxhash32 as well as a few other hasher functions.
+
     - pyhashxx: implements xxhash32, which returns a 32-bit value.
     This was the only choice in earlier versions. It requires compilation
     when installing via pip on Windows.
-
-    - xxhash: supports xxhash32 as well as a few other hasher functions.
 
 A class Hasher is provided, which can be used without creating instances,
 since settings and methods are global.
@@ -46,7 +46,8 @@ object requires using the following protocol:
     be made.
 """
 
-# pylint: disable=import-outside-toplevel # Hashing imports are conditionally imported.
+# Hashing imports are conditionally imported.
+# pylint: disable=import-outside-toplevel
 
 import os
 import subprocess
@@ -54,7 +55,7 @@ from enum import IntEnum
 
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.thread_utils import ProducerConsumerThreaded, NoMoreData
-from lnsync_pkg.miscutils import uint64_to_int64
+from lnsync_pkg.miscutils import uint64_to_int64, HelperAppError
 
 class HasherFunction(IntEnum):
     """
@@ -135,34 +136,35 @@ class BlockHasher:
     def hash_file(fpath):
         BlockHasher.get_algo()
         if BlockHasher.HASHER_ALGO is HasherAlgo.CUSTOM:
-            return BlockHasher._hash_file_custom_exec(fpath)
+            res = BlockHasher._hash_file_custom_exec(fpath)
         elif not BlockHasher.FILTER_EXEC:
             with open(fpath, "rb") as infile:
                 if os.path.getsize(fpath) >= ASYNC_SIZE_THRESH:
-                    return BlockHasher.hash_open_file_async(infile)
+                    res = BlockHasher.hash_open_file_async(infile)
                 else:
-                    return BlockHasher.hash_open_file_sync(infile)
-        else: # TODO eliminate or refactor TODO
-            try:
-                procres = subprocess.run(
-                    ["/bin/sh", filter_exec, fpath],
-                    check=True, capture_output=True)
-            except subprocess.CalledProcessError as exc:
-                msg = "failed hashing %s (%s)" % (fpath, procres.output)
-                raise RuntimeError(msg) from exc
-            try:
-                res = int(procres.stdout)
-            except ValueError as exc:
-                msg = "invalid output for $(%s %s): %s" % \
-                                (filter_exec, fpath, procres.stdout)
-                raise Exception(msg) from exc
-            return uint64_to_int64(res)
+                    res = BlockHasher.hash_open_file_sync(infile)
+        return res
+#        else: # TODO eliminate or refactor TODO
+#            try:
+#                procres = subprocess.run(
+#                    ["/bin/sh", filter_exec, fpath],
+#                    check=True, capture_output=True)
+#            except subprocess.CalledProcessError as exc:
+#                msg = "failed hashing %s (%s)" % (fpath, procres.output)
+#                raise RuntimeError(msg) from exc
+#            try:
+#                res = int(procres.stdout)
+#            except ValueError as exc:
+#                msg = "invalid output for $(%s %s): %s" % \
+#                                (filter_exec, fpath, procres.stdout)
+#                raise Exception(msg) from exc
+#            return uint64_to_int64(res)
 
     @staticmethod
     def hash_open_file_async(infile):
         readerhasher = ReaderHasher(infile)
         return readerhasher.run()
-    
+
     @staticmethod
     def hash_open_file_sync(infile):
         """
@@ -190,7 +192,8 @@ class BlockHasher:
 
     @staticmethod
     def set_algo(hasher_algo, hasher_custom_exec=None):
-        assert isinstance(hasher_algo, HasherAlgo)
+        assert isinstance(hasher_algo, HasherAlgo), \
+            f"set_algo: not an algo: {hasher_algo}"
         if BlockHasher.HASHER_ALGO is not None:
             raise RuntimeError("blockhasher: inconsistent hasher choice")
         if hasher_algo == HasherAlgo.CUSTOM:
@@ -200,14 +203,15 @@ class BlockHasher:
             if hasher_custom_exec is not None:
                 raise RuntimeError("blockhasher: unexpected custom exec")
         if BlockHasher._PRESET_HASHER_ALGO is not None:
-           if BlockHasher._PRESET_HASHER_ALGO != hasher_algo:
-               pr.warning("changing hasher from %s to %s" % \
-                          (BlockHasher._PRESET_HASHER_ALGO, hasher_algo))
-           elif hasher_algo == HasherAlgo.CUSTOM \
-                   and BlockHasher._PRESET_HASHER_CUSTOM_EXEC != hasher_custom_exec:
-               # TODO: use canonical file path for exec
-               pr.warning("changing hasher exec from %s to %s" % \
-                          (BlockHasher._PRESET_HASHER_CUSTOM_EXEC, hasher_custom_exec))
+            if BlockHasher._PRESET_HASHER_ALGO != hasher_algo:
+                pr.warning("changing hasher from %s to %s" % \
+                           (BlockHasher._PRESET_HASHER_ALGO, hasher_algo))
+            elif hasher_algo == HasherAlgo.CUSTOM \
+                and BlockHasher._PRESET_HASHER_CUSTOM_EXEC != hasher_custom_exec:
+                # TODO: use canonical file path for exec
+                pr.warning(
+                    "changing hasher exec from %s to %s" % \
+                    (BlockHasher._PRESET_HASHER_CUSTOM_EXEC, hasher_custom_exec))
         BlockHasher._PRESET_HASHER_ALGO = hasher_algo
         BlockHasher._PRESET_HASHER_CUSTOM_EXEC = hasher_custom_exec
 
@@ -225,14 +229,17 @@ class BlockHasher:
         BlockHasher.HASHER_ALGO = BlockHasher._PRESET_HASHER_ALGO
         BlockHasher.HASHER_CUSTOM_EXEC = BlockHasher._PRESET_HASHER_CUSTOM_EXEC
         if BlockHasher.HASHER_ALGO == HasherAlgo.PYHASHXX:
-            import pyhashxx # Returns int32
+            try:
+                import pyhashxx # Returns int32
+            except Exception:
+                raise RuntimeError("missing pyhashxx module")
             BlockHasher.hash_data = pyhashxx.hashxx
             BlockHasher.hasher_class = pyhashxx.Hashxx
             def hasher_digest(obj):
                 return obj.digest()
             BlockHasher.hasher_digest = hasher_digest
         elif BlockHasher.HASHER_ALGO == HasherAlgo.XXHASH64:
-            import xxhash
+            import xxhash # This is a build dependency.
             def hash_data(data):
                 return uint64_to_int64(xxhash.xxh64_intdigest(data))
             BlockHasher.hash_data = hash_data
@@ -258,12 +265,13 @@ class BlockHasher:
     @staticmethod
     def _hash_file_custom_exec(abspath):
         try:
+            cmd = [BlockHasher.HASHER_CUSTOM_EXEC, abspath]
             procres = subprocess.run(
-                [BlockHasher.HASHER_CUSTOM_EXEC, abspath],
+                cmd,
                 capture_output=True, check=True)
         except subprocess.CalledProcessError as exc:
             msg = "failed hashing: %s (%s)." % (abspath, procres.stderr, )
-            raise RuntimeError(msg) from exc
+            raise HelperAppError(cmd, msg) from exc
         try:
             res = int(procres.stdout)
         except ValueError as msg:
@@ -277,8 +285,6 @@ class BlockHasher:
         if BlockHasher.HASHER_ALGO is None:
             BlockHasher._set_algo()
         return BlockHasher.HASHER_ALGO
-
-BlockHasher.set_algo(HasherAlgo.XXHASH32)
 
 ASYNC_SIZE_THRESH = 512 * 2**20 # Files larger than 512 Mib
                                 # are processed asynchronously, with threads.
@@ -308,6 +314,7 @@ class ReaderHasher(ProducerConsumerThreaded):
 
 if __name__ == "__main__":
     import sys
+    BlockHasher.set_algo(HasherAlgo.XXHASH32)
     if len(sys.argv) != 2:
         raise SystemExit("usage: blockhash <filepath> or blockhash -")
     PARAM = sys.argv[1]

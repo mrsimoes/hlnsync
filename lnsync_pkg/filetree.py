@@ -119,7 +119,8 @@ class DirItem(TreeItem):
             return None
 
     def iter_subdirs(self):
-        assert self.scanned, "cannot iterate unscanned dir"
+        assert self.scanned, \
+            "cannot iterate unscanned dir"
         for obj in self.entries.values():
             if obj.is_dir():
                 yield obj
@@ -191,7 +192,7 @@ class FileTree:
     @classmethod
     def scan_trees_async(cls, trees):
         def scanner(tree):
-            pr.info("Async scanning:", tree.printable_path())
+            pr.info("async scanning:", tree.printable_path())
             tree.scan_subtree()
         thread_executor_terminator(scanner, trees, True)
 
@@ -199,8 +200,8 @@ class FileTree:
         """
         Create a root dir object, marked unscanned.
         Arguments:
-            - topdir_path: path disk file tree (may be None if FileTree is somehow
-                virtual).
+            - topdir_path: path disk file tree (may be None if FileTree is
+                somehow virtual).
             - exclude_patterns: None or a list of glob patterns for
                 relative paths to ignore when reading from disk.
             - use_metadata: if True read metadata index files by size
@@ -241,7 +242,8 @@ class FileTree:
                 self._glob_patterns = patterns + self._glob_patterns
             else:
                 self._glob_patterns += patterns
-            assert not self.rootdir_obj.was_scanned()
+            assert not self.rootdir_obj.was_scanned(), \
+                "add_glob_patterns: cannot add patterns after scanning root"
             root_matcher = GlobMatcher(self._glob_patterns)
             self._glob_matchers = {self.rootdir_obj: root_matcher}
 
@@ -278,7 +280,8 @@ class FileTree:
         Return a list of file objects or, if size is None, the internal
         size->files dict. Trigger a full-tree scan, if needed.
         """
-        assert self._use_metadata, "size_to_files without metadata."
+        assert self._use_metadata, \
+            "size_to_files without metadata."
         if not self._size_to_files_ready:
             self.scan_subtree()
         if size is None:
@@ -293,7 +296,8 @@ class FileTree:
         Return total number of files, after scanning the full tree.
         """
         self.scan_subtree()
-        return sum(len(szfiles) for (sz, szfiles) in self._size_to_files.items())
+        return sum(len(szfiles) \
+                for (sz, szfiles) in self._size_to_files.items())
 
     def get_all_file_ids(self):
         """
@@ -367,15 +371,17 @@ class FileTree:
         file_obj = self._file_type(obj_id, metadata)
         return file_obj
 
-    def scan_dir(self, dir_obj):
+    def scan_dir(self, dir_obj, clear_on_exit=True):
         """
         Scan a directory from disk, if it hasn't been scanned before.
         """
-        assert isinstance(dir_obj, DirItem) #is not None, "scan_dir: no dir_obj"
+        assert isinstance(dir_obj, DirItem), \
+            "scan_dir: not a DirItem"
         if dir_obj.was_scanned():
             return
         with pr.ProgressPrefix(
-                "scanning:" + self.printable_path(dir_obj.get_relpath())
+                "scanning:" + self.printable_path(dir_obj.get_relpath()),
+                clear_on_exit=clear_on_exit,
             ):
             dir_glob_matcher = self._glob_matchers.get(dir_obj)
                 # dir_glob_matcher is None or an entry.
@@ -427,19 +433,21 @@ class FileTree:
             if subdir_glob_matcher:
                 self._glob_matchers[subdir_obj] = subdir_glob_matcher
 
-    def scan_subtree(self, start_dir=None):
+    def scan_subtree(self, start_dir=None, clear_on_exit=True):
         """
         Recursively scan subtree rooted at start_dir.
         """
         if start_dir is None:
             start_dir = self.rootdir_obj
-        self.scan_dir(start_dir)
+        self.scan_dir(start_dir, clear_on_exit=False)
         for obj in start_dir.entries.values():
             if obj.is_dir() and not obj.was_scanned():
-                self.scan_dir(obj)
-                self.scan_subtree(obj)
+                self.scan_dir(obj, clear_on_exit=False)
+                self.scan_subtree(obj, clear_on_exit=False)
         if start_dir == self.rootdir_obj:
             self._size_to_files_ready = True
+        if clear_on_exit:
+            pr.progress("")
 
     def _gen_dir_entries_from_source(self, dir_obj, glob_matcher=None):
         """
@@ -528,7 +536,8 @@ class FileTree:
         """
         dir_obj.rm_entry(fbasename)
         relpath = os.path.join(dir_obj.get_relpath(), fbasename)
-        assert relpath in file_obj.relpaths, "_rm_path: non-existing relpath."
+        assert relpath in file_obj.relpaths, \
+            "_rm_path: non-existing relpath."
         file_obj.relpaths.remove(relpath)
         if file_obj.relpaths == []:
             fid = file_obj.file_id
@@ -553,7 +562,8 @@ class FileTree:
         Return file or dir or other object by relpath from root, or None.
         Do not follow symlinks.
         """
-        assert self.rootdir_obj is not None, "path_to_obj: no rootdir_obj."
+        assert self.rootdir_obj is not None, \
+            "path_to_obj: no rootdir_obj."
         curdir_obj = self.rootdir_obj
         components = relpath.split(os.sep)
         while components and curdir_obj:
@@ -576,9 +586,11 @@ class FileTree:
         at a directory given by relative path, which is scanned if needed.
         Skip 'other' entries.
         """
-        assert self.rootdir_obj is not None, "walk_dir_contents: no rootdir_obj"
+        assert self.rootdir_obj is not None, \
+            "walk_dir_contents: no rootdir_obj"
         subdir = self.path_to_obj(subdir_path)
-        assert subdir is not None and subdir.is_dir()
+        assert subdir is not None and subdir.is_dir(), \
+            f"walk_dir_contents: not a dir: {subdir}"
         self.scan_dir(subdir)
         for basename, obj in subdir.entries.items():
             if obj.is_file() or (dirs and obj.is_dir()):
@@ -595,7 +607,8 @@ class FileTree:
          - recurse: walk the full tree, else just subdir immediate contents.
          - topdown: If False, bottom-up.
         """
-        assert self.rootdir_obj is not None, "walk_paths: no rootdir_obj."
+        assert self.rootdir_obj is not None, \
+            "walk_paths: no rootdir_obj."
         if startdir_path is None:
             startdir_path = ""
         startdir_obj = self.path_to_obj(startdir_path)
@@ -628,8 +641,8 @@ class FileTree:
         def walk_bottomup():
             stack = [[None], [startdir_obj]]
             while stack:
-                    # At all times:
-                    # stack[-2:]=dirs, stack[-1]=unprocessed children of dirs[-1].
+                  # At all times:
+                  # stack[-2:]=dirs, stack[-1]=unprocessed children of dirs[-1].
                 prevdir_children = stack[-1]
                 if prevdir_children:
                     nextdir = prevdir_children[-1]
@@ -667,8 +680,10 @@ class FileTree:
         tr_obj = self._create_dir_if_needed_writeback(os.path.dirname(relpath))
         self._add_path(file_obj, tr_obj, os.path.basename(relpath))
         if self.writeback:
-            assert file_obj is not None, "add_path_writeback: no file_obj."
-            assert file_obj.relpaths, "add_path_writeback: no path exists."
+            assert file_obj is not None, \
+                "add_path_writeback: no file_obj."
+            assert file_obj.relpaths, \
+                "add_path_writeback: no path exists."
             os.link(self.rel_to_abs(file_obj.relpaths[0]),
                     self.rel_to_abs(relpath))
 
@@ -701,13 +716,14 @@ class FileTree:
         """
         Execute a rmdir, write back to source tree if self.writeback is set.
         dir_obj cannot be the root directory.
-        If self.writeback, an OSError may be thrown if the dir cannot be removed.
+        If self.writeback, OSError may be thrown if the dir cannot be removed.
         If the dir_obj is non-empty, also throw OSError.
         """
-        assert dir_obj.parent, "trying to remove rootdir,"
+        assert dir_obj.parent, \
+            "trying to remove rootdir,"
+        relpath = dir_obj.get_relpath()
         if dir_obj.entries:
             raise OSError("trying to remove non-empty dir: %s" % (relpath,))
-        relpath = dir_obj.get_relpath()
         if self.writeback:
             os.rmdir(self.rel_to_abs(relpath))
         basename = os.path.basename(relpath)
@@ -749,10 +765,12 @@ class FileTree:
         else:
             obj_to = None
         if ctype == "mv":
-            assert obj_to is None, "exec_cmd: no obj_to."
+            assert obj_to is None, \
+                "exec_cmd: no obj_to."
             self.mv_path_writeback(obj_from, fn_from, fn_to)
         elif ctype == "ln":
-            assert obj_to is None, "exec_cmd: no obj_to."
+            assert obj_to is None, \
+                "exec_cmd: no obj_to."
             self.add_path_writeback(obj_from, fn_to,)
         elif ctype == "rm":
             self.rm_path_writeback(obj_from, fn_from)
@@ -767,7 +785,8 @@ class FileTree:
         """
         Revert a command (cmd, arg1, arg2).
         """
-        assert len(cmd) == 3, "exec_cmd_reverse: bad cmd: %s" % (cmd,)
+        assert len(cmd) == 3, \
+            "exec_cmd_reverse: bad cmd: %s" % (cmd,)
         ctype, fn_from, fn_to = cmd
         if ctype == "mv":
             self.exec_cmd(("mv", fn_to, fn_from))

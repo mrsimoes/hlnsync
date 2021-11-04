@@ -194,7 +194,8 @@ class GlobMatcher:
         """
         if patterns is None:
             patterns = []
-        assert isinstance(patterns, list)
+        assert isinstance(patterns, list), \
+            f"GlobMatcher.__init__: not a list: {patterns}"
         self._patterns = patterns
 
     def all_patterns_iter(self):

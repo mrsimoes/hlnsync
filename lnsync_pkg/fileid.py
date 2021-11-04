@@ -41,29 +41,20 @@ def get_fs_type(path):
     """
     Return file_system for a path.
     """
-    sep = os.sep
     path = os.path.realpath(path)
-    partition = {}
+    mntpoint_to_fstype = {}
     for part in disk_partitions():
-        partition[part.mountpoint] = part.fstype
-    if path in partition:
-        return partition[path]
-    splitpath = path.split(sep)
-    for i in range(len(splitpath), 0, -1):
-        path = sep.join(splitpath[:i]) + sep
-        if path in partition:
-            return partition[path]
-        path = sep.join(splitpath[:i])
-        if path in partition:
-            return partition[path]
-    return None
+        mntpoint_to_fstype[part.mountpoint] = part.fstype
+    while True:
+        if path in mntpoint_to_fstype:
+            return mntpoint_to_fstype[path]
+        if path == os.sep:
+            return None
+        path = os.path.dirname(path)
 
-SYSTEMS_W_INODE = \
-    ('ext2', 'ext3', 'ext4', 'ecryptfs', 
-     'btrfs', 'ntfs', 'fuse.encfs', 'fuseblk')
-SYSTEMS_W_INODE = SYSTEMS_W_INODE + \
-                  tuple(s.swapcase() for s in SYSTEMS_W_INODE)
-
+SYSTEMS_W_INODE = ('ext2', 'ext3', 'ext4', 'ecryptfs',
+                   'btrfs', 'ntfs', 'fuse.encfs', 'fuseblk')
+SYSTEMS_W_INODE += tuple(s.swapcase() for s in SYSTEMS_W_INODE)
 SYSTEMS_WO_INODE = ('vfat', 'fat', 'FAT')
 
 def make_id_computer(topdir_path):

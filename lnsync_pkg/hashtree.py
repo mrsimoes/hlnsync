@@ -24,8 +24,9 @@ import abc
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.miscutils import uint64_to_int64
 from lnsync_pkg.blockhash import BlockHasher
-from lnsync_pkg.modaltype import onofftype, OFFLINE, ONLINE
-from lnsync_pkg.propdbmanager import PropDBManager, PropDBException, PropDBError, PropDBNoValue
+from lnsync_pkg.modaltype import onofftype, Mode
+from lnsync_pkg.propdbmanager import PropDBManager, PropDBException, \
+    PropDBError, PropDBNoValue
 from lnsync_pkg.proptree import FilePropTree, TreeError, FileItemProp
 from lnsync_pkg.sqlpropdb import SQLPropDBManager
 
@@ -38,8 +39,8 @@ class FileHashTree(FilePropTree, metaclass=onofftype):
                 **dbkwargs to return a database manager object.
                 (This delays connecting to the db as much as possible.)
             - dbkwargs, args to be fed to the previous factory.
-            - topdir_path: path disk file tree (may be None if FileTree is somehow
-                virtual).
+            - topdir_path: path disk file tree (may be None if FileTree is
+                somehow virtual).
             - exclude_pattern: None or a list of glob patterns of
                 relative paths to ignore when reading from disk.
             - use_metadata: if True read metadata index files by size
@@ -58,12 +59,13 @@ class FileHashTree(FilePropTree, metaclass=onofftype):
 
     def set_dbmanager(self, db):
         super(FileHashTree, self).set_dbmanager(db)
-        if db.mode == OFFLINE or not self._size_as_hash:
+        if db.mode == Mode.OFFLINE or not self._size_as_hash:
             self._print_progress = \
                 "%s [%s]" % (self.db.dbpath, db.mode)
 
     def __enter__(self):
-        assert self.db
+        assert self.db, \
+            "__enter__: missing db"
         if self._print_progress is not None:
             pr.info("opening %s" % (self._print_progress,))
         return super(FileHashTree, self).__enter__()
@@ -89,7 +91,7 @@ class NoSizeFileItem(FileItemProp):
         super().__init__(file_id, metadata)
         self.file_metadata.size = 1
 
-class FileHashTreeOnline(FileHashTree, mode=ONLINE):
+class FileHashTreeOnline(FileHashTree, mode=Mode.ONLINE):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if not BlockHasher.is_full_content_hasher():

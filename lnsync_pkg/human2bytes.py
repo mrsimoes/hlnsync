@@ -28,8 +28,8 @@ SYMBOLS = {
 }
 
 MAXVALUE = {}
-for sset in SYMBOLS.keys():
-    MAXVALUE[sset] = 1 << 10 * (len(SYMBOLS[sset]) - 1)
+for _sset in SYMBOLS:
+    MAXVALUE[_sset] = 1 << 10 * (len(SYMBOLS[_sset]) - 1)
 
 def bytes2human(value, format='%(value).1f%(symbol)s', symbols='customary',
                 singular_format='%(value).0f%(symbol)s'):
@@ -80,7 +80,8 @@ def bytes2human(value, format='%(value).1f%(symbol)s', symbols='customary',
             value = float(value) / threshold
             return format % {'symbol': symbol, 'value':value}
         threshold >>= 10
-    return singular_format % {'symbol':symbols[0], 'value':value} # Faster than dict.
+    # Faster than dict.
+    return singular_format % {'symbol': symbols[0], 'value': value}
 
 def human2bytes(s):
     """

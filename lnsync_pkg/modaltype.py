@@ -49,10 +49,10 @@ A metaclass modaltype is provided. Then define
     class A_modal(A, mode=modename): # The name is unimportant.
         <body of A_modename>
 
-The common class A is called a "mode None" class, while the second is a
+The common class A is called a "mode NONE" class, while the second is a
 declensed class. These are all modal classes.
 
-To create a declensed class, the mode None class must be explicitly created.
+To create a declensed class, the mode NONE class must be explicitly created.
 
 To create a modal class derived from another modal class:
     class B(A):
@@ -85,7 +85,7 @@ modaltype.__new__ is invoked when the class statement is evaluated:
 modaltype.__call__ is invoked when modal class instances are created e.g.
     x = mymodalcls(args, ..., mode=mode1)
 
-The following informatin is kept:
+The following information is kept:
 
 If a mode None class A is declared as derived from B and Amode1 is a declension
 of A, then
@@ -96,11 +96,11 @@ of A, then
     - Amode1._modal_super == B
 - If B is a non-modal class, then
     - A.__bases__ == (modalobject, B)
-    - A._modal_super == None
+    - A._modal_super == NONE
     - Amode1.__bases__ == (A,)
-    - Amode1._modal_super == None
+    - Amode1._modal_super == NONE
 
-Each mode None class has an attribute
+Each mode NONE class has an attribute
     - _modal_declensions, a dict from mode string to the corresponding
     declensed modal class.
 
@@ -114,8 +114,16 @@ reimplementation of the C3 MRO.)
 registered globally at modaltype.
 """
 
+from enum import Enum
+
 # pylint: disable=bad-mcs-method-argument, protected-access
 # pylint: disable=bad-mcs-classmethod-argument, invalid-name
+
+class Mode(Enum):
+    NONE = 0
+    ONLINE = 1
+    OFFLINE = 2
+# TODO: Customize modes.
 
 class modaltype(type):
     """
@@ -131,48 +139,53 @@ class modaltype(type):
         if mode in none_class._modal_declensions:
             modal_cls = none_class._modal_declensions[mode]
         else:
-            new_cls_name = none_class.__name__ + "_" + mode
+            new_cls_name = none_class.__name__ + "_" + mode.name
             # Call the correct metaclass to create a dummy modal class.
             modal_cls = \
                 none_class.__class__(new_cls_name, (none_class,), {}, mode=mode)
         return modal_cls
 
-    def __call__(given_cls, *args, mode=False, **kwargs):
+    def __call__(given_cls, *args, mode=None, **kwargs):
         """
         Create an instance of given_cls with given mode.
 
         Called when creating an instance of a class of type modaltype.
-        If given_cls is a mode None class, select the required declension class,
+        If given_cls is a mode NONE class, select the required declension class,
         if one exists, or create one if needed.
         """
-        if given_cls.mode is None: # We are given a mode None class
-            if mode in (False, None):
+        if given_cls.mode is Mode.NONE: # We are given a mode None class
+            if mode in (None, Mode.NONE):
                 modal_cls = given_cls
             else:
-                assert isinstance(mode, str), "invalid mode: %s" % (mode,)
+                assert isinstance(mode, Mode), \
+                    f"__call__: invalid mode: {mode}"
                 modal_cls = modaltype._get_declension(given_cls, mode)
         else:
-            assert mode is False or given_cls.mode == mode, "mismatched modes"
+            assert mode is None or given_cls.mode == mode, \
+                "mismatched modes"
             modal_cls = given_cls
         # At this point, modal_cls has the mode attribute correctly set.
         res = type.__call__(modal_cls, *args, **kwargs) # Create and init.
         return res
 
-    def __new__(mcs, name, bases, attrs, *_args, mode=None, **_kwargs):
+    def __new__(mcs, name, bases, attrs, *_args, mode=Mode.NONE, **_kwargs):
         """
         Create a new modal type.
          -bases is either empty or a single class.
-        If mode is None, create a mode None class derived from the given base,
+        If mode is NONE, create a mode NONE class derived from the given base,
         which must be either mode none or non-modal. Otherwise, create a
         declension of the given mode none base.
         """
+        assert isinstance(mode, Mode), \
+            f"__new__: not a mode: {mode}"
         if len(bases) > 1:
             raise TypeError("modal: multiple inheritance not supported")
-        if mode is None:
-            # Create a new mode None class.
+        if mode is Mode.NONE:
+            # Create a new mode NONE class.
             if bases and isinstance(bases[0], modaltype): # From a modal class.
                 modal_super = bases[0]
-                assert modal_super.mode is None
+                assert modal_super.mode is Mode.NONE, \
+                    "modal_super must be mode NONE"
                 modal_bases = (modal_super,)
             else:                           # Derived from a non-modal class.
                 modal_super = None
@@ -182,16 +195,18 @@ class modaltype(type):
                 else:
                     modal_bases = ()
             none_cls = super().__new__(mcs, name, modal_bases, attrs)
-            none_cls.mode = None
+            none_cls.mode = Mode.NONE
             none_cls._modal_super = modal_super
             none_cls._modal_declensions = {}
             result = none_cls
         else:
             # Create a declensed modal class from none_cls + mode.
-            assert len(bases) == 1, "exactly one base needed to declense"
+            assert len(bases) == 1, \
+                "exactly one base needed to declense"
             base_declared = bases[0]
             assert isinstance(base_declared, modaltype)\
-                        and base_declared.mode is None
+                        and base_declared.mode is mode.NONE, \
+                        "base must be modaltype and with mode NONE"
             assert not mode in base_declared._modal_declensions, \
                         "declension already defined"
             modal_super = base_declared._modal_super
@@ -208,12 +223,8 @@ class modaltype(type):
             result = modal_cls
         return result
 
-ONLINE = "online"
-OFFLINE = "offline"
-MODES = (None, ONLINE, OFFLINE)
-
 class onofftype(modaltype):
-    known_modes = MODES
-    def __new__(mcls, *args, mode=None, **kwargs):
-        assert mode in MODES
+    def __new__(mcls, *args, mode=Mode.NONE, **kwargs):
+        assert isinstance(mode, Mode), \
+            f"onofftype.__new__: not a mode: {mode}"
         return super().__new__(mcls, *args, mode=mode, **kwargs)

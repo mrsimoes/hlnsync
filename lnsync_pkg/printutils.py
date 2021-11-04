@@ -29,7 +29,8 @@ A context may be setup during which a prefix is prepended to progress messages.
 These contexts may be nested.
 A prefix may be set for each non-progress message.
 
-If the content to be printed contains escaped Unicode surrogate pairs, decode them.
+If the content to be printed contains escaped Unicode surrogate pairs, decode
+them.
 """
 
 # pylint: disable=global-statement, redefined-builtin, broad-except
@@ -73,8 +74,9 @@ class ProgressPrefix:
     """
     Set up a context during which a prefix is prepended to progress output.
     """
-    def __init__(self, prefix):
+    def __init__(self, prefix, clear_on_exit=True):
         self.we = threading.get_ident()
+        self._clear_on_exit = clear_on_exit
         we = self.we
         with PRINT_LOCK:
             _thread_prog_prefix_stack[we].append(prefix)
@@ -88,6 +90,8 @@ class ProgressPrefix:
         with PRINT_LOCK:
             _thread_prog_prefix_stack[we].pop()
             _thread_prog_prefix[we] = "".join(_thread_prog_prefix_stack[we])
+        if self._clear_on_exit:
+            progress("")
         return False # We never handle exceptions.
 
 def progress(*args):
@@ -101,7 +105,7 @@ def progress(*args):
     with PRINT_LOCK:
         we = threading.get_ident()
         _progress_prefix = _thread_prog_prefix[we]
-        line = _progress_prefix + "".join(args)
+        line = _progress_prefix + "".join(map(str, args))
         line = line.replace("\n", "")
         _print('\033[?7l', end="") # Wrap off.
         try:
@@ -129,8 +133,9 @@ def _print_main(*args, **kwargs):
     global _progress_was_printed
     file = kwargs.pop("file", sys.stdout)
     end = kwargs.pop("end", "\n")
-    assert not kwargs
-    assert file in (sys.stdout, sys.stderr)
+    assert not kwargs, "print: extraneous keywords"
+    assert file in (sys.stdout, sys.stderr), \
+        "print: file must be stdin or stdout"
     if file == sys.stdout:
         is_tty = _stdout_is_tty
     else:
@@ -208,7 +213,7 @@ def _exit_func():
     with PRINT_LOCK:
         if _stdout_is_tty:
             _print("\033[0J", end="") # Clear line.
-        try:     # Prevent "broken pipe" errors if outputs are closed before atexit.
+        try: # Prevent "broken pipe" errors if outputs are closed before atexit.
             sys.stdout.flush()
             sys.stdout.close()
         except Exception:

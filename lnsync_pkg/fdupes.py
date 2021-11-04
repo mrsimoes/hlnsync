@@ -27,7 +27,8 @@ def _get_prop(tree, fobj):
     """
     Return prop if possible, or None otherwise.
     """
-    assert isinstance(fobj, FileItem)
+    assert isinstance(fobj, FileItem), \
+        "getprop: not a FileItem"
     try:
         prop = tree.get_prop(fobj)
     except TreeError as exc:
@@ -41,8 +42,8 @@ def sizes_repeated(all_trees, hard_links):
     """
     Yield all file sizes for which more than two or more files of that
     size exist somewhere across all dbs.
-    If hard_links is False, consider different paths to the same file as distinct
-    for this purpose.
+    If hard_links is False, consider different paths to the same file as
+    distinct for this purpose.
     """
     sizes_seen_once, sizes_seen_twice = set(), set()
     for tree in all_trees:
@@ -200,7 +201,8 @@ def located_files_onfirstonly_of_size(all_trees, file_sz):
     """
     if len(all_trees) >= 1:
         first_tree = all_trees[0]
-        assert first_tree.size_to_files(file_sz)
+        assert first_tree.size_to_files(file_sz), \
+            "located_files_onfirstonly_of_size: expected files"
         # If there is a single file of that size in the first tree,
         # no need to compute the property value.
         unique_file = (len(first_tree.size_to_files(file_sz)) == 1)
@@ -214,4 +216,5 @@ def located_files_onfirstonly_of_size(all_trees, file_sz):
         else:
             for prop in _props_onfirstonly_of_size(all_trees, file_sz):
                 yield prop, \
-                      _located_files_by_prop_of_size(all_trees[0:1], prop, file_sz)
+                      _located_files_by_prop_of_size(
+                          all_trees[0:1], prop, file_sz)

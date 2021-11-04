@@ -1,40 +1,48 @@
 ## Overview
 
-_lnsync_ provides sync-by-content of local file trees (including hard link syncing), plus other search and compare features.
+_lnsync_ provides sync-by-content of local directories (including hard link syncing), plus other related features.
 
 ###  Features
 
-The main feature is partial, one-way sync of local directories by renaming, linking and delinking only, without copying or deleting file content data.
+The main feature is (partial) one-way sync of local directories by only renaming, and linking/delinking on the target directory, without copying or deleting any file content data from source.
 
-This alows quick target replication of arbitrary source renaming/linking/delinking (but not deleting), and may be used as a preprocessing step for full a sync tool such as _rsync_.
+This alows quick replication onto the target of arbitrary source renaming/linking/delinking (but not deleting or creating files), and may be used as a preprocessing step for a full sync tool (such as rsync).
 
-Other operations include finding duplicate files, checking for file content changes, and listing all hard links to a file.
+Other features include finding duplicate files, checking for file content changes, and listing all hard links to a file.
 
-Files may be included or excluded using glob pattersn, much like rsync.
+As with rsync, files may be included or excluded using glob patterns.
 
-Configuration is possible via very flexible config files.
+### File Trees: Online and Offline
 
-### Offline Trees
+The file structure under a directory (or _online tree_) can be saved to a combined hash/metadata one-file database, comprising: the directory structure, file and dir names, file sizes, and mod dates. These _offline trees_  may be used in most _lnsync_ commands in place of a local directory, e.g. as the source to reorganize a target directory according to a certain pattern.
 
-There is also an option to save the file structure (not file contents, and not all attributes) under a directory in a combined hash/metadata database. These _offline trees_ can be used in most _lnsync_ commands in place of a local directory, e.g. as the source in a sync command, to reorganize a target tree according to a certain source pattern.
+Via a config file, specfic options may be applied to online trees matching a glob pattern.
 
-### Hashes
+### File Hashes
 
-Files are identified by their content hash, using xxHash (a fast, non-cryptographic hash function). Both 32-bit and 64-bit hashes xxHash functions are available, with 32-bit as default. Custom hashing functions are supported.
+Files are identified by their content hash, using either 32-bit or 64-bit xxHash (a fast, non-cryptographic hash function), or other functions (see Hashing Functions below).
 
-To avoid recomputation, hash values are stored in local databases, one single file per tree, by default matching `lnsync-[0-9]+.db`. Only one such file should exist at each location. (A different naming pattern or an altogether different file location may be specified.)
+Hash values are stored in local databases, on a single file per tree, by default with a name matching `lnsync-[0-9]+.db`. Only one such file should exist at each location. At the time of creation, the numeric part is chosen randomly, to avoid overwritting by accident when doing a full sync. Files matching `lnsync-[0-9]+.db` as well as the hash database in use are ignored by _lnsync_ operations.
 
 File modification times are used to detect stale hash values. Modification times are not synced to the target.
 
-Hash databases are ignored by _lnsync_ operations. Care should be taken not to overwrite them when syncing with other tools.
+### Hashing Functions
+
+Invoking `lnsync32` or `lnsync64` selects the 32-bit and the 64-bit version of the xxHash, respectively, while keeping `lnsync-[0-9]+.db` as the file hash database location. Otherwise the two commands work the same. `lnsync` is equivalent to `lnsync32`.
+
+The switches `--xxhash=XXHASH32` and `--xhash=XXHASH64` select the hashing function, but also change the file hash database location to `lnsync-xxhash32-[0-9]+.db` or `lnsync-xxhash64-[0-9]+.db`, respectively.
+
+Custom hashing functions are supported. To set a custom hasher: `--hasher=<EXECUTABLE>`, where <EXECUTABLE> is a path to an executable that takes as single argument a file path and prints out (in decimal) a 64-bit unsigned integer hash value. The file hash location is set to `lnsync-custom-[0-9]+.db`.
+
+Finally, the `lnsync-nopreset` requires the hashing function must be explicitly selected using one of the preceding switches.
 
 ## Files, File Paths, and Hard Links
 
-On most file systems, the same _file_ may be reached by multiple _file paths_, also called aliases, or _hard links_. If there is a single hard link to a file, removing it deletes the file.
+On most current file systems, the same _file_ may be reached via multiple _file paths_, also called _aliases_, or _hard links_. If there is a single hard link to a file, removing that link deletes the file.
 
-Operations are on files, not file paths. E.g., if a file has two hard links, then by itself it does not count as a duplicate.
+`lnsync` oprerates on files, not file paths. E.g., if a file has two hard links, it does not count as a duplicate.
 
-### Files Handled
+### Ignored File System Objects
 
 Files which cannot be read are skipped. File ownership and permissions are otherwise ignored.
 
@@ -42,7 +50,7 @@ Symbolic links and any other file system objects are ignored.
 
 ### Directories
 
-When syncing, directories are created as needed on the target, and also empty target directories not on the source are removed.
+When syncing, directories are created as needed on the target, and target directories left empty and not on the source are removed.
 
 ## Installing
 
@@ -90,9 +98,7 @@ For example, to sync the subdir `/home/you/Photos/Best` to another target, using
 
 ## Custom Hash Functions
 
-A custom hasher is any executable that takes a single argument and outputs an hash value as a 64-bit unsigned integer (in decimal). To set a custom hasher: `--hasher=<EXECUTABLE>`. It may be advisable to also change the database prefix or location.
-
-As an example, if `hashmp3.sh` computes the hash of only the sound content of an mp3 (and not any included metadata), then the following `lnsync-mp3.cfg` config file may be used to find duplicate mp3 content:
+As an example of a custom hashing function, if `hashmp3.sh` computes the hash of only the sound content of an mp3 (and not any included metadata), then the following `lnsync-mp3.cfg` config file may be used to find duplicate mp3 content:
 
 ```
 [DEFAULT]
@@ -220,6 +226,7 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 
 ### Release Notes
 
+- v0.7.5: New lnsync64 and lnsync32 entry points. Non-zero return value to indicate failed searches. Small improvements and bug fixes.
 - v0.7.4: New `--dbrootmount` option.
 - v0.7.3: Ignore all files matching `lnsync-*.db`. Bug fixes, notably on handling 64-bit xxhash values.
 - v0.7.2: Support for 64-bit hashing functions. Option `--dbdir` renamed to `--dbrootdir`. Internal changes: use xxhash over pyhashxx, refactoring, bug fixes.

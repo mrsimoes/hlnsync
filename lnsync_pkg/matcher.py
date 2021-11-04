@@ -26,6 +26,7 @@ from lnsync_pkg.human2bytes import bytes2human
 from lnsync_pkg.miscutils import is_subdir
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.onegraph import OneGraph
+from lnsync_pkg.proptree import Mode
 from lnsync_pkg.backtracker import SearchState, do_search
 
 SrcTgt = namedtuple("SrcTgt", ["src", "tgt"])
@@ -39,9 +40,10 @@ class TreePairMatcher:
     ValueError is raised.
     """
     def __init__(self, src_tree, tgt_tree):
-        assert tgt_tree.db.mode == "online", "TreePairMatcher: not online db."
+        assert tgt_tree.db.mode == Mode.ONLINE, \
+            "TreePairMatcher: not online db."
         # Do not match a tree against a subtree.
-        if src_tree.db.mode == "online" and \
+        if src_tree.db.mode == Mode.ONLINE and \
             (is_subdir(src_tree.topdir_path, tgt_tree.topdir_path) \
              or is_subdir(tgt_tree.topdir_path, src_tree.topdir_path)):
             raise ValueError("Source tree cannot be a subdirectory of target.")
@@ -72,7 +74,8 @@ class TreePairMatcher:
             ("ln", existing_path, new_path),
             ("rm", path_to_rm  alt_file_path)
         """
-        assert self._have_match, "generate_sync_cmds: not matched yet"
+        assert self._have_match, \
+            "generate_sync_cmds: not matched yet"
         # Execute ln commands first, before mv and rm.
         self._rm_in_advance = set()
         return itertools.chain(
@@ -374,7 +377,8 @@ class State(SearchState):
         pr.trace("down: %s", delta)
         if delta.next_szhash:
             pr.trace("new sz-hash: %s", delta.next_szhash)
-            assert self.szhash_stack[-1] == delta.next_szhash
+            assert self.szhash_stack[-1] == delta.next_szhash, \
+                "down_delta: mismatched hashes"
             self.szhash_cur = self.szhash_stack.pop()
             self.cur_srctgt_ids = \
                 copy.deepcopy(self.szhash_to_ids[delta.next_szhash])
@@ -467,10 +471,12 @@ class State(SearchState):
         src_only_paths = [p for p in src_paths if p not in common_paths]
         tgt_only_paths = [p for p in tgt_paths if p not in common_paths]
         if not src_only_paths:
-            assert common_paths, "_gen_pathops: no common paths"
+            assert common_paths, \
+                "_gen_pathops: no common paths"
             yield PathOp.make_unln(*tgt_only_paths)
         elif not tgt_only_paths:
-            assert common_paths, "_gen_pathops: no common paths"
+            assert common_paths, \
+                "_gen_pathops: no common paths"
             yield PathOp.make_ln(some_tgt_path, src_paths)
         elif len(tgt_only_paths) == len(src_only_paths):
             # Just mv paths.

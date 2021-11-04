@@ -71,7 +71,8 @@ class OneGraph:
         """
         Add to self all arrows in other_one_g.
         """
-        assert self is not other_one_g
+        assert self is not other_one_g, \
+            "OneGraph.add_graph: adding to itself"
         for node_a, node_b in other_one_g.iter_arrows():
             self.add_arrow(node_a, node_b)
 
@@ -89,7 +90,8 @@ class OneGraph:
         """
         Remove from self all arrows in other_one_g.
         """
-        assert self is not other_one_g
+        assert self is not other_one_g, \
+            "OneGraph.remove_graph: removing from itself"
         for node_a, node_b in other_one_g.iter_arrows():
             self.remove_arrow(node_a, node_b)
 

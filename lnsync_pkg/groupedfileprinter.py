@@ -109,4 +109,4 @@ class GroupedFileListPrinter:
                     include = False
                 if include:
                     pr_path = tree.printable_path(relpath)
-                    pr.print(prefix, pr_path, end="\n")
+                    pr.print(prefix + pr_path, end="\n")

@@ -22,51 +22,86 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 # pylint: disable=import-outside-toplevel, multiple-imports, invalid-name
 # pylint: disable=method-hidden, redefined-builtin, broad-except
 
+import abc
 import sys
 import os
 import argparse
 from sqlite3 import Error as SQLError
 
-import lnsync_pkg.printutils as pr
 import lnsync_pkg.metadata as metadata
-
-from lnsync_pkg.argparse_config import \
-    ConfigError, NoSectionError, NoOptionError, NoConfigFileFound, \
-    ArgumentParserConfig as ArgumentParser
-from lnsync_pkg.modaltype import OFFLINE
-from lnsync_pkg.human2bytes import human2bytes
-from lnsync_pkg.hashtree import FileHashTree, TreeError, PropDBError
+import lnsync_pkg.printutils as pr
+from lnsync_pkg.miscutils import set_exception_hook, \
+    HelperAppError, StoreBoolAction
 from lnsync_pkg.glob_matcher import Pattern, IncludePattern, ExcludePattern
+from lnsync_pkg.human2bytes import human2bytes
+from lnsync_pkg.modaltype import Mode
+from lnsync_pkg.blockhash import BlockHasher, HasherAlgo, HasherFunction
+from lnsync_pkg.argparse_config import \
+    ConfigError, NoSectionError, NoOptionError, NoValidConfigFile, \
+    ArgumentParserConfig
+from lnsync_pkg.hashtree import FileHashTree, TreeError, PropDBError
 from lnsync_pkg.lnsync_treeargs import TreeLocation, TreeLocationOnline, \
-    TreeLocationAction, TreeOptionAction, ConfigTreeOptionAction, \
-    DEFAULT_DBPREFIX
-from lnsync_pkg.blockhash import BlockHasher, HasherAlgo
+    TreeLocationAction, TreeOptionAction, ConfigTreeOptionAction, Scope
+from lnsync_pkg.prefixdbname import \
+    get_default_dbprefix, adjust_default_dbprefix
 import lnsync_pkg.lnsync_cmd_handlers as lnsync_cmd_handlers
-from lnsync_pkg.miscutils import wrap_text, set_exception_hook
 
 ####################
 # Global variables and settings.
 ####################
-
-HELP_SPACING = 30
 
 if False: # Set sys.excepthook handler to help debugging.
     set_exception_hook()
 
 # NB: A new version of argparse reformats the description string to fit the
 # terminal width, undoing any formatting here.
-DESCRIPTION = wrap_text(
-    "lnsync %s (python %d.%d).\n%s\n"
-    "Home: http://github.com/mrsimoes/lnsync "
-    "Copyright (C) 2018 Miguel Simoes. "
-    "This program comes with ABSOLUTELY NO WARRANTY. This is free software, "
-    "and you are welcome to redistribute it under certain conditions. "
-    "See the GNU General\n Public Licence v3 for details.\n" \
-    % (metadata.version,
-       sys.version_info[0], sys.version_info[1],
-       metadata.description,),
-    80
-    )
+
+class FormatLateDescription(argparse.HelpFormatter):
+    """
+    Custom formatter_class that allows description to be set at display time.
+    """
+    description = \
+        "Home: http://github.com/mrsimoes/lnsync " \
+        "Copyright (C) 2018 Miguel Simoes. " \
+        "This program comes with ABSOLUTELY NO WARRANTY. " \
+        "This is free software, and you are welcome to redistribute it " \
+        "under certain conditions. " \
+        "See the GNU General Public Licence v3 for details."
+    _description_prefix = ""
+    _help_spacing = 30
+    def __init__(self, *args, **kwargs):
+        super().__init__(
+            *args,
+            max_help_position=self._help_spacing,
+            **kwargs)
+    @classmethod
+    def update_description(cls, entry_point, hasher_name):
+        """
+        Include the entry point name and the default hasher
+        """
+        cls._description_prefix = \
+            "{entry} {version} on python {pyver_maj}.{pyver_min}," \
+            " with {hasher} as default hasher.\n{meta_desc}\n".format(
+                entry=os.path.basename(entry_point),
+                meta_desc=metadata.description,
+                version=metadata.version,
+                pyver_maj=sys.version_info[0],
+                pyver_min=sys.version_info[1],
+                hasher=hasher_name)
+         # Older argparse versions may wrap the description.
+    def format_help(self, *args, **kwargs):
+        static_help_text = super().format_help(*args, **kwargs)
+        return self._description_prefix + static_help_text
+
+# This must be set before creating parser instances that might
+# want to read from the config files.
+try:
+    ArgumentParserConfig.set_default_config_files(
+        "./lnsync.cfg",
+        os.path.expanduser("~/lnsync.cfg"),
+        os.path.expanduser("~/.lnsync.cfg"))
+except NoValidConfigFile:
+    pass
 
 ####################
 # Argument parsing
@@ -82,7 +117,7 @@ def relative_path(value):
         raise argparse.ArgumentTypeError("not a relative path: %s." % value)
     return value
 
-# Verbosity control, a top level parser.
+# Verbosity control, top-level parser.
 
 class SetVerbosityAction(argparse.Action):
     """
@@ -97,21 +132,23 @@ class SetVerbosityAction(argparse.Action):
             raise ValueError("parsing verbosity option")
         pr.option_verbosity += delta
 
-verbosity_options_parser = ArgumentParser(add_help=False)
+verbosity_options_parser = argparse.ArgumentParser(add_help=False)
 verbosity_options_parser.add_argument(
     "-q", "--quiet", "-v", "--verbose",
     action=SetVerbosityAction,
     nargs=0,
     help="decrease/increase verbosity")
 
-
 # Set xxhash variant (another top-level parser).
 
 class SetXXHasher(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
-        BlockHasher.set_algo(getattr(HasherAlgo, values)) # Get value from name.
+        hasher_algo = getattr(HasherAlgo, values)  # Get value from name.
+        BlockHasher.set_algo(hasher_algo)
+        hasher_fn = HasherFunction.from_hasher_algo(hasher_algo)
+        adjust_default_dbprefix(str(hasher_fn).lower())
 
-xxhash_option_parser = ArgumentParser(add_help=False)
+xxhash_option_parser = argparse.ArgumentParser(add_help=False)
 xxhash_option_parser.add_argument(
     "--xxhash", choices=HasherAlgo.get_values(),
     action=SetXXHasher, default=None,
@@ -136,76 +173,34 @@ class HasherExecOption(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
         BlockHasher.set_algo(HasherAlgo.CUSTOM, values) # Get value from name.
 
-hasher_option_parser = ArgumentParser(add_help=False)
+hasher_option_parser = argparse.ArgumentParser(add_help=False)
 
 hasher_option_parser.add_argument(
     "--hasher",
     type=valid_executable_str, action=HasherExecOption,
-    default=None, help="set custom hasher executable")
+    default=None, help="set external hasher")
 
 class FilterExecOption(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
         BlockHasher.set_filter(values) # Get value from name.
 
-filter_option_parser = ArgumentParser(add_help=False)
+filter_option_parser = argparse.ArgumentParser(add_help=False)
 
 filter_option_parser.add_argument(
     "--filter",
     type=valid_executable_str, #dest="filter_exec",
     action=FilterExecOption,
-    default=None, #sc_action="store", sc_scope="all",
+    default=None, #sc_action="store", sc_scope=Scope.ALL,
     help="set file content filter for on-line file trees")
 
 # Debug flag (another top-level parser).
 
-debugtrees_option_parser = ArgumentParser(add_help=False)
+debugtrees_option_parser = argparse.ArgumentParser(add_help=False)
 debugtrees_option_parser.add_argument(
     "--debugtrees", action="store_true",
     dest="debugtrees", default=False,
     help=argparse.SUPPRESS)
 
-# Config file choice options (another top-level parser.)
-
-configfile_option_parser = ArgumentParser(add_help=False)
-
-class ChooseConfigFileSet(argparse.Action):
-    def __init__(self, **kw):
-        try:
-# Calls to ArgumentParser.set_cfg_locations must precede add_argument calls.
-            ArgumentParser.set_cfg_locations(
-                "./lnsync.cfg",
-                os.path.expanduser("~/lnsync.cfg"),
-                os.path.expanduser("~/.lnsync.cfg"))
-        except NoConfigFileFound:
-            pass
-        super(ChooseConfigFileSet, self).__init__(**kw)
-    def __call__(self, parser, namespace, value, option_string=None):
-        try:
-            ArgumentParser.set_cfg_locations(value)
-        except ConfigError as e:
-            pr.error("config file: %s" % (e))
-            sys.exit(-1)
-        setattr(namespace, self.dest, value)
-
-class ChooseConfigFileUnset(argparse.Action):
-    def __call__(self, parser, namespace, value, option_string=None):
-        ArgumentParser.set_cfg_locations()
-        setattr(namespace, self.dest, None)
-
-def file_expanduser(path):
-    path = os.path.expanduser(path)
-    return path
-
-configfile_option_parser.add_argument(
-    "--config",
-    action=ChooseConfigFileSet, type=file_expanduser,
-    dest="configfile", default=None,
-    help="choose configuration file")
-
-configfile_option_parser.add_argument(
-    "--no-config", action=ChooseConfigFileUnset,
-    nargs=0,
-    dest="configfile")
 
 ####################
 # Options applying to all tree arguments.
@@ -214,39 +209,40 @@ configfile_option_parser.add_argument(
 # Many optional arguments are shared by multiple command parsers.
 # To factor out these arguments, define as many single-argument parsers:
 
-maxsize_option_parser = ArgumentParser(add_help=False)
+maxsize_option_parser = argparse.ArgumentParser(add_help=False)
 maxsize_option_parser.add_argument(
     "-M", "--maxsize", type=human2bytes, default=-1,
-    action=ConfigTreeOptionAction, sc_scope="all", sc_action="store",
+    action=ConfigTreeOptionAction, sc_scope=Scope.ALL, sc_action="store",
     help="ignore files larger than MAXSIZE (default: no limit), "
          "suffixes allowed: K, M, G, etc.")
 
 # sc_action="store_bool" interprets --no- prefixes
 
-bysize_option_parser = ArgumentParser(add_help=False)
+bysize_option_parser = argparse.ArgumentParser(add_help=False)
 bysize_option_parser.add_argument(
     "-z", "--bysize", "--no-bysize", dest="bysize",
-    action=ConfigTreeOptionAction, sc_scope="all",
+    action=ConfigTreeOptionAction, sc_scope=Scope.ALL,
     sc_action="store_bool", sc_dest="size_as_hash",
     default=False,
     help="compare files by size only")
 
-skipempty_option_parser = ArgumentParser(add_help=False)
+skipempty_option_parser = argparse.ArgumentParser(add_help=False)
 skipempty_option_parser.add_argument(
     "-0", "--skipempty", "--no-skipempty",
-    action=ConfigTreeOptionAction, sc_scope="all", sc_action="store_bool",
+    action=ConfigTreeOptionAction, sc_scope=Scope.ALL, sc_action="store_bool",
     default=False,
     help="ignore empty files")
 
-hard_links_option_parser = ArgumentParser(add_help=False)
+hard_links_option_parser = argparse.ArgumentParser(add_help=False)
 hard_links_option_parser.add_argument(
     "-H", "--hard-links", "--no-hard-links",
-    action=ConfigTreeOptionAction, sc_scope="all", sc_action="store_bool",
+    action=ConfigTreeOptionAction, sc_scope=Scope.ALL, sc_action="store_bool",
     default=True,
-    help="treat hard links/paths to the same file as the same file (default: True)")
+    help="treat hard links/paths to the same file as the same file " \
+         "(default: True)")
 hard_links_option_parser.add_argument(
     "-A", "--all-links", "--no-all-links",
-    action=ConfigTreeOptionAction, sc_scope="all", sc_action="store_bool",
+    action=ConfigTreeOptionAction, sc_scope=Scope.ALL, sc_action="store_bool",
     default=True,
     help="on results, print all hard links, not just one")
 
@@ -258,45 +254,39 @@ hard_links_option_parser.add_argument(
 # Database file location options
 ##########
 
-dblocation_option_parser = ArgumentParser(add_help=False)
+dblocation_option_parser = argparse.ArgumentParser(add_help=False)
 
 class DBPrefixTreeOption(TreeOptionAction):
-    @staticmethod
-    def sc_action(_parser, _namespace, pos_val, opt_val, _option_string=None):
+    def sc_action(self, _parser, _namespace,
+                  pos_val, opt_val, _option_string=None):
         pos_val.set_dbprefix(opt_val)
 
     def sc_apply_default(self, _parser, namespace, pos_val):
-        try:
-            dbprefix = \
-                self.get_from_tree_section(pos_val, "dbprefix", merge_sections=False)
-        except ConfigError:
-            dbprefix = DEFAULT_DBPREFIX
+        dbprefix = None
+        if self.is_config_file_enabled():
+            try:
+                dbprefix = \
+                    self.get_from_tree_section(
+                        pos_val, "dbprefix", merge_sections=False)
+            except ConfigError:
+                pass
+        if dbprefix is None:
+            dbprefix = get_default_dbprefix()
         pos_val.set_dbprefix(dbprefix)
 
 dblocation_option_parser.add_argument(
-    "-p", "--dbprefix", metavar="PREFIX", type=str,
-    action=DBPrefixTreeOption, sc_scope="following",
+    "-p", "--dbprefix", metavar="DBPREFIX", type=str,
+    action=DBPrefixTreeOption, sc_scope=Scope.SUBSEQUENT,
     help="database filename prefix for following online trees")
 
-class DBLocationTreeOption(TreeOptionAction):
-    @staticmethod
-    def sc_action(_parser, _namespace,
+class DBLocationTreeOption(ConfigTreeOptionAction):
+    def sc_action(self, _parser, _namespace,
                   pos_val, opt_val, _option_string=None):
         pos_val.set_dblocation(opt_val)
 
-    def sc_apply_default(self, _parser, namespace, pos_val):
-        try:
-            dblocation = \
-                self.get_from_tree_section(pos_val, "dblocation",
-                                           merge_sections=False)
-        except ConfigError:
-            pass # dblocation should not be set directly.
-        else:
-            pos_val.set_dblocation(dblocation)
-
 dblocation_option_parser.add_argument(
-    "-b", "--dblocation", metavar="LOCATION", type=str,
-    action=DBLocationTreeOption, sc_scope="next",
+    "-b", "--dblocation", metavar="DBLOCATION", type=str,
+    action=DBLocationTreeOption, sc_scope=Scope.NEXT,
     help="database file location for following online tree")
 
 ##########
@@ -330,22 +320,26 @@ class IncExcPatternOptionBase(TreeOptionAction):
         excinc_objects = getattr(ns, self.sc_dest, [])
         if excinc_objects is None:
             excinc_objects = []
-        for opt_str in self.option_strings:
-            if opt_str.startswith("--"):
-                opt_str = opt_str[2:]
-            elif opt_str.startswith("-"):
-                opt_str = opt_str[1:]
-            else:
-                assert False, "unexpected option string: %s" % opt_str
-            try:
-                excinc_objects += \
-                    self.make_pattern_obj_list(
-                        self.get_from_tree_section(
-                            pos_val, opt_str,
-                            merge_sections=True),
-                        opt_str)
-            except (NoOptionError, NoSectionError):
-                pass
+        if not self.is_config_file_enabled():
+            excinc_objects = []
+        else:
+            for opt_str in self.option_strings:
+                if opt_str.startswith("--"):
+                    opt_str = opt_str[2:]
+                elif opt_str.startswith("-"):
+                    opt_str = opt_str[1:]
+                else:
+                    assert False, \
+                        "unexpected option string: %s" % opt_str
+                try:
+                    excinc_objects += \
+                        self.make_pattern_obj_list(
+                            self.get_from_tree_section(
+                                pos_val, opt_str,
+                                merge_sections=True),
+                            opt_str)
+                except (NoOptionError, NoSectionError):
+                    pass
         setattr(ns, self.sc_dest, excinc_objects)
 
     def __call__(self, parser, namespace, values, option_string=None):
@@ -367,34 +361,36 @@ class IncOnlyPatternOption(IncExcPatternOptionBase):
                [IncludePattern(p) for p in pattern_strings] + \
                [ExcludePattern("*")]
 
-exclude_option_parser = ArgumentParser(add_help=False)
+exclude_option_parser = argparse.ArgumentParser(add_help=False)
 exclude_option_parser.add_argument(
     "--exclude", "--include", metavar="GLOBPATTERN",
     type=str, nargs="+", dest="exclude_patterns",
-    action=IncExcPatternOption, sc_scope="all", sc_action="append",
+    action=IncExcPatternOption, sc_scope=Scope.ALL, sc_action="append",
     help="exclude/include files and dirs")
 
-excludeonce_option_parser = ArgumentParser(add_help=False)
+excludeonce_option_parser = argparse.ArgumentParser(add_help=False)
 excludeonce_option_parser.add_argument(
     "--once-exclude", "--once-include", metavar="GLOBPATTERN",
     type=str, nargs="+", dest="exclude_patterns",
-    action=IncExcOncePatternOption, sc_scope="next", sc_action="append",
-    help="for the following tree only")
+    action=IncExcOncePatternOption,
+    sc_scope=Scope.NEXT_SINGLE, sc_action="append",
+    help="applies to the next tree only")
 
-includeonly_option_parser = ArgumentParser(add_help=False)
+includeonly_option_parser = argparse.ArgumentParser(add_help=False)
 includeonly_option_parser.add_argument(
     "--only-include", metavar="GLOBPATTERN",
     type=str, nargs="+", dest="exclude_patterns",
-    action=IncOnlyPatternOption, sc_scope="all", sc_action="append",
+    action=IncOnlyPatternOption, sc_scope=Scope.ALL, sc_action="append",
     help="include only the given patterns")
 
-includeonlyonce_option_parser = ArgumentParser(add_help=False)
+includeonlyonce_option_parser = argparse.ArgumentParser(add_help=False)
 includeonlyonce_option_parser.add_argument(
     "--once-only-include", metavar="GLOBPATTERN",
     type=str, nargs="+", dest="exclude_patterns",
-    action=IncOnlyPatternOption, sc_scope="next", sc_action="append")
+    action=IncOnlyPatternOption,
+    sc_scope=Scope.NEXT_SINGLE, sc_action="append")
 
-exclude_all_options_parser = ArgumentParser(
+exclude_all_options_parser = argparse.ArgumentParser(
     add_help=False,
     parents=[exclude_option_parser,
              excludeonce_option_parser,
@@ -409,7 +405,7 @@ exclude_all_options_parser = ArgumentParser(
 
 # Specify directories where the hash database actually is.
 
-dbrootdir_option_parser = ArgumentParser(add_help=False)
+dbrootdir_option_parser = argparse.ArgumentParser(add_help=False)
 
 def readable_dir(path):
     if not os.path.exists(path) or not os.path.isdir(path):
@@ -419,12 +415,12 @@ def readable_dir(path):
 
 class DBRootDirOptions(TreeOptionAction):
     """
-    Store a list of dbrootdir locations: update a TreeLocation and save it to self.dest
-    but do not save to the full location list. # TODO docs
+    Store a list of dbrootdir locations: update a TreeLocation and save it to\
+    self.dest but do not save to the full location list. # TODO docs
     """
 
     def sc_apply_default(self, _parser, namespace, pos_val):
-        if pos_val.mode == OFFLINE:
+        if pos_val.mode == Mode.OFFLINE or not self.is_config_file_enabled():
             return
         try:
             dbrootdir_tree = \
@@ -436,9 +432,12 @@ class DBRootDirOptions(TreeOptionAction):
         except (NoSectionError, NoOptionError):
             pass
 
-    @staticmethod
-    def sc_action(_parser, _namespace, pos_arg, opt_val, _option_string):
-        pos_arg.set_alt_dbrootdir(opt_val)
+    def sc_action(self, _parser, _namespace, pos_arg, opt_val, _option_string):
+        self.send_dbroot_option(pos_arg, opt_val)
+
+    @abc.abstractmethod
+    def send_dbroot_option(self, pos_arg, opt_val):
+        pass
 
 class DBRootDirOption(DBRootDirOptions):
     def send_dbroot_option(self, pos_arg, opt_val):
@@ -447,8 +446,8 @@ class DBRootDirOption(DBRootDirOptions):
 dbrootdir_option_parser.add_argument(
     "--dbrootdir", metavar="DBROOTDIR",
     type=readable_dir,
-    action=DBRootDirOption, sc_scope="all",
-    help="database directories for all online locations that are subdirs")
+    action=DBRootDirOption, sc_scope=Scope.ALL,
+    help="set database directory for all online locations that are subdirs")
 
 class DBRootMountLocationOption(DBRootDirOptions):
     def send_dbroot_option(self, pos_arg, opt_val):
@@ -457,36 +456,31 @@ class DBRootMountLocationOption(DBRootDirOptions):
 dbrootdir_option_parser.add_argument(
     "--dbrootmount", metavar="DBROOTS_MOUNTS_LOCATION",
     type=readable_dir,
-    action=DBRootMountLocationOption, sc_scope="all",
-    help="directory whose immediate subdirs will be database directories for online trees contained within")
+    action=DBRootMountLocationOption, sc_scope=Scope.ALL,
+    help="set directory whose immediate subdirs will be database directories " \
+    "for online trees contained within")
 
 ####################
 # Other shared options parsers, unrelated to trees.
 ####################
 
-sameline_option_parser = ArgumentParser(add_help=False)
+sameline_option_parser = argparse.ArgumentParser(add_help=False)
 sameline_option_parser.add_argument(
-    "-1", "--sameline", dest="sameline",
-    action="store_true", default=False,
+    "-1", "--sameline", "--no-sameline",
+    action=StoreBoolAction, dest="sameline", default=False,
     help="print each group of identical files in the same line")
-sameline_option_parser.add_argument(
-    "--no-sameline", dest="sameline", action="store_false", default=False)
 
-sort_option_parser = ArgumentParser(add_help=False)
+sort_option_parser = argparse.ArgumentParser(add_help=False)
 sort_option_parser.add_argument(
-    "-s", "--sort", dest="sort",
-    action="store_true", default=False,
+    "-s", "--sort", "--no-sort",
+    action=StoreBoolAction, dest="sort", default=False,
     help="sort output by size")
-sort_option_parser.add_argument(
-    "--no-sort", dest="sort", action="store_false", default=False)
 
-dryrun_option_parser = ArgumentParser(add_help=False)
+dryrun_option_parser = argparse.ArgumentParser(add_help=False)
 dryrun_option_parser.add_argument(
-    "-n", "--dry-run", dest="dry_run",
-    action="store_true", default=False,
+    "-n", "--dry-run", "--no-dry-run",
+    action=StoreBoolAction, dest="dry_run", default=False,
     help="dry run")
-dryrun_option_parser.add_argument(
-    "--no-dry-run", dest="dry_run", default=False, action="store_false")
 
 ####################
 # Top parser and subcommand parsers and handlers.
@@ -497,17 +491,14 @@ cmd_handlers = {}  # Commands parsed fully by argparse.
 cmd_handlers_extra_args = {} # Commands taking extra, non-argparse arguments.
 # Each command handler should return the final exit code, with None meaning 0.
 
-top_parser = ArgumentParser(\
-    description=DESCRIPTION,
-    parents=[configfile_option_parser, # In this order.
-             verbosity_options_parser,
+top_parser = ArgumentParserConfig(\
+    description=FormatLateDescription.description,
+    formatter_class=FormatLateDescription,
+    parents=[verbosity_options_parser,
              xxhash_option_parser,
-             hasher_option_parser,
-# TODO             filter_option_parser
+             hasher_option_parser, # TODO filter_option_parser
              debugtrees_option_parser],
-    add_help=False, usage=argparse.SUPPRESS,
-    formatter_class=lambda prog: argparse.HelpFormatter(
-        prog, max_help_position=HELP_SPACING))
+    add_help=False, usage=argparse.SUPPRESS,)
 
 cmd_parsers = top_parser.add_subparsers(dest="cmdname", help="sub-command help")
 
@@ -538,12 +529,12 @@ parser_rsync = cmd_parsers.add_parser(
     parents=[dryrun_option_parser, exclude_option_parser,
              hard_links_option_parser, maxsize_option_parser,
              dbrootdir_option_parser, dblocation_option_parser],
-    help="generate an rsync command to complete sync")
+    help="generate an rsync command to complete sync, " \
+         "rightmost options are passed to rsync")
 parser_rsync.add_argument(
-    "-x", "--execute", default=False, action="store_true",
+    "-x", "--execute", "--no-execute",
+    action=StoreBoolAction, dest="execute", default=False,
     help="also execute rsync command")
-parser_rsync.add_argument(
-    "--no-execute", default=False, action="store_false")
 parser_rsync.add_argument(
     "source", type=TreeLocationOnline, action=TreeLocationAction)
 parser_rsync.add_argument(
@@ -555,7 +546,8 @@ parser_syncr = cmd_parsers.add_parser(
     parents=[dryrun_option_parser, exclude_option_parser,
              hard_links_option_parser, maxsize_option_parser,
              dbrootdir_option_parser, dblocation_option_parser, ],
-    help="sync and then execute the rsync command")
+    help="sync and then execute the rsync command, " \
+         "rightmost options are passed to rsync")
 parser_syncr.add_argument(
     "source", type=TreeLocation, action=TreeLocationAction)
 parser_syncr.add_argument(
@@ -645,7 +637,7 @@ parser_update = cmd_parsers.add_parser(
     parents=[exclude_all_options_parser,
              skipempty_option_parser, maxsize_option_parser,
              dbrootdir_option_parser, dblocation_option_parser],
-    help='update hashes of new and modified files')
+    help='update hashes for new and modified files')
 parser_update.add_argument(
     "dirs", type=TreeLocationOnline, action=TreeLocationAction, nargs="+")
 def do_update(args):
@@ -724,16 +716,18 @@ cmd_handlers["cmp"] = lnsync_cmd_handlers.do_cmp
 parser_check_files = cmd_parsers.add_parser(
     'check',
     parents=[exclude_all_options_parser,
-             hard_links_option_parser, bysize_option_parser,
+             hard_links_option_parser,
              maxsize_option_parser, skipempty_option_parser,
              dbrootdir_option_parser, dblocation_option_parser],
     help='rehash and compare against stored hash')
 
 parser_check_files.add_argument(
-    "location", type=TreeLocationOnline, action=TreeLocationAction)
+    "location", metavar="ROOT_DIRECTORY",
+    type=TreeLocationOnline, action=TreeLocationAction)
 
 parser_check_files.add_argument(
-    "relpaths", type=relative_path, nargs="*")
+    "relpaths", metavar="RELATIVE_PATHS",
+    type=relative_path, nargs="*")
 
 cmd_handlers["check"] = lnsync_cmd_handlers.do_check
 
@@ -851,48 +845,69 @@ def get_handler_fn():
     if cmd in cmd_handlers:
         if not extra_args:
             handler_fn = lambda: cmd_handlers[cmd](args)
-        else: # Let this fail and argparse explain why.
+        else: # Let it fail and let argparse explain why.
             args, extra_args = top_parser.parse_args()
     elif cmd in cmd_handlers_extra_args:
         # Extra args only allwoed at the end
         if extra_args and extra_args != sys.argv[-len(extra_args):]:
             top_parser.parse_args()
-            assert False, "internal error"
+            assert False, \
+                "get_handler_fn: reached unreachable"
         handler_fn = \
             lambda: cmd_handlers_extra_args[cmd](args, extra_args)
     else:
-        assert cmd is None
+        assert cmd is None, \
+            "get_handler_fn: expected None here"
         pr.error("no command")
-        sys.exit()
+        sys.exit(1)
     if args.debugtrees:
         debug_tree_info(args)
-        sys.exit(-1)
+        sys.exit(1)
     return handler_fn
 
+def main32():
+    BlockHasher.set_algo(HasherAlgo.XXHASH32)
+    FormatLateDescription.update_description(sys.argv[0], "xxhash32")
+    return main()
+
+def main64():
+    BlockHasher.set_algo(HasherAlgo.XXHASH64)
+    BlockHasher.set_algo(HasherAlgo.XXHASH32)
+    FormatLateDescription.update_description(sys.argv[0], "xxhash64")
+    return main()
+
+def main_nopreset():
+    BlockHasher.set_algo(HasherAlgo.XXHASH64)
+    FormatLateDescription.update_description("lnsync", "no preset hasher")
+    return main()
+
 def main():
-    if len(sys.argv) == 1:
+    if len(sys.argv) == 1 or \
+       (len(sys.argv) == 2 and any(s in sys.argv for s in ("-h", "--help"))):
         top_parser.print_help(sys.stderr)
         sys.exit(1)
     pr.set_app_prefix("lnsync:")
     cmd_handler = get_handler_fn()
     try:
-        exit_error = 1
-        exit_error = cmd_handler()
-        if exit_error is None:
-            exit_error = 0
+        exit_code = 1
+        exit_code = cmd_handler()
+        if exit_code is None: # No explicit return value means no error.
+            exit_code = 0
     except KeyboardInterrupt:
         pr.error("interrupted")
-        sys.exit(130)
+        exit_code = 130
     except TreeError as exc:
         pr.error("file tree: %s" % str(exc))
     except (PropDBError, SQLError) as exc:
         pr.error("database: %s" % str(exc))
     except NotImplementedError as exc:
         pr.error("not implemented on your system: %s", str(exc))
+    except HelperAppError as exc:
+        pr.error(str(exc))
     except (RuntimeError, AssertionError, Exception) as exc:
         pr.error("internal error: %s" % str(exc))
     finally:
-        sys.exit(exit_error)
+        sys.exit(exit_code)
 
 if __name__ == "__main__":
     main()

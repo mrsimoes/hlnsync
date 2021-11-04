@@ -132,7 +132,8 @@ class QueensBoard(SearchState):
         self.valid = True
     def up_delta(self, state_delta):
         col = state_delta
-        assert self.next_row > 0, "Cannot go up from row 0."
+        assert self.next_row > 0, \
+            "Cannot go up from row 0."
         assert self.board[self.next_row-1][col] != 0, \
             "Queen expected at (%d,%d)" % (self.next_row-1, col)
         self.next_row -= 1
@@ -151,9 +152,11 @@ class QueensBoard(SearchState):
 if __name__ == "__main__":
     import sys
     try:
-        assert len(sys.argv) == 2, "Wrong number of arguments."
+        assert len(sys.argv) == 2, \
+            "Wrong number of arguments."
         BOARD_SIZE = int(sys.argv[1])
-        assert BOARD_SIZE > 0, "Board size must be >= 1."
+        assert BOARD_SIZE > 0, \
+            "Board size must be >= 1."
     except Exception as exc:
         print(exc)
         MSG = "Usage: backtracker <n>\nSolve the n x n queen problem."

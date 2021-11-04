@@ -7,8 +7,9 @@ lnsync project metadata.
 
 # The package name, which is also the "UNIX name" for the project.
 package = 'lnsync'
-version = '0.7.4'
-description = 'File sync by content with hard link support, fast fdupes, and much more.'
+version = '0.7.5'
+description = "Dir sync by file content " \
+              "with hard link support, plus fast fdupes, and more."
 summary = description
 project = 'lnsync dir sync tool'
 project_no_spaces = project.replace(' ', '')
@@ -19,4 +20,4 @@ authors = ['Miguel Simoes']
 authors_string = ', '.join(authors)
 emails = ['miguelrsimoes@yahoo.com']
 license = 'GNU General Public License v3'
-copyright = '(C) 2018 ' + authors_string
+copyright = '(C) 2018-2021 ' + authors_string

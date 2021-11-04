@@ -46,7 +46,8 @@ class ProducerConsumerThreaded:
         main_thread = either "consumer" or "producer".
         Only the main thread gets the KeyboardInterrupt SIGINT signal.
         """
-        assert main_thread in ("consumer", "producer")
+        assert main_thread in ("consumer", "producer"), \
+            "ProducerConsumerThreaded.__init__ unexpected thread id"
         self.ready_for_data = threading.Event()
         self.ready_for_data.set()
         self.data_is_available = threading.Event() # Set also at NoMoreData.

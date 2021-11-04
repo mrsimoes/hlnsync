@@ -58,10 +58,11 @@ import abc
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.fileid import make_id_computer
 from lnsync_pkg.miscutils import ListContextManager
-from lnsync_pkg.modaltype import onofftype, ONLINE, OFFLINE
+from lnsync_pkg.modaltype import onofftype, Mode
 from lnsync_pkg.filetree import \
     FileTree, FileItem, DirItem, ExcludedItem, TreeError
-from lnsync_pkg.propdbmanager import PropDBException, PropDBError, PropDBNoValue, PropDBStaleValue
+from lnsync_pkg.propdbmanager import PropDBException, PropDBError, \
+    PropDBNoValue, PropDBStaleValue
 from lnsync_pkg.sqlpropdb import SQLPropDBManager
 
 class FileItemProp(FileItem):
@@ -91,8 +92,8 @@ class FilePropTree(FileTree, metaclass=onofftype):
                 **dbkwargs to return a database manager object.
                 (This delays connecting to the db as much as possible.)
         kwargs passed upwards to FileTree:
-            - topdir_path: path disk file tree (may be None if FileTree is somehow
-                virtual).
+            - topdir_path: path disk file tree (may be None if FileTree is
+                somehow virtual).
             - exclude_patterns: None or a list of glob patterns for
                 relative paths to ignore when reading from disk.
             - use_metadata: if True read metadata index files by size
@@ -105,7 +106,8 @@ class FilePropTree(FileTree, metaclass=onofftype):
         self._enter_count = 0 # Context manager entry count.
         self.db = None
         use_metadata = kwargs.pop("use_metadata", True)
-        assert use_metadata
+        assert use_metadata, \
+            "__init__: must use_metadata"
         super(FilePropTree, self).__init__(
             topdir_path=topdir_path,
             use_metadata=use_metadata,
@@ -113,16 +115,18 @@ class FilePropTree(FileTree, metaclass=onofftype):
             **kwargs)
         dbmaker = kwargs.get("dbmaker", SQLPropDBManager)
         if dbmaker:
-            assert callable(dbmaker)
+            assert callable(dbmaker), \
+                f"__init__: expected a callable"
             dbobj = dbmaker(
                 mode=self.mode, **kwargs.get("dbkwargs", {}))
             self.set_dbmanager(dbobj)
 
     def set_dbmanager(self, db):
-        assert self.mode == db.mode
+        assert self.mode == db.mode, \
+            f"set_dbmanager: mismatched modes"
         self.db = db
         self.add_glob_patterns(db.get_glob_patterns())
-        if self.mode == ONLINE:
+        if self.mode == Mode.ONLINE:
             dbdir = os.path.dirname(db.dbpath)
             if  dbdir != self.topdir_path:
                 self._id_computer = make_id_computer(dbdir)
@@ -170,7 +174,8 @@ class FilePropTree(FileTree, metaclass=onofftype):
         Otherwise, raise an appropriate PropDBException.
         Do not delete stale DB values.
         """
-        assert f_obj is not None, "get_prop: no f_obj"
+        assert f_obj is not None, \
+            "get_prop: no f_obj"
         if f_obj.prop_value is not None:
             return f_obj.prop_value
         f_obj.prop_value = self.db_get_uptodate_prop(f_obj, delete_stale=False)
@@ -201,7 +206,7 @@ class FilePropTree(FileTree, metaclass=onofftype):
                 self.db.delete_ids(f_obj.file_id)
             raise PropDBStaleValue
 
-class FilePropTreeOffline(FilePropTree, mode=OFFLINE):
+class FilePropTreeOffline(FilePropTree, mode=Mode.OFFLINE):
     """
     The file tree is stored in the property database along with up-to-date
     property values.
@@ -209,7 +214,8 @@ class FilePropTreeOffline(FilePropTree, mode=OFFLINE):
 
     def __init___(self, **kwargs):
         topdir_path = kwargs.pop("topdir_path")
-        assert topdir_path is None
+        assert topdir_path is None, \
+            f"__init___: unexpected topdir_path: {topdir_path}"
         super().__init__(topdir_path=topdir_path, **kwargs)
 
     def db_get_uptodate_prop(self, f_obj, delete_stale):
@@ -219,7 +225,8 @@ class FilePropTreeOffline(FilePropTree, mode=OFFLINE):
         Since the DB is offline, expect delete_stale to be False and raise
         stale and no-value conditions errors as PropDBError.
         """
-        assert delete_stale is False
+        assert delete_stale is False, \
+            "db_get_uptodate_prop: delete_stale set"
         try:
             return super(FilePropTreeOffline,
                          self).db_get_uptodate_prop(f_obj, delete_stale=False)
@@ -269,14 +276,15 @@ class FilePropTreeOffline(FilePropTree, mode=OFFLINE):
         return "{%s}%s" % \
                 (pprint(self.db.dbpath), pprint(rel_path))
 
-class FilePropTreeOnline(FilePropTree, mode=ONLINE):
+class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
     """
     A FilePropertyTree that scans a mounted disk file tree and reads and
     updates a persistent cache database.
     """
     def __init__(self, **kwargs):
         topdir_path = kwargs.pop("topdir_path")
-        assert os.path.isdir(topdir_path)
+        assert os.path.isdir(topdir_path), \
+            f"__init__: not a dir: {topdir_path}"
         super().__init__(topdir_path=topdir_path, **kwargs)
 
     def get_prop(self, f_obj):
@@ -355,8 +363,10 @@ class FilePropTreeOnline(FilePropTree, mode=ONLINE):
         Do not update the database.
         Raise PropDBStaleValue if the db value is not up-to-date.
         """
-        assert self.rootdir_obj is not None
-        assert file_obj is not None and file_obj.is_file()
+        assert self.rootdir_obj is not None, \
+            "db_check_prop: missing root"
+        assert file_obj is not None and file_obj.is_file(), \
+            f"db_check_prop: not a file: {file_obj}"
         db_prop = self.db_get_uptodate_prop(file_obj, delete_stale=False)
         if db_prop is None:
             msg = "no up-to-date prop/metadata for " + \
@@ -396,7 +406,8 @@ class FilePropTreeOnline(FilePropTree, mode=ONLINE):
         """
         Scan tree and save tree structure into the given target db manager.
         """
-        assert self._use_metadata
+        assert self._use_metadata, \
+            "db_store_offline: must be using metadata"
         self.scan_subtree() # Scan the full tree.
         if os.path.samefile(self.topdir_path, os.path.dirname(self.db.dbpath)):
             filter_fn = None
