@@ -127,15 +127,43 @@ def thread_executor_terminator(fn_task, objs, worth_threading):
         for obj in objs:
             fn_task(obj)
         return
-    with ThreadPoolExecutor(max_workers=len(objs)) as executor:
-        try:
-            sleep_time = 0.01
-            futures = [executor.submit(fn_task, obj) for obj in objs[:-1]]
-            fn_task(objs[-1])
-            while not all(future.done() for future in futures):
-                time.sleep(sleep_time)
-                sleep_time = min(0.25, sleep_time*2)
-        except (KeyboardInterrupt, Exception):
-            executor._threads.clear()
-            concurrent.futures.thread._threads_queues.clear()
-            raise
+    threads = set()
+    try:
+        for obj in objs:
+            fn = lambda : fn_task(obj)
+            new_thread = threading.Thread(target=fn)
+            threads.add(new_thread)
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        pass
+
+
+
+#def thread_executor_terminator(fn_task, objs, worth_threading):
+#    if not objs:
+#        return
+#    if len(objs) == 1:
+#        fn_task(objs[0])
+#        return
+#    if not worth_threading:
+#        for obj in objs:
+#            fn_task(obj)
+#        return
+#    with ThreadPoolExecutor(max_workers=len(objs)-1) as executor:
+#        try:
+##            sleep_time = 0.01
+#            futures = [executor.submit(fn_task, obj) for obj in objs[:-1]]
+#            fn_task(objs[-1])
+#            executor.shutdown(wait=True)
+##            while not all(future.done() for future in futures):
+##                time.sleep(sleep_time)
+##                sleep_time = min(0.25, sleep_time*2)
+#        except (KeyboardInterrupt, Exception):
+#            executor.shutdown()
+##            breakpoint()
+##            executor._threads.clear()
+##            concurrent.futures.thread._threads_queues.clear()
+#            raise

@@ -178,7 +178,7 @@ def error(*args, **kwargs):
             finally:
                 if _stderr_is_tty:
                     _print("\033[39m", file=sys.stderr, end="") # Std foreg.
-                    sys.stderr.flush()
+                sys.stderr.flush()
 
 def info(*args, **kwargs):
     if option_verbosity >= INFO_LEVEL:
@@ -195,13 +195,19 @@ def warning(*args, **kwargs):
             finally:
                 if _stderr_is_tty:
                     _print("\033[39m", file=sys.stderr, end="") # Std foreg.
-                    sys.stderr.flush()
+                sys.stderr.flush()
 
 def debug(template_str, *str_args, **kwargs):
-    """Templace with % placeholders and respective are given separately."""
+    """
+    Templace with % placeholders and respective are given separately.
+    """
     if option_verbosity >= DEBUG_LEVEL:
-        _print_main("debug:",
-                    template_str % str_args, file=sys.stderr, **kwargs)
+        try:
+            _print_main("debug:",
+                        template_str % str_args, file=sys.stderr, **kwargs)
+        except Exception as exc:
+            msg = "failed printing debug string '%s'" % (template_str,)
+            raise RuntimeError(msg) from exc
 
 def trace(template_str, *str_args, **kwargs):
     """Templace with % placeholders and respective are given separately."""

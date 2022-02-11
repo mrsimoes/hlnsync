@@ -16,8 +16,14 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 """
-Output lines that are logically grouped, either separated by empty lines, or
-concatenated on a single line, optionally sorting the groups.
+Accept several groups of files, each group a dict {tree1: [files11,...], ... },
+where each tree_k is a FileTree and each file_ki is a FileItem.
+
+The file groups are output with appropriate formatting, either as they are
+presented, or sorted once all groups have been presented.
+
+Files in each group are either presented one per line, separated by empty lines,
+or concatenated on a single line.
 """
 
 import lnsync_pkg.printutils as pr
@@ -59,10 +65,16 @@ class GroupedFileListPrinter:
 
     def flush(self):
         if self.sort:
-            def get_size(located_files):
+            def get_average_size(located_files):
+                # Use the average size.
+                tot = 0
+                count = 0
                 for file_list in located_files.values(): # Use any.
-                    return file_list[0].file_metadata.size
-            self.groups.sort(key=get_size)
+                    for file_obj in file_list:
+                        tot += file_obj.file_metadata.size
+                        count += 1
+                return tot / count
+            self.groups.sort(key=get_average_size)
             for group in self.groups:
                 self._print_group(group)
 

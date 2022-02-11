@@ -24,8 +24,7 @@ class PropDBStaleValue(PropDBException):
     pass
 
 class PropDBManager(metaclass=onofftype):
-    @staticmethod
-    def get_glob_patterns():
+    def get_glob_patterns(self):
         return []
 
     def __init__(self, *args, **kwargs):

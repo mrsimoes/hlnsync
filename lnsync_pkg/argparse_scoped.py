@@ -25,10 +25,9 @@ NEXT_SINGLE), or ALL subsequent in the command line.
 Usage:
 ======
 To define a scoped positional argument, set in add_argument the action to a
-class derived from ScPosArgAction. This takes care of maintaining a list of
-all scoped positional as they are parsed and applying any required scoped
-optional argument action. (By default, this list is the "sc_pos_args" property
-in the parser namespace.)
+class derived from ScPosArgAction. This will keep track of all scoped
+positional arguments as they are parsed and apply any appropriate scoped
+optional argument action.
 
 TODO: use the namespace list to bind optionals and positionals
 
@@ -81,6 +80,8 @@ Implementation:
 Each occurrence of an optional scoped argument is recorded as an _OptionCall
 instance and added to a list in the parser namespace. These are used to apply
 the action to subsequent scoped positional arguments.
+
+All argparse_scoped namespace data is stored in a _argparse_scoped_data attribute.
 """
 
 # pylint: disable=function-redefined, protected-access
@@ -90,6 +91,7 @@ import abc
 from enum import Enum
 
 import lnsync_pkg.printutils as pr
+from lnsync_pkg.miscutils import append_to_namespace_list
 
 class Scope(Enum):
     ALL = 1
@@ -116,10 +118,62 @@ class _OptionCall:
         self.opt_action.sc_action(self.parser, self.namespace,
                                   pos_arg, self.opt_val, self.option_string)
 
+class _SCPrivateData:
+    """
+    Track pending otion calls and parsed positional arguments.
+    Should be a property of the parser namespace, stored in attribute
+    named DATA_ATTRIBUTE, set below.
+    """
+    _DATA_ATTRIBUTE = "_sc_arparse_scoped_data"
+
+    @staticmethod
+    def for_namespace(namespace):
+        data_obj = getattr(namespace, _SCPrivateData._DATA_ATTRIBUTE, None)
+        if data_obj is None:
+            data_obj = _SCPrivateData(namespace)
+            setattr(namespace, _SCPrivateData._DATA_ATTRIBUTE, data_obj)
+        return data_obj
+
+    def __init__(self, namespace):
+        self.namespace = namespace
+
+    def append_to_private_list(self, attribute_name, val):
+        append_to_namespace_list(self, attribute_name, [val])
+
+    def get_private_list(self, attribute_name):
+        attr_list = getattr(self, attribute_name, [])
+        if attr_list is None:
+            setattr(self, attribute_name, attr_list)
+        return attr_list
+
+    def filter_private_list(self, attribute_name, filter_fn):
+        attr_list = getattr(self, attribute_name, [])
+        attr_list = [val for val in attr_list if filter_fn(val)]
+        setattr(self, attribute_name, attr_list)
+
+    def store_option_call(self, option_call):
+        self.append_to_private_list("sc_option_calls", option_call)
+
+    def store_pos_arg(self, pos_arg):
+        self.append_to_private_list("sc_pos_args", pos_arg)
+
+    def iter_pos_args(self):
+        for val in self.get_private_list("sc_pos_args"):
+            yield val
+
+    def iter_option_calls(self):
+        for val in self.get_private_list("sc_option_calls"):
+            yield val
+
+    def filter_option_calls(self, filter_fn):
+        self.filter_private_list("sc_otion_calls", filter_fn)
+
+
 class ScOptArgAction(argparse.Action):
     """
     Abstract base for scoped optional argument actions.
     """
+
     def __init__(self, *args, sc_scope=None, sc_action=None,
                  nargs=None, **kwargs):
         dest = kwargs.pop("dest")
@@ -167,25 +221,25 @@ class ScOptArgAction(argparse.Action):
 
     def _sc_action_append(self, _parser, namespace,
                           pos_val, opt_val, _option_string):
-        def do_append(val, to_this):
+        def do_update_namespace(namespace, key, new_elem_or_list):
+            """
+            Append new_elem_or_list to existing list at namespace.key.
+            new_elem_or_list is either a list or a single value,
+            depending on self.nargs.
+            """
             if self.nargs is not None:
-                assert isinstance(val, list), \
-                    f"ScOptArgAction: not a list: {val}"
-                return to_this + val
+                assert isinstance(new_elem_or_list, list), \
+                    f"ScOptArgAction: not a list: {new_elem_or_list}"
+                to_add = new_elem_or_list
             else:
-                return to_this + [val]
-        sc_ns = self.sc_get_namespace(pos_val)
-        prev = getattr(sc_ns, self.sc_dest, [])
-        if prev is None:
-            prev = []
-        prev = do_append(opt_val, prev)
-        setattr(sc_ns, self.sc_dest, prev)
+                to_add = [new_elem_or_list]
+            append_to_namespace_list(namespace, key, to_add)
+        do_update_namespace(
+            self.sc_get_namespace(pos_val),
+            self.sc_dest,
+            opt_val)
         if self.sc_scope == Scope.ALL:
-            prev = getattr(namespace, self.dest, [])
-            if prev is None:
-                prev = []
-            prev = do_append(opt_val, prev)
-            setattr(namespace, self.dest, prev)
+            do_update_namespace(namespace, self.dest, opt_val)
 
     @abc.abstractmethod
     def sc_get_namespace(self, pos_val):
@@ -207,12 +261,10 @@ class ScOptArgAction(argparse.Action):
     def __call__(self, parser, namespace, opt_val, option_string=None):
         this_opt_call = _OptionCall(parser, namespace,
                                     opt_val, option_string, self)
-        prec_opt_calls = getattr(namespace, "_sc_opt_calls", [])
-        prec_opt_calls.append(this_opt_call)
-        setattr(namespace, "_sc_opt_calls", prec_opt_calls)
+        sc_data = _SCPrivateData.for_namespace(namespace)
+        sc_data.store_option_call(this_opt_call)
         if self.sc_scope == Scope.ALL:
-            preceding_pos_args = getattr(namespace, "sc_pos_args", [])
-            for pos_arg in preceding_pos_args:
+            for pos_arg in sc_data.iter_pos_args():
                 this_opt_call._sc_action(pos_arg)
 
 class ScPosArgAction(argparse.Action):
@@ -221,7 +273,7 @@ class ScPosArgAction(argparse.Action):
     values.
     """
     def __call__(self, parser, namespace, pos_arg, option_string=None):
-        if self.nargs == "+":
+        if self.nargs in ("+", "*"):
             assert isinstance(pos_arg, list), \
                 f"ScPosArgAction.__call__ not a list: {pos_arg}"
             for pos_val in pos_arg:
@@ -235,29 +287,19 @@ class ScPosArgAction(argparse.Action):
 
     def _process_pos_arg(self, parser, namespace, pos_arg):
         self._fill_in_defaults(parser, namespace, pos_arg)
-        self._apply_preceding_opt_args(parser, namespace, pos_arg)
-        self._save_to_namespace(parser, namespace, pos_arg)
+        sc_data = _SCPrivateData.for_namespace(namespace)
+        # Apply preceding opt args.
+        for opt_call in sc_data.iter_option_calls():
+            opt_call._sc_action(pos_arg)
+        # Discard NEXT and NEXT_SINGLE optionals.
+        sc_data.filter_option_calls(
+            lambda opt: \
+                opt.opt_action.sc_scope \
+                    not in (Scope.NEXT, Scope.NEXT_SINGLE))
+        sc_data.store_pos_arg(pos_arg)
 
     @staticmethod
     def _fill_in_defaults(parser, namespace, pos_arg):
         for action in parser._actions:
             if isinstance(action, ScOptArgAction):
                 action.sc_apply_default(parser, namespace, pos_arg)
-
-    @staticmethod
-    def _apply_preceding_opt_args(_parser, namespace, pos_arg):
-        preceding_opt_calls = getattr(namespace, "_sc_opt_calls", [])
-        for opt_call in preceding_opt_calls:
-            opt_call._sc_action(pos_arg)
-        # Discard NEXT and NEXT_SINGLE optionals.
-        remaining_opt_calls = \
-            [opt for opt in preceding_opt_calls \
-             if opt.opt_action.sc_scope \
-                 not in (Scope.NEXT, Scope.NEXT_SINGLE)]
-        setattr(namespace, "_sc_opt_calls", remaining_opt_calls)
-
-    @staticmethod
-    def _save_to_namespace(_parser, namespace, pos_val):
-        prec_pos_args = getattr(namespace, "sc_pos_args", [])
-        prec_pos_args.append(pos_val)
-        setattr(namespace, "sc_pos_args", prec_pos_args)

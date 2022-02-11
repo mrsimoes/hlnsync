@@ -7,9 +7,9 @@ lnsync project metadata.
 
 # The package name, which is also the "UNIX name" for the project.
 package = 'lnsync'
-version = '0.7.5.post1'
-description = "Dir sync by file content " \
-              "with hard link support, plus fast fdupes, and more."
+version = '0.8.0'
+description = "Dir sync by content with rename detection, " \
+              "hard link support, plus fast fdupes, and more."
 summary = description
 project = 'lnsync dir sync tool'
 project_no_spaces = project.replace(' ', '')

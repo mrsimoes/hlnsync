@@ -116,14 +116,14 @@ class FilePropTree(FileTree, metaclass=onofftype):
         dbmaker = kwargs.get("dbmaker", SQLPropDBManager)
         if dbmaker:
             assert callable(dbmaker), \
-                f"__init__: expected a callable"
+                "__init__: expected a callable"
             dbobj = dbmaker(
                 mode=self.mode, **kwargs.get("dbkwargs", {}))
             self.set_dbmanager(dbobj)
 
     def set_dbmanager(self, db):
         assert self.mode == db.mode, \
-            f"set_dbmanager: mismatched modes"
+            "set_dbmanager: mismatched modes"
         self.db = db
         self.add_glob_patterns(db.get_glob_patterns())
         if self.mode == Mode.ONLINE:
@@ -171,7 +171,7 @@ class FilePropTree(FileTree, metaclass=onofftype):
     def get_prop(self, f_obj):
         """
         Return the file property value, if at all possible.
-        Otherwise, raise an appropriate PropDBException.
+        Otherwise, raise an appropriate PropDBException or TreeError.
         Do not delete stale DB values.
         """
         assert f_obj is not None, \
@@ -197,11 +197,11 @@ class FilePropTree(FileTree, metaclass=onofftype):
             f_obj.prop_metadata = prop_md
             return prop_val
         else:
+            path_info = self.printable_file_path_digest(f_obj)
             pr.debug(
-                "file %s md (id %d) changed from %s to %s, update_db: %s",
-                f_obj.relpaths[0], f_obj.file_id,
-                f_obj.prop_metadata, f_obj.file_metadata,
-                str(delete_stale))
+                "file id %d md changed %s->%s (del_stale:%s), paths:%s",
+                f_obj.file_id, str(prop_md), str(f_obj.file_metadata),
+                str(delete_stale), path_info)
             if delete_stale:
                 self.db.delete_ids(f_obj.file_id)
             raise PropDBStaleValue
@@ -255,6 +255,7 @@ class FilePropTreeOffline(FilePropTree, mode=Mode.OFFLINE):
                         self.printable_path(dir_obj.get_relpath())))
                 yield (obj_basename, None, ExcludedItem, None)
             else:
+                # Files, not excluded.
                 yield (obj_basename, obj_id, obj_type, obj_id)
 
     def _new_file_obj(self, obj_id, _rawmetadata):
@@ -292,6 +293,7 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
         Return a file property value, from db if possible, updating db if
         needed. Raise PropDBError if the DB cannot be read or TreeError if the
         value cannot be obtained from source.
+        If the prop value cannot be written to the db, print an error message and continue.
         """
         # Try memory and database, without deleting entries.
         try:
@@ -303,24 +305,27 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
         # No value on memory or database: recompute and store.
         try:
             prop_value = self.prop_from_source(f_obj)
-        except Exception as exc:
-            msg = "while getting prop from source (id %d): %s" % \
-                        (f_obj.file_id, str(exc))
+        except TreeError:
+            raise
 #            self._rm_file(f_obj) # This impedes processing other files
                                   # in the same dir
                                   # TODO dynamic exclude
-            raise TreeError(msg) from exc
+        except Exception:
+            raise TreeError(
+                    f"getting prop from source: {str(exc)}",
+                    tree=self,
+                    file_obj=f_obj)
         f_obj.prop_value = prop_value
         f_obj.prop_metadata = f_obj.file_metadata
         try:
             self.db.set_prop_metadata(f_obj.file_id,
-                                      prop_value,
+                                      f_obj.prop_value,
                                       f_obj.prop_metadata)
         except PropDBError as exc:
-            pr.error(
-                "while saving file id %d prop to db: %s" \
-                % (f_obj.file_id, str(exc)))
-        return prop_value
+            path_digest = self.printable_file_path_digest(f_obj)
+            msg = f"while saving file id {f_obj.file_id} at {path_digest}: {str(exc)}"
+            pr.error(msg)
+        return f_obj.prop_value
 
     def recompute_prop(self, file_obj):
         """
@@ -344,16 +349,20 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
                     self.db_get_uptodate_prop(fobj, delete_stale=True)
                 except (PropDBNoValue, PropDBStaleValue):
                     update_files.add(fobj)
-                except PropDBError as exc:
-                    pr.error("processing file %s: %s" % (path, exc))
+                except (PropDBError, TreeError) as exc:
+                    pr.error("processing file: %s" % (exc,))
                     error_files.add(fobj)
             for err_fobj in error_files:
                 self._rm_file(err_fobj)
             tot_update_files = len(update_files)
             for index, update_fobj in enumerate(update_files, start=1):
                 with pr.ProgressPrefix("%d/%d " % (index, tot_update_files)):
-                    self.get_prop(update_fobj)
+                    try:
+                        self.get_prop(update_fobj)
+                    except (PropDBError, TreeError) as exc:
+                        pr.error("computing hash: %s" % (exc,))
         finally:
+            pr.progress("writing database...")
             self.db.commit()
 
     def db_check_prop(self, file_obj):
@@ -362,6 +371,8 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
         prop value in the db and return True or False accordingly.
         Do not update the database.
         Raise PropDBStaleValue if the db value is not up-to-date.
+        May raise TreeError if there was an error computing the prop from
+        source.
         """
         assert self.rootdir_obj is not None, \
             "db_check_prop: missing root"
@@ -375,9 +386,8 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
         try:
             live_prop_value = self.prop_from_source(file_obj)
         except RuntimeError:
-            msg = "error hashing " + \
-                  self.printable_path(file_obj.relpaths[0])
-            raise PropDBError(msg)
+            raise PropDBError(
+                "error hashing " + self.printable_path(file_obj.relpaths[0]))
         return db_prop == live_prop_value
 
     def db_purge_old_entries(self):
@@ -402,37 +412,64 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
         return super(FilePropTreeOnline, self).printable_path(
             rel_path, pprint=pprint)
 
-    def db_store_offline(self, target_dbmanager):
+    def db_store_offline(self, target_dbmanager, filter_fn=None):
         """
         Scan tree and save tree structure into the given target db manager.
+
+        filter_fn takes a file_id and returns True if the file is to be
+        saved.
         """
-        assert self._use_metadata, \
-            "db_store_offline: must be using metadata"
+        assert self._use_metadata, "db_store_offline: must be using metadata"
         self.scan_subtree() # Scan the full tree.
-        if os.path.samefile(self.topdir_path, os.path.dirname(self.db.dbpath)):
-            filter_fn = None
+
+        def filter_include_only_files_in_subtree(file_id):
+            # This excludes prop entries corresponding to files
+            # that no longer exist or to files that are not in the subtree
+            # that is benig saved, when using the db at a super-directory. 
+            return file_id in self._id_to_file
+
+        if filter_fn is None:
+            actual_filter_fn = filter_include_only_files_in_subtree
         else:
-            def filter_fn(fid):
-                return fid in self._id_to_file # To allow a parent dir database.
+            def actual_filter_fn(fid):
+                return filter_include_only_files_in_subtree(fid) \
+                    and filter_fn(fid)
+
         with target_dbmanager:
-            self.db.merge_prop_values(target_dbmanager, filter_fn=filter_fn)
+            pr.progress("merging databases...")
+            self.db.merge_prop_values_into(
+                target_dbmanager,
+                filter_fn=actual_filter_fn)
             target_dbmanager.rm_offline_tree()
-            with pr.ProgressPrefix("saving hashes: "):
-                tot_items = len(self._id_to_file)
-                cur_item = 0
-                for f_id, f_obj in self._id_to_file.items():
-                    pr.progress_percentage(cur_item, tot_items)
-                    cur_item += 1
-                    try:
-                        target_dbmanager.set_offline_metadata(
-                            f_id, f_obj.file_metadata)
-                    except PropDBError as exc:
-                        pr.error("saving offline metadata for id %d: %s" \
-                            % (f_id, str(exc)))
-            pr.progress("saving tree")
+
+            pr.progress("saving metadata...")
+            tot_items = len(self._id_to_file)
+            cur_item = 0
+            metadata_error_files = set()
+            for f_id, f_obj in self._id_to_file.items():
+                pr.progress_percentage(cur_item, tot_items)
+                cur_item += 1
+                if filter_fn and not filter_fn(f_obj.file_id):
+                    continue
+                try:
+                    target_dbmanager.set_offline_metadata(
+                        f_id, f_obj.file_metadata)
+                except PropDBError as exc:
+                    path_digest = self.printable_file_path_digest(f_obj)
+                    pr.error(
+                        f"saving offline metadata for id {f_id} " \
+                        f"at {path_digest}: {str(exc)}")
+                    metadata_error_files.add(f_obj)
+                except Exception as exc:
+                    v = exc
+                    breakpoint()
+
+            pr.progress("saving tree...")
             for obj, parent, path in self.walk_paths(recurse=True, dirs=True):
                 dir_id = parent.dir_id
                 if obj.is_file():
+                    if obj in metadata_error_files or (filter_fn and not filter_fn(obj.file_id)):
+                        continue
                     obj_is_file = 1
                     obj_id = obj.file_id
                     obj_basename = os.path.basename(path)

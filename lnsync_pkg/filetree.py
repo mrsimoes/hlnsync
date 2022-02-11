@@ -41,10 +41,23 @@ import os
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.fileid import make_id_computer
 from lnsync_pkg.glob_matcher import GlobMatcher
-from lnsync_pkg.thread_utils import thread_executor_terminator
 
 class TreeError(Exception):
-    pass
+    def __init__(self, msg, tree=None, file_obj=None):
+        super().__init__(msg)
+        self.tree = tree
+        self.file_obj = file_obj
+
+    def file_str(self):
+        fid = self.file_obj.file_id
+        path_digest = self.tree.printable_file_path_digest(self.file_obj)
+        return f"<id:{fid}>, paths: {path_digest}>"
+
+    def __str__(self):
+        err_str = super().__str__()
+        if self.file_obj:
+            err_str += ": file " + self.file_str()
+        return err_str
 
 class TreeItem:
     """
@@ -83,19 +96,19 @@ class DirItem(TreeItem):
         self.parent = None # A DirItem.
         self.entries = {} # basename->TreeObj.
         self.relpath = None # Cache.
-        self.scanned = False
+        self._scanned = False
 
     def was_scanned(self):
         """
         Test if dir was scanned.
         """
-        return self.scanned
+        return self._scanned
 
     def mark_scanned(self):
         """
         Mark dir as scanned.
         """
-        self.scanned = True
+        self._scanned = True
 
     def add_entry(self, basename, obj):
         assert not basename in self.entries, \
@@ -119,7 +132,7 @@ class DirItem(TreeItem):
             return None
 
     def iter_subdirs(self):
-        assert self.scanned, \
+        assert self._scanned, \
             "cannot iterate unscanned dir"
         for obj in self.entries.values():
             if obj.is_dir():
@@ -191,10 +204,8 @@ class FileTree:
 
     @classmethod
     def scan_trees_async(cls, trees):
-        def scanner(tree):
-            pr.info("async scanning:", tree.printable_path())
+        for tree in trees:
             tree.scan_subtree()
-        thread_executor_terminator(scanner, trees, True)
 
     def __init__(self, **kwargs):
         """
@@ -221,6 +232,7 @@ class FileTree:
         if self._use_metadata:
             self._size_to_files = {} # Available if tree has been fully scanned.
             self._size_to_files_ready = False
+            self._unscanned_dir_count = 1
             maxsize = kwargs.pop("maxsize", -1)
             if maxsize < 0:
                 self._maxsize = None
@@ -256,9 +268,23 @@ class FileTree:
             rel_path = ""
         return pprint(os.path.join(self.topdir_path, rel_path))
 
+    def printable_file_path_digest(self, file_obj=None, pprint=str):
+        """
+        Return the unique path, pretty-printed and quoted, "'{path1}'"
+        or "['{path1}', ...]" if the path has more than one hard link.
+        """
+        first_path_pp = self.printable_path(
+            file_obj.relpaths[0],
+            pprint=pprint)
+        if len(file_obj.relpaths) == 1:
+            return first_path_pp
+        else:
+            return f"[{first_path_pp}, ...]"
+
     def walk_files(self, topdir=None):
         """
         Yield all file objects, scanning as needed.
+        Files, not paths.
         """
         if topdir is None:
             topdir = self.rootdir_obj
@@ -275,17 +301,28 @@ class FileTree:
                 elif obj.is_dir():
                     dirs_to_scan.append(obj)
 
+    def size_to_files_gen(self, size=None):
+        """
+        Return a generator of file objects of a given size.
+        If size is None, yield all files.
+        """
+        for fobj in self.walk_files():
+            if size is None or fobj.file_metadata.size == size:
+                yield fobj
+
     def size_to_files(self, size=None):
         """
-        Return a list of file objects or, if size is None, the internal
-        size->files dict. Trigger a full-tree scan, if needed.
+        Return a list of file objects of a given size.
+        Trigger a full-tree scan, if needed.
+        If size is None, return a list of all files. TODO needed?
         """
         assert self._use_metadata, \
             "size_to_files without metadata."
         if not self._size_to_files_ready:
             self.scan_subtree()
         if size is None:
-            return self._size_to_files
+            import ipdb; ipdb.set_trace() # TODO ensure this has no clients.
+            return self._size_to_files.values()
         elif size in self._size_to_files:
             return self._size_to_files[size]
         else:
@@ -299,9 +336,18 @@ class FileTree:
         return sum(len(szfiles) \
                 for (sz, szfiles) in self._size_to_files.items())
 
+    def get_all_sizes(self):
+        """
+        Return list of all file sizes in the tree.
+        """
+        if not self._size_to_files_ready:
+            self.scan_subtree()
+        return list(self._size_to_files.keys())
+
     def get_all_file_ids(self):
         """
         Return a dictionary view object with all file ids.
+        (Used by outside utils.)
         """
         self.scan_subtree()
         return self._size_to_files.keys()
@@ -309,6 +355,7 @@ class FileTree:
     def get_all_dirs(self):
         """
         Return a set with all dir objects by scanning the full tree.
+        (Used by outside utils.)
         """
         self.scan_subtree()
         res = [self.rootdir_obj]
@@ -316,13 +363,6 @@ class FileTree:
             if obj.is_dir():
                 res.append(obj)
         return res
-
-    def get_all_sizes(self):
-        """
-        Return list of all file sizes in the tree.
-        """
-        sz_to_files_map = self.size_to_files()
-        return sz_to_files_map.keys()
 
     def id_to_file(self, fid):
         """
@@ -400,6 +440,10 @@ class FileTree:
             if dir_obj in self._glob_matchers:
                 del self._glob_matchers[dir_obj]
             dir_obj.mark_scanned()
+            if self._use_metadata:
+                self._unscanned_dir_count -= 1
+                if not self._unscanned_dir_count:
+                    self._size_to_files_ready = True
 
     def _scan_dir_process_file(self, parent_obj, obj_id,
                                basename, raw_metadata):
@@ -412,14 +456,14 @@ class FileTree:
                     obj_path = \
                         self.printable_path(os.path.join(
                             parent_obj.get_relpath(), basename))
-                    pr.info("ignored empty file %s" % obj_path)
+                    pr.debug("ignored empty file %s", obj_path)
                     return
                 elif (self._maxsize is not None and \
                         file_obj.file_metadata.size > self._maxsize):
                     obj_path = \
                         self.printable_path(os.path.join(
                             parent_obj.get_relpath(), basename))
-                    pr.info("ignored large file %s" % obj_path)
+                    pr.debug("ignored large file %s", obj_path)
                     return
         self._add_path(file_obj, parent_obj, basename)
 
@@ -428,6 +472,8 @@ class FileTree:
         self._next_free_dir_id = max(self._next_free_dir_id, obj_id + 1)
         subdir_obj = self._new_dir_obj(obj_id)
         parent_obj.add_entry(basename, subdir_obj)
+        if self._use_metadata:
+            self._unscanned_dir_count += 1
         if parent_glob:
             subdir_glob_matcher = parent_glob.to_subdir(basename)
             if subdir_glob_matcher:
@@ -444,7 +490,8 @@ class FileTree:
             if obj.is_dir() and not obj.was_scanned():
                 self.scan_dir(obj, clear_on_exit=False)
                 self.scan_subtree(obj, clear_on_exit=False)
-        if start_dir == self.rootdir_obj:
+        if self._use_metadata and \
+                (start_dir == self.rootdir_obj or self._unscanned_dir_count == 0):
             self._size_to_files_ready = True
         if clear_on_exit:
             pr.progress("")
@@ -464,19 +511,18 @@ class FileTree:
             if os.path.islink(obj_abspath): # This must be tested for first.
                 if glob_matcher \
                         and glob_matcher.exclude_file_bname(obj_bname):
-                    pr.info("excluded symlink " + obj_abspath)
+                    pr.debug("excluded symlink %s", obj_abspath)
                     yield (obj_bname, None, ExcludedItem, None)
                 else:
-                    pr.info("ignored symlink " + obj_abspath)
+                    pr.debug("ignored symlink %s", obj_abspath)
                     yield (obj_bname, None, OtherItem, None)
             elif os.path.isfile(obj_abspath):
                 if glob_matcher \
                         and glob_matcher.exclude_file_bname(obj_bname):
-                    pr.info("excluded file " + obj_abspath)
+                    pr.debug("excluded file %s", obj_abspath)
                     yield (obj_bname, None, ExcludedItem, None)
                 elif not os.access(obj_abspath, os.R_OK):
-                    pr.info("ignored no-read-access file " \
-                               + obj_abspath)
+                    pr.debug("ignored no-read-access file %s", obj_abspath)
                     yield (obj_bname, None, OtherItem, None)
                 else:
                     obj_relpath = os.path.join(dir_relpath, obj_bname)
@@ -487,11 +533,10 @@ class FileTree:
             elif os.path.isdir(obj_abspath):
                 if glob_matcher \
                         and glob_matcher.exclude_dir_bname(obj_bname):
-                    pr.info("excluded dir " + obj_abspath)
+                    pr.debug("excluded dir %s", obj_abspath)
                     yield (obj_bname, None, ExcludedItem, None)
                 elif not os.access(obj_abspath, os.R_OK + os.X_OK):
-                    pr.info("ignored no-rx-access dir " \
-                               + obj_abspath)
+                    pr.debug("ignored no-rx-access dir %s", obj_abspath)
                     yield (obj_bname, None, OtherItem, None)
                 else:
                     dir_id = self._next_free_dir_id
@@ -500,12 +545,10 @@ class FileTree:
             else:
                 if glob_matcher \
                         and glob_matcher.exclude_file_bname(obj_bname):
-                    pr.info(
-                        "excluded special file " + obj_abspath)
+                    pr.debug("excluded special file %s", obj_abspath)
                     yield (obj_bname, None, ExcludedItem, None)
                 else:
-                    pr.info(
-                        "ignored special file " + obj_abspath)
+                    pr.debug("ignored special file %s", obj_abspath)
                     yield (obj_bname, None, OtherItem, None)
 
     def _add_path(self, file_obj, dir_obj, fbasename):

@@ -33,7 +33,8 @@ import abc
 
 from psutil import disk_partitions
 
-from lnsync_pkg.blockhash import BlockHasher
+from lnsync_pkg.hasher_functions import FileHasherXXHASH64
+from lnsync_pkg.miscutils import MIN_INT64, MAX_INT64
 
 FSE = sys.getfilesystemencoding() # Always UTF8 on Linux.
 
@@ -74,6 +75,7 @@ class IDComputer:
     """
     Compute persistent, unique file serial numbers for files in a
     tree rooted at a given path.
+    The returned value is a signed 64-bit integer.
     """
     def __init__(self, topdir_path, file_sys):
         "Init with rootdir on which relative file paths are based."
@@ -101,6 +103,7 @@ class HashPathIDComputer(IDComputer):
     Return hash(path)+size(file)+smallint as file serial number.
     """
     def __init__(self, topdir_path, file_sys):
+        self._hasher = FileHasherXXHASH64()
         self._hash_plus_size_uniq = {}
         super().__init__(topdir_path, file_sys)
         self.subdir_invariant = False
@@ -111,12 +114,17 @@ class HashPathIDComputer(IDComputer):
         file_id = 0
         for path_component in rel_path.split(os.sep)[:-1]:
             path_component = path_component.encode(FSE, "surrogateescape")
-            file_id += BlockHasher.hash_data(path_component)
+            file_id += self._hasher.hash_datum(path_component)
         file_id += stat_data.st_size
         while file_id in self._hash_plus_size_uniq:
             if self._hash_plus_size_uniq[file_id] == rel_path:
                 return file_id
             else:
                 file_id += 1
+        # Make sure we return a (signed) int64
+        if file_id > MAX_INT64:
+            file_id %= (MAX_INT64 + 1)
+        if file_id < MIN_INT64:
+            file_id = - (-file_id % (-MIN_INT64+1))
         self._hash_plus_size_uniq[file_id] = rel_path
         return file_id

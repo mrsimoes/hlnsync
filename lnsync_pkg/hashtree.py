@@ -23,7 +23,7 @@ import subprocess
 import abc
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.miscutils import uint64_to_int64
-from lnsync_pkg.blockhash import BlockHasher
+from lnsync_pkg.hasher_functions import HasherManager
 from lnsync_pkg.modaltype import onofftype, Mode
 from lnsync_pkg.propdbmanager import PropDBManager, PropDBException, \
     PropDBError, PropDBNoValue
@@ -54,8 +54,17 @@ class FileHashTree(FilePropTree, metaclass=onofftype):
         self._size_as_hash = size_as_hash
         if size_as_hash:
             self.get_prop = self._get_prop_as_size
+            self.db_get_uptodate_prop = self._db_get_uptodate_prop_as_size
         super(FileHashTree, self).__init__(dbmaker=dbmaker, **kwargs)
         self._print_progress = None
+
+    def _get_prop_as_size(self, file_obj):
+        # Bypass everything SQL-related and just return the file size obtained
+        # from scanning the source file tree (disk or offline).
+        return file_obj.file_metadata.size
+
+    def _db_get_uptodate_prop_as_size(self, file_obj, delete_stale):
+        breakpoint()
 
     def set_dbmanager(self, db):
         super(FileHashTree, self).set_dbmanager(db)
@@ -75,28 +84,11 @@ class FileHashTree(FilePropTree, metaclass=onofftype):
             pr.info("closing %s" % (self._print_progress,))
         return super(FileHashTree, self).__exit__(exc_type, exc_val, exc_tb)
 
-    def _get_prop_as_size(self, file_obj):
-        # Bypass everything SQL-related and just return the file size obtained
-        # from scanning the source file tree (disk or offline).
-        return file_obj.file_metadata.size
-
     @abc.abstractmethod
     def prop_from_source(self, file_obj):
         pass
 
-class NoSizeFileItem(FileItemProp):
-    __slots__ = ()
-
-    def __init__(self, file_id, metadata):
-        super().__init__(file_id, metadata)
-        self.file_metadata.size = 1
-
 class FileHashTreeOnline(FileHashTree, mode=Mode.ONLINE):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        if not BlockHasher.is_full_content_hasher():
-            self._file_type = NoSizeFileItem
-
     def prop_from_source(self, file_obj):
         """
         Recompute and return prop for source file at relpath (online mode only).
@@ -106,9 +98,12 @@ class FileHashTreeOnline(FileHashTree, mode=Mode.ONLINE):
         abspath = self.rel_to_abs(relpath)
         pr.progress("hashing:%s" % self.printable_path(relpath))
         try:
-            val = BlockHasher.hash_file(abspath)
+            val = HasherManager.get_hasher().hash_file(abspath)
         except Exception as exc: # TODO tighten this.
-            raise RuntimeError("while hashing") from exc
+            raise TreeError(
+                f"while hashing: {str(exc)}",
+                file_obj=file_obj,
+                tree=self) from exc
         if not isinstance(val, int):
             raise  RuntimeError("bad property value %s" % (val,))
         return val

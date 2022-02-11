@@ -12,6 +12,8 @@ Command handlers do_sync, do_rsync, do_search, do_cmp, do_check
 import os
 import subprocess
 import shlex
+import shutil
+import tempfile
 
 from lnsync_pkg.sqlpropdb import SQLPropDBManager
 import lnsync_pkg.printutils as pr
@@ -26,9 +28,14 @@ from lnsync_pkg.hashtree import \
     FileHashTree, TreeError, PropDBException
 from lnsync_pkg.lnsync_treeargs import TreeLocation, TreeLocationOnline
 from lnsync_pkg.modaltype import Mode
+from lnsync_pkg.hasher_functions import HasherManager
+
+def hash_depends_on_file_size():
+    return HasherManager.get_hasher().hash_depends_on_file_size()
 
 def do_rehash(location_arg, relpaths):
     error_found = False
+
     def rehash_one_file(tree, pr_path, file_obj):
         nonlocal error_found
         try:
@@ -36,15 +43,15 @@ def do_rehash(location_arg, relpaths):
         except PropDBException as exc:
  # TODO when rehashing a dir, be more specific
  #      find a suitable path of file_obj, under our dir.
-            msg = "rehashing %s: %s" %  (pr_path, str(exc))
-            pr.error(msg)
+            pr.error(f"rehashing {pr_path}: {exc}")
             error_found = True
+
     with FileHashTree(**location_arg.kws()) as tree:
         for relpath in relpaths:
             tree_obj = tree.path_to_obj(relpath)
             pr_path = tree.printable_path(relpath, pprint=shlex.quote)
             if tree_obj is None:
-                pr.error("not found:", pr_path)
+                pr.error(f"not found:{pr_path}")
                 error_found = True
             elif tree_obj.is_file():
                 rehash_one_file(tree, pr_path, tree_obj)
@@ -52,34 +59,29 @@ def do_rehash(location_arg, relpaths):
                 for file_obj in tree.walk_files(tree_obj):
                     rehash_one_file(tree, pr_path, file_obj)
             else:
-                pr.error("not a file or dir:", pr_path)
+                pr.error(f"not a file or dir:{pr_path}")
                 error_found = True
+
     return 1 if error_found else 0
 
-def do_lookup(location_arg, relpaths):
+def do_lookup(args):
+    location_arg = args.location
+    relpaths = args.relpaths
     error_found = False
     with FileHashTree(**location_arg.kws()) as tree:
         for relpath in relpaths:
             file_obj = tree.path_to_obj(relpath)
             fname = tree.printable_path(relpath, pprint=shlex.quote)
             if file_obj is None:
-                pr.error("not found:", fname)
+                pr.error(f"not found:{fname}")
                 error_found = True
                 continue
             elif file_obj.is_file():
-                try:
-                    tree.recompute_prop(file_obj)
-                except PropDBException as exc:
-                    pr.debug(str(exc))
-                    msg = "rehashing %s: %s" %  (fname, str(exc))
-                    pr.error(msg)
-                    error_found = True
-                    continue
-                hash_val = tree.get_prop(file_obj)
                 # getprop Raises TreeError if no prop.
-                pr.print("%d %s" % (hash_val, fname))
+                prop = tree.get_prop(file_obj)
+                pr.print(prop, fname)
             else:
-                pr.error("not a file: " + fname)
+                pr.error(f"not a file:{fname}")
                 error_found = True
     return 1 if error_found else 0
 
@@ -94,16 +96,14 @@ def do_sync(args):
                 raise NotImplementedError("match failed")
             tgt_tree.writeback = not args.dry_run
             for cmd in matcher.generate_sync_cmds():
-                args_str = " ".join(
-                    shlex.quote(arg) for arg in cmd[1:])
-                cmd_str = cmd[0] + " " + args_str
+                cmd_str = \
+                    cmd[0] + " " + " ".join(shlex.quote(arg) for arg in cmd[1:])
                 pr.print(cmd_str)
                 try:
                     tgt_tree.exec_cmd(cmd)
                 except OSError as exc:
                     # E.g. if no linking support on target.
-                    msg = "could not execute: " + cmd_str
-                    raise RuntimeError(msg) from exc
+                    raise RuntimeError(f"could not execute: {cmd_str}") from exc
             pr.progress("syncing empty dirs")
             dirs_to_rm_set = set()
             dirs_to_rm_list = []
@@ -133,6 +133,8 @@ def do_sync(args):
 def do_rsync(args, rsync_args):
     """
     Print (and optionally execute) a suitable rsync command.
+    args.source and args.target are TreeLocation objects,
+    with gathered command-line options in the namespace attribute.
     """
     src_dir = args.source.real_location
     tgt_dir = args.target.real_location
@@ -155,21 +157,6 @@ def do_rsync(args, rsync_args):
         rsync_opts.append("-n")
 
     # Exclude databases at both ends.
-    def exclude_custom_dblocation(namespace):
-        if namespace.dblocation is not None:
-            dbdirpath = os.path.dirname(namespace.dblocation)
-            relpath = \
-                is_subdir(dbdirpath, namespace.real_location)
-            if relpath:
-                if os.path.samefile(dbdirpath, namespace.real_location):
-                    relpath = ""
-                relpath = os.path.join(relpath,
-                                       os.path.basename(namespace.dblocation))
-                rsync_opts.append(
-                    '--exclude=%s' % shlex.quote('/'+relpath))
-    exclude_custom_dblocation(args.source)
-    exclude_custom_dblocation(args.target)
-
     TreeLocation.merge_patterns(args.source, args.target)
     for pat in getattr(args.source.namespace, "exclude_patterns", []):
         cmd_pattern = pat.to_str()
@@ -286,7 +273,7 @@ def do_cmp(args):
             else:
                 err_path = \
                     right_tree.printable_path(path, pprint=shlex.quote)
-            pr.error("reading %s, ignoring" % (err_path,))
+            pr.error(f"reading {err_path}, ignoring")
             return_code = 1
         else:
             if left_prop != right_prop:
@@ -296,7 +283,7 @@ def do_cmp(args):
                 if not args.hard_links or \
                     (len(left_obj.relpaths) \
                         == len(right_obj.relpaths) == 1):
-                    pr.info("files equal: " + path)
+                    pr.debug("files equal: %s", path)
                 else:
                     left_links = list(left_obj.relpaths)
                     right_links = list(right_obj.relpaths)
@@ -305,14 +292,13 @@ def do_cmp(args):
                             left_links.remove(left_link)
                             right_links.remove(left_link)
                     if not left_links and not right_links:
-                        pr.info("files equal: " + path)
+                        pr.debug("files equal: %s", path)
                     else:
-                        msg = "files equal, link mismatch: " + path
-                        pr.print(msg)
+                        pr.print("files equal, link mismatch:", path)
                         for lnk in left_links:
-                            pr.print(" left only link: " + lnk)
+                            pr.print(" left only link:", lnk)
                         for lnk in right_links:
-                            pr.print(" right only link: " + lnk)
+                            pr.print(" right only link:", lnk)
                         return_code = 1
 
     def cmp_subdir(dirpaths_to_visit, cur_dirpath):
@@ -362,8 +348,8 @@ def do_cmp(args):
                 if not left_obj.is_file() and not left_obj.is_dir():
                     pr.print("left other vs right dir: " + right_path)
             else:
-                raise RuntimeError(
-                    "unexpected right object: " + right_path)
+                raise RuntimeError("unexpected right object: {right_path}")
+
     with FileHashTree(**args.leftlocation.kws()) as left_tree:
         with FileHashTree(**args.rightlocation.kws()) as right_tree:
             if args.hard_links:
@@ -376,18 +362,17 @@ def do_cmp(args):
 
 def do_check(args):
     def gen_all_paths(tree):
-        for _obj, _parent, path in tree.walk_paths(
-                files=True, dirs=False, recurse=True):
+        for _obj, _parent, path in \
+                tree.walk_paths(files=True, dirs=False, recurse=True):
             yield path
     with FileHashTree(**args.location.kws()) as tree:
         assert tree.db.mode == Mode.ONLINE, \
             "do_check tree not online"
-
         if not args.relpaths:
             num_items = tree.get_file_count()
             items_are_paths = False
             paths_gen = gen_all_paths(tree)
-        else:
+        else: # We're iterating over file objects in the tree, not paths.
             num_items = len(args.relpaths)
             items_are_paths = True
             paths_gen = args.relpaths
@@ -431,28 +416,26 @@ def do_check(args):
 
         file_objs_checked_ok = set()
         file_objs_checked_bad = set()
+        files_skipped = 0
+        files_error = 0
         try:
             index = 1
-            files_skipped = 0
-            files_error = 0
             for path in paths_gen:
+                fobj = tree.path_to_obj(path)
+                if fobj in file_objs_checked_ok \
+                   or fobj in file_objs_checked_bad:
+                    if items_are_paths:
+                        index += 1
+                    continue
                 with pr.ProgressPrefix("%d/%d:" % (index, num_items)):
-                    fobj = tree.path_to_obj(path)
-                    if fobj in file_objs_checked_ok \
-                       or fobj in file_objs_checked_bad:
-                        if items_are_paths:
-                            index += 1
-                        continue
                     try:
                         check_one_file(fobj, path)
                     except PropDBException as exc:
-                        pr.warning("not checked: %s" % (str(exc),))
+                        pr.warning(f"not checked: {path} ({exc})")
                         files_skipped += 1
                         continue
                     except TreeError as exc:
-                        pr.warning(
-                            "while checking %s: %s" % \
-                                (path, str(exc)))
+                        pr.warning(f"while checking {path}: {exc}")
                         files_error += 1
                         continue
                     index += 1
@@ -472,13 +455,20 @@ def do_fdupes(args):
     with FileHashTree.listof(targ.kws() for targ in args.locations) \
             as all_trees:
         FileHashTree.scan_trees_async(all_trees)
-        for file_sz in fdupes.sizes_repeated(all_trees, args.hard_links):
-            with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
-                for _hash, located_files in \
+        if hash_depends_on_file_size():
+            for file_sz in fdupes.sizes_repeated(all_trees, args.hard_links):
+                with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
+                    for _hash, located_files in \
+                            fdupes.located_files_repeated_of_size(
+                                all_trees, file_sz, args.hard_links):
+                        return_code = 0
+                        grouper.add_group(located_files)
+        else:
+            for _hash, located_files in \
                     fdupes.located_files_repeated_of_size(
-                            all_trees, file_sz, args.hard_links):
-                    return_code = 0
-                    grouper.add_group(located_files)
+                        all_trees, None, args.hard_links):
+                return_code = 0
+                grouper.add_group(located_files)
         grouper.flush()
     return return_code
 
@@ -491,13 +481,19 @@ def do_onall(args):
                                args.sameline, args.sort)
     treekws = [loc.kws() for loc in args.locations]
     with FileHashTree.listof(treekws) as all_trees:
-        FileHashTree.scan_trees_async(all_trees)
-        for file_sz in sorted(fdupes.sizes_onall(all_trees)):
-            with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
-                for _hash, located_files in \
-                        fdupes.located_files_onall_of_size(all_trees, file_sz):
-                    return_code = 0
-                    grouper.add_group(located_files)
+        if hash_depends_on_file_size():
+            FileHashTree.scan_trees_async(all_trees)
+            for file_sz in sorted(fdupes.sizes_onall(all_trees)):
+                with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
+                    for _hash, located_files in \
+                            fdupes.located_files_onall_of_size(all_trees, file_sz):
+                        return_code = 0
+                        grouper.add_group(located_files)
+        else:
+            for _hash, located_files in \
+                    fdupes.located_files_onall_of_size(all_trees, None):
+                return_code = 0
+                grouper.add_group(located_files)
         grouper.flush()
     return return_code
 
@@ -507,20 +503,26 @@ def do_onfirstonly(args):
         GroupedFileListPrinter(args.hard_links, args.all_links,
                                args.sameline, args.sort)
     with FileHashTree.listof(loc.kws() for loc in args.locations) as all_trees:
-        FileHashTree.scan_trees_async(all_trees)
-        first_tree = all_trees[0]
-        other_trees = all_trees[1:]
-        for file_sz in sorted(first_tree.get_all_sizes()):
-            if not any(tr.size_to_files(file_sz) for tr in other_trees):
-                for fobj in first_tree.size_to_files(file_sz):
-                    grouper.add_group({first_tree: [fobj]})
-                continue
-            with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
-                for _hash, located_files in \
-                        fdupes.located_files_onfirstonly_of_size(
-                                all_trees, file_sz):
-                    return_code = 0
-                    grouper.add_group(located_files)
+        if hash_depends_on_file_size():
+            FileHashTree.scan_trees_async(all_trees)
+            first_tree = all_trees[0]
+            other_trees = all_trees[1:]
+            for file_sz in sorted(first_tree.get_all_sizes()):
+                with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
+                    if not any(tr.size_to_files(file_sz) for tr in other_trees):
+                        for fobj in first_tree.size_to_files_gen(file_sz):
+                            grouper.add_group({first_tree: [fobj]})
+                        continue
+                    for _hash, located_files in \
+                            fdupes.located_files_onfirstonly_of_size(
+                                    all_trees, file_sz):
+                        return_code = 0
+                        grouper.add_group(located_files)
+        else:
+            for _hash, located_files in \
+                    fdupes.located_files_onfirstonly_of_size(all_trees, None):
+                return_code = 0
+                grouper.add_group(located_files)
         grouper.flush()
     return return_code
 
@@ -528,6 +530,35 @@ def do_onlastonly(args):
     locs = args.locations
     locs[0], locs[-1] = locs[-1], locs[0]
     return do_onfirstonly(args)
+
+def do_onfirstnotonly(args):
+    return_code = 1 # Default if none are found.
+    grouper = \
+        GroupedFileListPrinter(args.hard_links, args.all_links,
+                               args.sameline, args.sort)
+    with FileHashTree.listof(loc.kws() for loc in args.locations) as all_trees:
+        if hash_depends_on_file_size():
+            FileHashTree.scan_trees_async(all_trees)
+            first_tree = all_trees[0]
+            other_trees = all_trees[1:]
+            for file_sz in sorted(first_tree.get_all_sizes()):
+                with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
+                    if not any(tr.size_to_files(file_sz) for tr in other_trees):
+                        continue
+                    for _hash, located_files in \
+                            fdupes.located_files_onfirstnotonly_of_size(
+                                    all_trees, file_sz):
+                        return_code = 0
+                        grouper.add_group(located_files)
+        else:
+            raise NotImplementedError
+        grouper.flush()
+    return return_code
+
+def do_onlastnotonly(args):
+    locs = args.locations
+    locs[0], locs[-1] = locs[-1], locs[0]
+    return do_onfirstnotonly(args)
 
 def do_aliases(args):
     """
@@ -559,7 +590,7 @@ def make_treekwargs(location, dbprefix=None):
 
 def do_subdir(args):
     kwargs = args.topdir.kws()
-    dbprefix = args.topdir.dbprefix
+    dbprefix = args.topdir.get_dbprefix()
     src_dir = kwargs["topdir_path"]
     src_dbpath = kwargs["dbkwargs"]["dbpath"]
     tgt_dir = os.path.join(src_dir, args.relativesubdir)
@@ -570,7 +601,7 @@ def do_subdir(args):
         raise NotImplementedError(msg)
     with SQLPropDBManager(src_dbpath, mode=Mode.ONLINE) as src_db:
         with SQLPropDBManager(tgt_dbpath, mode=Mode.ONLINE) as tgt_db:
-            src_db.merge_prop_values(tgt_db)
+            src_db.merge_prop_values_into(tgt_db)
     with FileHashTree(**make_treekwargs(tgt_dir, dbprefix)) \
             as tgt_tree:
         tgt_tree.db_purge_old_entries()
@@ -588,13 +619,35 @@ def do_mkoffline(args):
         if args.forcewrite:
             os.remove(args.outputpath)
         else:
-            raise TreeError("will not overwrite: %s" % (args.outputpath,))
-    with FileHashTree(**args.sourcedir.kws()) as src_tree:
-        src_tree.db_update_all()
-        with SQLPropDBManager(args.outputpath, mode=Mode.OFFLINE) as tgt_db:
-            with pr.ProgressPrefix("saving: "):
-                src_tree.db_store_offline(tgt_db)
-            tgt_db.compact()
+            msg = f"will not overwrite without the -f option: {args.outputpath}"
+            raise TreeError(msg)
+    dbdir = args.sourcedir.compute_dbdir()
+    tmpdir = None
+
+    def filter_if_has_property(fid):
+        fobj = src_tree.id_to_file(fid)
+        if fobj is None:
+            return False
+        else:
+            return src_tree.id_to_file(fid).prop_value is not None
+
+    try:
+        if not os.access(dbdir, os.W_OK):
+            pr.warning(f"no write access to {dbdir}; using a temp database")
+            tmpdir = tempfile.mkdtemp(prefix='lnsync-tmp-database')
+            args.sourcedir.set_dblocation(os.path.join(tmpdir, 'tmp.db'))
+        with FileHashTree(**args.sourcedir.kws()) as src_tree:
+            src_tree.db_update_all()
+            with SQLPropDBManager(args.outputpath, mode=Mode.OFFLINE) as tgt_db:
+                src_tree.db_store_offline(
+                    tgt_db,
+                    filter_fn=filter_if_has_property)
+                pr.progress("compacting database...")
+                tgt_db.compact()
+    finally:
+        if tmpdir:
+            shutil.rmtree(tmpdir)
+
 
 def do_cleandb(args):
     """
@@ -602,9 +655,10 @@ def do_cleandb(args):
     """
     with FileHashTree(**args.location.kws()) as tree:
         def describe_db(prefix):
-            st = os.stat(tree.db.dbpath)
+            file_stat = os.stat(tree.db.dbpath)
             props = tree.db.count_prop_entries()
-            pr.print(f"{prefix}file size: {bytes2human(st.st_size)}, hashes: {props}")
+            pr.print(f"{prefix}file size: {bytes2human(file_stat.st_size)}, " \
+                     f"hashes: {props}")
         pr.print("database file:", tree.db.dbpath)
         describe_db("before: ")
         pr.progress("removing offline data")

@@ -46,7 +46,8 @@ class TreePairMatcher:
         if src_tree.db.mode == Mode.ONLINE and \
             (is_subdir(src_tree.topdir_path, tgt_tree.topdir_path) \
              or is_subdir(tgt_tree.topdir_path, src_tree.topdir_path)):
-            raise ValueError("Source tree cannot be a subdirectory of target.")
+            raise ValueError(
+                "Source and target cannot be subdirectories of each other.")
         self.trees = SrcTgt(src_tree, tgt_tree)
         self.mt_state = State(self.trees)
         self._have_match = False

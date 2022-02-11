@@ -8,31 +8,32 @@ Overview:
 
 Each command accepts one or more tree positional arguments (directories and/or
 offline tree files), as well as optional arguments. ('positional' and 'optional'
-as in argparse.)
+in the argparse.)
 
-Some optional arguments are tree optional argument.
+Some optional arguments are tree optional arguments.
 
-Tree optional arguments come in scoped varieties, in that they either apply to
-the next tree in the command line, to all trees in the command line subsequent
-to that option, or to all trees in the command line.
-
-This is achieved via using the argparse_scoped_options module.
+Tree optional arguments come in scoped varieties, in that they apply to the next
+tree in the command line, or to all subsequent trees in the command line, or to
+all trees in the command line. This is achieved using the
+argparse_scoped_options module.
 
 Tree positional arguments make use of both argparse type and argparse action.
 
-- The type (TreeLocation, TreeLocationOnline, TreeLocationOffline) gathers
-information (partial, incomplete, provisional) that will be later used to create
-the actual Tree object.
+- The type TreeLocation (and its subtypes TreeLocationOnline and
+TreeLocationOffline) gathers information (partial, incomplete, provisional)
+that will be later used to create the actual Tree object.
 
 - The action (TreeLocationAction) records the tree positional arguments found
 and applies the options found so far. There is also an Action to process a list
 of trees for arguments with nargs='+'.
 
-Tree optional arguments use an Action:
+Optional tree arguments use this arparse Action:
 
 - TreeOptionAction registers that option in the parser namespace and also, if
 the scope of this optional argument is global, it is applied the all previous
-tree arguments.
+tree arguments. (The subtype ConfigTreeOptionAction automatically searches the
+config file for values for the option.)
+
 """
 
 # pylint: disable=no-member, redefined-builtin, unused-import
@@ -42,12 +43,12 @@ import argparse
 
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.glob_matcher import Pattern, ExcludePattern, merge_pattern_lists
-from lnsync_pkg.miscutils import is_subdir
+from lnsync_pkg.miscutils import is_subdir, append_to_namespace_list
 from lnsync_pkg.modaltype import Mode
 from lnsync_pkg.argparse_scoped import ScOptArgAction, ScPosArgAction, Scope
 from lnsync_pkg.prefixdbname import mode_from_location, pick_db_basename
 from lnsync_pkg.argparse_config import NoSectionError, NoOptionError, \
-    ArgumentParserConfig
+    ArgumentParserConfig, ConfigError
 
 class TreeLocationAction(ScPosArgAction):
     def __call__(self, parser, namespace, val, option_string=None):
@@ -57,26 +58,30 @@ class TreeLocationAction(ScPosArgAction):
         for tree_arg in tree_args:
             this_location = tree_arg.real_location
             if this_location in locations_seen:
-                raise ValueError(
-                    "duplicate location: " + this_location)
+                raise ValueError("duplicate location: " + this_location)
+            else:
+                locations_seen.append(this_location)
 
 #class TreeLocationListAction(ScPosArgListAction):
 #    pass
 
 class TreeLocation:
     """
-    Immutable data: mode, cmd_location (what was specified in the command line),
-    (either a directory in online mode or a database file in offline mode).
+    Gather, mostly from the command-line, data required to create tree location
+    objects. Create the necessary keyword arguments to init those objects.
 
-    Also available: real_path (the canonical form of cmd_location, via
-    os.path.realpath).
+    Notable attributes:
+    - cmd_location: the tree location, exactly as specified in the command line,
+    either a directory in online mode or a database file in offline mode).
+    - real_path (the canonical form of cmd_location, via os.path.realpath).
 
-    For online trees, the dblocation can only be determined when a database
-    prefix or an altogether different database location is provided.
-    An explicit db location takes precedence over a db prefix
+    The dblocation attribute is only be set when a database prefix, or a
+    specific alternative database location, is provided via the set_dbprefix
+    or set_dblocation methods. (An explicit alternative location takes
+    precedence over a db prefix.)
 
-    Attributes that will results in Tree object init keywords are stored
-    in the namespace attribute (a dictionary, actually).
+    Attributes that will result in Tree object init keywords are stored
+    in the namespace attribute.
     """
 
     def __new__(cls, location, mandatory_mode=Mode.NONE):
@@ -101,7 +106,6 @@ class TreeLocation:
         self.real_location = os.path.realpath(self.cmd_location)
         self.namespace = argparse.Namespace()
         setattr(self.namespace, "mode", self.mode)
-        setattr(self.namespace, "exclude_patterns", [ExcludePattern("/lnsync-*.db"),])
 
     def kws(self):
         """
@@ -113,7 +117,8 @@ class TreeLocation:
     @staticmethod
     def merge_patterns(tree1, tree2):
         """
-        Merge the exclude/include patterns of tree1 and tree2
+        Merge the exclude/include patterns of tree1 and tree2 and update them
+        both.
         """
         tr1_pats = getattr(tree1.namespace, "exclude_patterns")
         tr2_pats = getattr(tree2.namespace, "exclude_patterns")
@@ -125,16 +130,16 @@ class TreeLocation:
 class TreeLocationOffline(TreeLocation):
     def __init__(self, cmd_location):
         super().__init__(cmd_location)
+        setattr(self.namespace, "exclude_patterns", [])
         setattr(self.namespace, "topdir_path", None)
         setattr(self.namespace, "dbkwargs", \
                 {"dbpath":self.cmd_location, "topdir_path":None})
 
+# The following have no effect on offline trees:
     def set_dbprefix(self, _dbprefix):
-        # dbprefix option has no effect on offline trees
         pass
 
     def set_dblocation(self, _dbpath):
-        # dblocation option has no effect on offline trees"
         pass
 
     def set_alt_dbrootdir(self, alt_dbrootdir):
@@ -148,23 +153,48 @@ class TreeLocationOnline(TreeLocation):
         super().__init__(cmd_location)
         self._kws = None
         self.dblocation = None
-        self.dbprefix = None
+        self._dbprefix = None
         setattr(self.namespace, "topdir_path", self.cmd_location)
         self._alt_dbrootdir = None
 
     def set_dbprefix(self, dbprefix):
         assert self._kws is None, \
             "TLO: cannot set dbprefix after kwargs generated"
-        self.dbprefix = dbprefix
+        self._dbprefix = dbprefix
+        append_to_namespace_list(
+            self.namespace,
+            "exclude_patterns",
+            [ExcludePattern(f"/{dbprefix}-*.db"),])
 
-    def set_dblocation(self, dbpath):
+    def get_dbprefix(self):
+        assert self._dbprefix is not None, \
+            "TLO: dbprefix not set"
+        return self._dbprefix
+
+    def set_dblocation(self, dblocation):
+        if getattr(self, "dblocation"):
+            msg = f"tree at '{self.real_location}': " \
+                  f"db location already set to '{self.dblocation}' " \
+                  f"while trying to set it at '{dblocation}"
+            raise ConfigError(msg)
         assert self._kws is None, \
             "TLO: cannot set db;location after kwargs generated"
-        assert isinstance(dbpath, str), \
+        assert isinstance(dblocation, str), \
             "TLO: dbpath must be a string"
-        if os.path.exists(dbpath) and not os.path.isfile(dbpath):
-            raise ValueError("not a file: " + dbpath)
-        self.dblocation = dbpath
+        if os.path.exists(dblocation) and not os.path.isfile(dblocation):
+            raise ValueError("not a file: " + dblocation)
+        dblocation = os.path.realpath(dblocation)
+        self.dblocation = dblocation
+        dbdirpath = os.path.dirname(dblocation)
+        relpath = \
+            is_subdir(dbdirpath, self.real_location)
+        if relpath:
+            if os.path.samefile(dbdirpath, self.real_location):
+                relpath = ""
+            relpath = os.path.join(relpath, os.path.basename(dblocation))
+            setattr(self.namespace,
+                    "exclude_patterns",
+                    [ExcludePattern(f"/{relpath}"),])
 
     def set_alt_dbrootdir(self, alt_dbrootdir):
         """
@@ -173,8 +203,8 @@ class TreeLocationOnline(TreeLocation):
         set it as our dbrootdir.
         Prefer more specific dbrootdirs if multiple calls are made.
         """
-        if not is_subdir(self.real_location, alt_dbrootdir) \
-                or os.path.samefile(self.real_location, alt_dbrootdir):
+        if not is_subdir(self.real_location, alt_dbrootdir):
+#                or os.path.samefile(self.real_location, alt_dbrootdir):
             pr.trace("dbrootdir does not apply: %s for %s",
                      alt_dbrootdir, self.real_location)
             return
@@ -195,34 +225,38 @@ class TreeLocationOnline(TreeLocation):
         """
         if not is_subdir(self.real_location, alt_dbrootdir_parent) \
            or os.path.samefile(self.real_location, alt_dbrootdir_parent):
+            pr.trace("dbrootdir_parent does not apply: %s for %s",
+                     alt_dbrootdir_parent, self.real_location)
             return
         relpath = os.path.relpath(self.real_location, alt_dbrootdir_parent)
         subdir = relpath.split(os.sep)[0]
         self.set_alt_dbrootdir(os.path.join(alt_dbrootdir_parent, subdir))
 
+    def compute_dbdir(self):
+        assert self._dbprefix is not None, "TLO: missing dbprefix"
+        if self._alt_dbrootdir is not None:
+            db_dir = self._alt_dbrootdir
+        else:
+            db_dir = self.cmd_location
+        return db_dir
+
     def kws(self):
         if self._kws is None:
             if self.dblocation is None:
-                assert self.dbprefix is not None, \
-                    "TLO: missing dbprefix"
-                if self._alt_dbrootdir is not None:
-                    db_dir = self._alt_dbrootdir
-                else:
-                    db_dir = self.cmd_location
-                db_basename = pick_db_basename(db_dir, self.dbprefix)
+                db_dir = self.compute_dbdir()
+                db_basename = pick_db_basename(db_dir, self._dbprefix)
                 dblocation = os.path.join(db_dir, db_basename)
-                pr.info("using %s for %s" %
-                        (dblocation, self.cmd_location))
+                pr.info("using %s for %s" % (dblocation, self.cmd_location))
             else:
                 dblocation = self.dblocation
-            setattr(self.namespace, "dbkwargs", \
+            setattr(
+                self.namespace, "dbkwargs",
                 {"dbpath":dblocation, "topdir_path":self.cmd_location})
             self._kws = super().kws()
         return self._kws
 
 
 class TreeOptionAction(ScOptArgAction):
-
     def sc_get_namespace(self, pos_val):
         return pos_val.namespace
 
@@ -242,8 +276,9 @@ class TreeOptionAction(ScOptArgAction):
             return pat.matches_path(location)
         return comparator
 
-    def is_config_file_enabled(self):
-        return ArgumentParserConfig.is_enabled()
+    @staticmethod
+    def is_config_file_enabled():
+        return ArgumentParserConfig.is_active()
 
     def get_from_tree_section(self, arg_tree, key, merge_sections, type=None):
         """
@@ -257,7 +292,7 @@ class TreeOptionAction(ScOptArgAction):
         val = ArgumentParserConfig.get_from_section(
             key,
             type=type,
-            sect=section_name_comparator,
+            section=section_name_comparator,
             merge_sections=merge_sections,
             nargs=self.nargs)
         return val
@@ -277,16 +312,19 @@ class ConfigTreeOptionAction(TreeOptionAction):
             elif opt_str.startswith("-"):
                 short_opt_str = opt_str[1:]
             else:
-                assert False, \
-                    "unexpected option string: %s" % opt_str
+                assert False, "unexpected option string: %s" % opt_str
             try:
                 vals = self.get_from_tree_section(
                     pos_val,
                     short_opt_str,
                     type=self.type,
                     merge_sections=True)
-                if vals:
-                    self.sc_action(
-                        parser, namespace, pos_val, vals, opt_str)
             except (NoSectionError, NoOptionError):
-                pass
+                continue
+            try:
+                self.sc_action(
+                    parser, namespace, pos_val, vals, opt_str)
+            except Exception as exc:
+                exc_type = type(exc)
+                msg = f"while applying config {opt_str}: {str(exc)}"
+                raise exc_type(msg) from exc

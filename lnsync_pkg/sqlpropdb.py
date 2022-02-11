@@ -49,7 +49,7 @@ from lnsync_pkg.glob_matcher import ExcludePattern
 from lnsync_pkg.filetree import Metadata
 from lnsync_pkg.modaltype import Mode
 from lnsync_pkg.propdbmanager import PropDBManager, PropDBError, PropDBNoValue
-from lnsync_pkg.blockhash import BlockHasher, HasherAlgo, HasherFunction
+from lnsync_pkg.hasher_functions import HasherManager, HasherFunctionID
 
 # From str (surrogates escaped) to db (binary) value and back.
 FSE = sys.getfilesystemencoding() # Always UTF8 on Linux.
@@ -57,36 +57,44 @@ FSE = sys.getfilesystemencoding() # Always UTF8 on Linux.
 class UserVersion(BitField):
     """
     SQLite user_version field, a 31 bit non-negative integer, as bit struct:
-    Bits 0-3: database version (currently  1)
-    Bits 4-7: Hasher function used in this database.
+    Bits 0-3:  4 bits for the database version (currently  1)
+    Bits 4-11: 8 bits for the Hasher function used in this database.
         (Default value 0 is XXHASH32 for backwards compatibility.)
     """
-    CUR_DB_FORMAT_VERSION = 1
 
-    def __init__(self, value=0):
+    CUR_DB_FORMAT_VERSION = 1
+    VERSION_SLICE = slice(0, 4)
+    HASHER_SLICE = slice(4, 12)
+
+
+    def __init__(self, value=None):
+        if value is None:
+            value = self.CUR_DB_FORMAT_VERSION
         super().__init__(value)
-        self.get_hasher_function() # Test for valid value.
+        self.get_hasher_function_id() # Test for valid value.
 
     def get_db_version(self):
-        return self[0:4]
+        return self[self.VERSION_SLICE]
 
-    def set_db_version(self, db_version=None):
-        if db_version is None:
-            db_version = self.CUR_DB_FORMAT_VERSION
-        self[0:4] = db_version
+    def set_db_version(self, db_version):
+        self[self.VERSION_SLICE] = db_version
 
-    def get_hasher_function(self):
+    def get_hasher_function_id(self):
         """
         May raise an exception if the code does not match any hasher function.
         """
-        hasher_funcion = HasherFunction(self[4:8])
-        return hasher_funcion
+        hasher_function = HasherFunctionID(self[self.HASHER_SLICE])
+        return hasher_function
 
     def set_hasher_function(self, hasher_function):
-        self[4:8] = hasher_function
+        self[self.HASHER_SLICE] = hasher_function
 
     def get_raw_value(self):
         return self._d
+
+    def __str__(self):
+        return f"<version:{self.get_db_version()};" \
+               f"hash:{self.get_hasher_function_id()}>"
 
 class SQLPropDBManager(PropDBManager):
     """
@@ -102,13 +110,14 @@ class SQLPropDBManager(PropDBManager):
     _current_online_cx = {} # dbpath -> [enter_count, db_cx].
 
     @staticmethod
-    def _sql_text_factory(stored_bin):
-        return stored_bin.decode(FSE, "surrogateescape")
-
-    @staticmethod
     def _sql_text_storer(string):
         # Escape single quotes for sqlite3.
         return string.replace("'", "''").encode(FSE, "surrogateescape")
+
+    @staticmethod
+    def _sql_text_factory(stored_bin):
+        # De-escape doubled single quotes from sqlite3.
+        return stored_bin.replace(b"''", b"'").decode(FSE, "surrogateescape")
 
     def __init__(self, dbpath, **kwargs):
         """
@@ -180,6 +189,9 @@ class SQLPropDBManager(PropDBManager):
         pass
 
     def set_prop_metadata(self, file_id, prop_value, metadata):
+        """
+        prop_value must be in int64 signed range.
+        """
         cmd = "INSERT INTO prop VALUES (?, ?, ?, ?, ?);"
         cmd_args = (file_id, prop_value,
                     metadata.size, metadata.mtime, metadata.ctime)
@@ -196,8 +208,8 @@ class SQLPropDBManager(PropDBManager):
         the time the property was computed.
         Return (prop_value, metadata) or raise PropDBError.
         """
+        cmd = "SELECT value, size, mtime, ctime FROM prop WHERE file_id=?;"
         try:
-            cmd = "SELECT value, size, mtime, ctime FROM prop WHERE file_id=?;"
             res = self._cx.execute(cmd, (file_id,)).fetchone()
         except sqlite3.Error as exc:
             raise PropDBError("reading: " + self.dbpath) from exc
@@ -205,7 +217,7 @@ class SQLPropDBManager(PropDBManager):
             raise PropDBNoValue("no value for file id %d at DB %s" % \
                     (file_id, self.dbpath))
         elif not isinstance(res[0], int):
-            raise PropDBError("prop value not integer for file id %d" % (file_id,))
+            raise PropDBError(f"prop value not integer for file id {file_id}")
         res = (res[0], Metadata(res[1], res[2], res[3]))
         return res
 
@@ -232,16 +244,19 @@ class SQLPropDBManager(PropDBManager):
                 temp_cx.commit()
                 temp_cx.close()
 
-    def _set_user_version(self, cx):
+    def get_hasher_function_id(self):
+        return self._get_user_version().get_hasher_function_id()
+
+    @staticmethod
+    def _set_user_version(connection):
         """
         Stamp a new database.
         """
         user_version = UserVersion()
-        user_version.set_db_version()
-        hasher_function = HasherFunction.from_current_hasher_algo()
-        user_version.set_hasher_function(hasher_function)
+        hasher_function_id = HasherManager.get_hasher_function_id()
+        user_version.set_hasher_function(hasher_function_id)
         user_version = user_version.get_raw_value()
-        cx.execute("PRAGMA user_version=%d;" % user_version)
+        connection.execute("PRAGMA user_version=%d;" % user_version)
 
     def _get_user_version(self):
         """
@@ -258,8 +273,8 @@ class SQLPropDBManager(PropDBManager):
                 raise PropDBError("negative user_version")
             try:
                 user_ver = UserVersion(user_ver)
-            except Exception:
-                raise PropDBError("invalid user_version")
+            except Exception as exc:
+                raise PropDBError("invalid user_version") from exc
         except sqlite3.Error as exc:
             msg = "cannot open DB at " + self.dbpath
             raise PropDBError(msg) from exc
@@ -274,23 +289,22 @@ class SQLPropDBManager(PropDBManager):
             raise PropDBError("unreadable DB at " + self.dbpath)
         db_ver = ver.get_db_version()
         try:
-            db_hasher_func = ver.get_hasher_function()
+            db_hasher_func = ver.get_hasher_function_id()
         except Exception as exc: # TODO: be more specific
             msg = "unknown hasher function for %s" % (self.dbpath,)
             raise PropDBError(msg) from exc
-        curr_hasher_func = HasherFunction.from_current_hasher_algo()
-        if db_hasher_func != curr_hasher_func:
-            errstr = "incompatible hash functions: required %s, but found %s at %s" % \
-                     (str(curr_hasher_func), str(db_hasher_func), self.dbpath)
+        curr_hasher_function_id = HasherManager.get_hasher_function_id()
+        if db_hasher_func != curr_hasher_function_id:
+            errstr = f"incompatible hash functions: " \
+                     f"required {curr_hasher_function_id}, " \
+                     f"but found {db_hasher_func} at {self.dbpath}"
             raise PropDBError(errstr)
         if db_ver < UserVersion.CUR_DB_FORMAT_VERSION:
-            msg = "update old database format=%d at %s" \
-                  % (ver, self.dbpath)
-            raise PropDBError(msg)
+            raise PropDBError( \
+                    f"update old database format={ver} at {self.dbpath}")
         elif db_ver > UserVersion.CUR_DB_FORMAT_VERSION:
-            msg = "cannot handle new database format=%d at %s" \
-                  % (ver, self.dbpath)
-            raise PropDBError(msg)
+            raise PropDBError( \
+                    f"cannot handle new database format={ver} at {self.dbpath}")
 
     def rm_offline_tree(self):
         """
@@ -321,41 +335,49 @@ class SQLPropDBManager(PropDBManager):
         self._cx.commit()
         self._cx.execute("VACUUM;")
 
-    def merge_prop_values(self, tgt_db, remap_id_fn=None, filter_fn=None):
+    def import_table_from_external_file(self, table_name, external_db_file):
+        self._cx.execute("ATTACH ? AS SOURCE;", (external_db_file,))
+        self._cx.execute(
+            f"DELETE FROM {table_name} " \
+            f"WHERE file_id IN (SELECT file_id FROM SOURCE.{table_name}) ;")
+        self._cx.execute(
+            f"INSERT INTO {table_name} SELECT * FROM SOURCE.{table_name} ;")
+
+    def update_table_from_list(self, table_name, values):
+        test_cursor = self._cx.cursor()
+        test_cursor.executemany(
+            f"SELECT * FROM {table_name} WHERE file_id=?;",
+            [(res[0],) for res in values])
+        existing_records = test_cursor.fetchall()
+        test_cursor.executemany(
+            f"DELETE FROM {table_name} WHERE file_id=?;",
+            [rec[0] for rec in existing_records])
+        put_cursor = self._cx.cursor()
+        put_cursor.executemany(
+            f"INSERT INTO {table_name} VALUES (?, ?, ?, ?, ?);",
+            values)
+
+    def merge_prop_values_into(self, tgt_db, remap_id_fn=None, filter_fn=None):
         """
-        Update db at target with prop values from source, overwriting if
-        necessary.
+        Update tgt_db with our prop values, overwriting if necessary.
         """
-        tgt_cx = tgt_db._cx
         prop_tab = self._tables_prop[0]
         tab_name = prop_tab[0]
         if remap_id_fn is None and filter_fn is None:
-            tgt_cx.execute("ATTACH ? AS SOURCE;", (self.dbpath,))
-            cmd = ("DELETE FROM %s "
-                   "WHERE file_id IN (SELECT file_id FROM SOURCE.%s) ;")
-            tgt_cx.execute(cmd % (tab_name, tab_name))
-            cmd = "INSERT INTO %s SELECT * FROM SOURCE.%s ;"
-            tgt_cx.execute(cmd % (tab_name, tab_name))
+            tgt_db.import_table_from_external_file(tab_name, self.dbpath)
         else:
-            get_cmd = "SELECT * FROM %s;" % (tab_name,)
-            get_cursor = self._cx.cursor()
-            test_cursor = tgt_cx.cursor()
-            put_cursor = tgt_cx.cursor()
-            cmd_test_if = "SELECT * FROM %s WHERE file_id=?;" % tab_name
-            cmd_delete = "DELETE FROM %s WHERE file_id=?;" % tab_name
-            cmd_insert = "INSERT INTO %s VALUES (?, ?, ?, ?, ?);" % tab_name
-            for res in get_cursor.execute(get_cmd).fetchall():
+            values_list = []
+            for res in self._cx.cursor().execute(\
+                    f"SELECT * FROM {tab_name};").fetchall():
                 # Apply map to fileid.
-                if remap_id_fn is None:
-                    resout = res
-                else:
-                    resout = (remap_id_fn(res[0]), \
-                              res[1], res[2], res[3], res[4])
-                if filter_fn is None or filter_fn(resout[0]):
-                    test_cursor.execute(cmd_test_if, (resout[0],))
-                    if test_cursor.fetchall():
-                        test_cursor.execute(cmd_delete, (resout[0],))
-                    put_cursor.execute(cmd_insert, resout)
+                obj_id = res[0]
+                if remap_id_fn is not None:
+                    obj_id = remap_id_fn(obj_id)
+                if filter_fn is None or filter_fn(obj_id):
+                    if obj_id != res[0]:
+                        res = (obj_id, res[1], res[2], res[3], res[4])
+                    values_list.append(res)
+            tgt_db.update_table_from_list(tab_name, values_list)
         tgt_db.compact()
 
 class SQLPropDBManagerOffline(SQLPropDBManager, mode=Mode.OFFLINE):
@@ -385,8 +407,14 @@ class SQLPropDBManagerOffline(SQLPropDBManager, mode=Mode.OFFLINE):
         Store file metadata to the database.
         """
         cmd = "INSERT INTO metadata VALUES (?, ?, ?, ?);"
-        self._cx.execute(
-            cmd, (f_id, metadata.size, metadata.mtime, metadata.ctime))
+        try:
+            self._cx.execute(
+                cmd, (f_id, metadata.size, metadata.mtime, metadata.ctime))
+        except Exception as exc:
+            msg = "setting offline metadata of: " + self.dbpath
+            msg += ": " + str(exc)
+            raise PropDBError(msg) from exc
+
 
     def get_offline_metadata(self, file_id):
         """
@@ -396,18 +424,19 @@ class SQLPropDBManagerOffline(SQLPropDBManager, mode=Mode.OFFLINE):
         try:
             size, mtime, ctime = self._cx.execute(cmd, (file_id,)).fetchone()
         except Exception as exc:
-            msg = "Cannot read database %s offline metadata for file id %d." \
-                % (self.dbpath, file_id)
-            raise PropDBError(msg) from exc
+            raise PropDBError( \
+                f"Cannot read database {self.dbpath} offline metadata " \
+                f"for file id {file_id}.") from exc
         return Metadata(size, mtime, ctime)
 
     def put_dir_entry(self, dir_id, obj_basename, obj_id, obj_is_file):
         """
         Store a dir entry into the database-stores file tree.
         """
-        cmd = "INSERT INTO dir_contents VALUES (?, ?, ?, ?);"
+        cmd_str = "INSERT INTO dir_contents VALUES (?, ?, ?, ?);"
         self._cx.execute(
-            cmd, (dir_id, self._sql_text_storer(obj_basename), obj_id, obj_is_file))
+            cmd_str,
+            (dir_id, self._sql_text_storer(obj_basename), obj_id, obj_is_file))
 
     def get_dir_entries(self, dir_id):
         """
@@ -419,13 +448,6 @@ class SQLPropDBManagerOffline(SQLPropDBManager, mode=Mode.OFFLINE):
         for db_rec in cur.fetchall():
             yield (self._sql_text_factory(db_rec[0]), db_rec[1], db_rec[2])
 
-    def get_glob_patterns(self):
-        """
-        Exclude anything matching "/lnsync-*.db"
-        """
-        return [ExcludePattern("/lnsync-*.db"),]
-
-
 class SQLPropDBManagerOnline(SQLPropDBManager, mode=Mode.ONLINE):
     """
     In online mode:
@@ -434,25 +456,32 @@ class SQLPropDBManagerOnline(SQLPropDBManager, mode=Mode.ONLINE):
     - File ids may be removed.
     - File property values may be merged in.
     """
+
     def __init__(self, dbpath, topdir_path=None, **kwargs):
+        if topdir_path is None:
+            topdir_path = os.path.dirname(dbpath)
         self.treeroot = topdir_path
         super().__init__(dbpath, root=topdir_path, **kwargs)
 
-    def get_glob_patterns(self):
+    @staticmethod
+    def get_glob_patterns_static(dbpath, rootdir):
         """
-        Exclude the SQLite3 main database and -journal, -wal and other tmp
-        files. The database may be located anywhere, even away from the tree
+        Exclude the SQLite3 aux files: <DBNAME>-journal, <<DBNAME>-wal and other
+        tmp files. The database may be located anywhere, even away from the tree
         root.
         """
-        common_excludes = super().get_glob_patterns()
-        if self.treeroot and is_subdir(self.dbpath, self.treeroot):
-            relpath = os.path.relpath(self.dbpath, self.treeroot)
-            return common_excludes + \
-                   [ExcludePattern("/" + relpath),
-                    ExcludePattern("/" + relpath + "-*"),
+        dbpath_dir = os.path.dirname(dbpath)
+        if rootdir and is_subdir(dbpath_dir, rootdir):
+            relpath = os.path.relpath(dbpath, rootdir)
+            return [ExcludePattern("/" + relpath + "-*"),
                     ]
         else:
-            return common_excludes
+            return []
+
+    def get_glob_patterns(self):
+        return SQLPropDBManagerOnline.get_glob_patterns_static(
+            self.dbpath,
+            self.treeroot)
 
     def _all_tables(self):
         return SQLPropDBManager._tables_prop
@@ -465,16 +494,16 @@ class SQLPropDBManagerOnline(SQLPropDBManager, mode=Mode.ONLINE):
             file_ids = (file_ids,)
         try:
             del_prop_cmd = "DELETE FROM prop WHERE file_id=?;"
-            vals = [(fid,) for fid in file_ids]
-            self._cx.executemany(del_prop_cmd, vals)
+            file_ids = [(fid,) for fid in file_ids]
+            self._cx.executemany(del_prop_cmd, file_ids)
         except sqlite3.Error as exc:
-            msg = "could not delete from %s file ids: %s (%s)" % \
-                (self.dbpath, file_ids, exc)
+            msg = f"could not delete from {self.dbpath} file ids: " \
+                  f"{file_ids} ({exc})"
             raise PropDBError(msg) from exc
 
     def delete_ids_except(self, file_ids_to_keep):
         """
-        Delete from the db all ids, exdeletecept those given. Expensive.
+        Delete from the db all ids, except those given. Expensive.
         """
         ids_to_delete = set()
         if not isinstance(file_ids_to_keep, set):

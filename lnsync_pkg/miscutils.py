@@ -19,6 +19,7 @@ MAX_INT64 = 2**63 - 1
 MIN_INT64 = -2**63
 
 def uint64_to_int64(value):
+    value = int(value)
     if value <= MAX_INT64:
         res = value
     else:
@@ -28,6 +29,7 @@ def uint64_to_int64(value):
     return res
 
 def int64_to_uint64(value):
+    value = int(value)
     if value >= 0:
         res = value
     else:
@@ -87,32 +89,37 @@ def wrap_text(text, width):
                   text.split(' '),)
 
 def set_exception_hook():
-    def info(type, value, tb):
+    def info(exc_type, value, traceback):
         if hasattr(sys, 'ps1') or not sys.stderr.isatty():
         # we are in interactive mode or we don't have a tty-like
         # device, so we call the default hook
-            sys.__excepthook__(type, value, tb)
+            sys.__excepthook__(exc_type, value, traceback)
         else:
+            v = sys.exc_info()
             import traceback
             import pdb
             # we are NOT in interactive mode, print the exception...
-            traceback.print_exception(type, value, tb)
-            print()
+            traceback.print_exception(exc_type, value, traceback)
             # ...then start the debugger in post-mortem mode.
             # pdb.pm() # deprecated
-            pdb.post_mortem(tb) # more "modern"
+            pdb.post_mortem(traceback) # more "modern"
     sys.excepthook = info
 
 def is_subdir(subdir, topdir):
     """
-    Test if subdir is topdir or is a subdit of topdir.
+    Test if subdir is topdir or a subdir of topdir.
     Return either False or the relative path (which is never an empty string).
     """
+    assert os.path.isdir(subdir) and os.path.isdir(topdir), \
+        f"is_subdir: expected dirs, got: '{subdir}' and '{topdir}'"
     relative = os.path.relpath(subdir, topdir) # (path, start)
     if relative.startswith(os.pardir + os.sep):
         return False
     else:
         return relative
+
+def is_subdir_strict(subdir, topdir):
+    return is_subdir(subdir, topdir) and not os.path.samefile(subdir, topdir)
 
 class ListContextManager:
     """
@@ -188,3 +195,9 @@ class BitField:
 
     def __int__(self):
         return self._d
+
+def append_to_namespace_list(namespace, key, more_items):
+    prev_items = getattr(namespace, key, None)
+    if prev_items is None: # It could have been None before.
+        prev_items = []
+    setattr(namespace, key, prev_items + more_items)
