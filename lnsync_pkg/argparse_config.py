@@ -34,7 +34,7 @@ If a custom parser_class is needed in add_subparsers, make sure it derives
 from ArgumentParserConfigSubparser.
 
 Optional argument values are collected from a specific ini-section in the
-config file. The default section is OPTIONALS, but this is configurable: 
+config file. The default section is OPTIONALS, but this is configurable:
     ArgumentParserConfig.set_optionals_section(section_name):
 
 Before parsing, for each key in the optionals section matching an option string
@@ -79,16 +79,21 @@ def file_expanduser(path):
 ConfigError = configparser.Error
 
 NoSectionError = configparser.NoSectionError
+
 NoOptionError = configparser.NoOptionError
 
 class NoConfigFileSet(ConfigError):
     pass
+
 class NoValidConfigFile(NoConfigFileSet):
     pass
+
 class NoOptionalsSection(ConfigError):
     pass
+
 class NoUniqueSectionError(ConfigError):
     pass
+
 class WrongValueCountError(ConfigError):
     pass
 
@@ -262,6 +267,8 @@ class ArgumentParserConfigSubparser(argparse.ArgumentParser):
         Excluded actions: ChooseConfigFileSet, ChooseConfigFileUnset, help
         actions.
         """
+        if not ArgumentParserConfig.is_active():
+            return
         for action in self._actions:
             if isinstance(action, (ChooseConfigFileSet, ChooseConfigFileUnset)):
                 continue
@@ -371,7 +378,6 @@ class ArgumentParserConfig(ArgumentParserConfigSubparser):
             return sect_name.replace("-", "_")
         cfg_parser = configparser.ConfigParser()
         cfg_parser.optionxform = hyphens_to_underscores
-        ArgumentParserConfig._cfg_mgr = cfg_parser
         read_files = None
         for fname in filenames:
             if os.path.exists(fname):
@@ -385,9 +391,10 @@ class ArgumentParserConfig(ArgumentParserConfigSubparser):
             raise NoValidConfigFile(
                 "trying to read: %s" % (",".join(filenames),))
         opt_section = ArgumentParserConfig._optionals_section
-        if opt_section not in ArgumentParserConfig._cfg_mgr.keys():
+        if opt_section not in cfg_parser.keys():
             raise NoOptionalsSection(
                 f"no section {opt_section} in: {read_files[0]}")
+        ArgumentParserConfig._cfg_mgr = cfg_parser
         ArgumentParserConfig._all_optional_section_keys = \
             set(cfg_parser[opt_section].keys())
 
@@ -418,7 +425,7 @@ class ArgumentParserConfig(ArgumentParserConfigSubparser):
         else:
             parser_class = ArgumentParserConfigSubparser
 
-        class _HandlerWrapper(object):
+        class _HandlerWrapper:
             def __init__(self, original_handler):
                 self._ap_handler = original_handler
 
@@ -461,8 +468,8 @@ class ArgumentParserConfig(ArgumentParserConfigSubparser):
             try:
                 self._read_config_files(
                     *ArgumentParserConfig._default_config_files)
-            except NoValidConfigFile:
-                pass
+            except NoValidConfigFile as exc:
+                pr.info(exc)
         ChooseConfigAction.set_cli_option(fo_val)
         res = super().parse_known_args(args, namespace)
         all_keys = ArgumentParserConfig._all_optional_section_keys
@@ -477,20 +484,26 @@ class ArgumentParserConfig(ArgumentParserConfigSubparser):
 # At parse time, they do nothing.
 
 class ChooseConfigAction(argparse.Action):
+
     _config_file_option = None
+
     def _inconsistent_usage(self):
         raise argparse.ArgumentError(
             self, '--no-config and --config are mutually exclusive')
+
     def _config_options_first(self):
         raise argparse.ArgumentError(
             self,
             '--no-config and --config must be first on the command line')
+
     def __call__(self, parser, namespace, value, option_string=None):
         if self._config_file_option == CLIConfig.NO_CHOICE:
             self._config_options_first()
+
     @classmethod
     def set_cli_option(cls, cli_option):
         cls._config_file_option = cli_option
+
     @classmethod
     def get_cli_option(cls):
         if cls._config_file_option is None:

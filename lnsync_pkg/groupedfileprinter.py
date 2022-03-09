@@ -27,13 +27,19 @@ or concatenated on a single line.
 """
 
 import lnsync_pkg.printutils as pr
+from lnsync_pkg.human2bytes import bytes2human
 
 class GroupedFileListPrinter:
     """
     Output filepaths in groups, either separated by empty lines or by empty
     spaces, sorted or not.
     """
-    def __init__(self, hard_links, all_links, sameline, sort):
+    # Clients may set these global options in the class.
+    sameline = False
+    sort = False
+    showsize = False
+
+    def __init__(self, hard_links, all_links):
         """
          - sameline: if True, filenames in each group are printed in the same
         line, separated by spaces, with filename spaces and backslashes escaped;
@@ -46,8 +52,6 @@ class GroupedFileListPrinter:
         """
         self.hard_links = hard_links
         self.all_links = all_links
-        self.sameline = sameline
-        self.sort = sort
         if self.sort:
             self.groups = []
         self._output_group_linebreak = False # Not before first group.
@@ -93,9 +97,16 @@ class GroupedFileListPrinter:
             pr.print(self._built_line)
 
     def _print_file(self, tree, fobj):
+        if self.showsize:
+            size = fobj.file_metadata.size
+            size_str = f"{bytes2human(size)}"
+        else:
+            size_str = ""
         if self.sameline:
             if self._built_line != "":
                 self._built_line += " "
+            else:
+                self._built_line = size_str + " "
             for k, relpath in enumerate(fobj.relpaths):
                 if k == 0:
                     include, prefix = (True, "")
@@ -112,9 +123,9 @@ class GroupedFileListPrinter:
         else:
             for k, relpath in enumerate(fobj.relpaths):
                 if k == 0:
-                    include, prefix = (True, "")
+                    include, prefix = (True, size_str + " ")
                 elif not self.hard_links:
-                    include, prefix = (True, "")
+                    include, prefix = (True, size_str + " ")
                 elif self.all_links:
                     include, prefix = (True, " ")
                 else:

@@ -232,9 +232,10 @@ def _exit_func():
 
 atexit.register(_exit_func)
 
-if __name__ == "__main__":
+def cli_demo():
     import time
     import random
+    global option_verbosity
     if len(sys.argv) > 1:
         intext = str(sys.argv[1])
     else:
@@ -250,7 +251,10 @@ if __name__ == "__main__":
         warning(msg + " warning")
         trace("%s debug ", msg)
         trace("%s trace", msg)
-    for k in range(20):
+    for _k in range(20):
         for it in sys.argv[1:]:
             progress(it * random.randint(1, 5))
             time.sleep(0.5)
+
+if __name__ == "__main__":
+    cli_demo()

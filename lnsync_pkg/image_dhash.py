@@ -5,11 +5,16 @@ Compute a 64bit image dhash (difference hash).
 """
 
 import sys
-import numpy as np
-from PIL import Image
+
+try:
+    import numpy as np
+    from PIL import Image
+except ModuleNotFoundError as exc:
+    raise RuntimeError("please install modules 'numpy' and 'pillow'") from exc
+except Exception as exc:
+    raise RuntimeError(str(exc)) from exc
 
 from lnsync_pkg.miscutils import uint64_to_int64
-import lnsync_pkg.printutils as pr
 
 assert sys.byteorder == 'little'
 
@@ -18,7 +23,7 @@ ZERO_U64 = np.uint64(0)
 DHASH_WIDTH = 8
 
 class DHash:
-    __slots__ = 'value' # A uint64.
+    __slots__ = ('value',) # A uint64.
 
     def __init__(self, value):
         self.value = np.uint64(value)

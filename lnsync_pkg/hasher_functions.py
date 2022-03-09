@@ -116,12 +116,9 @@ class ImageHasher(DigestHasher):
     _hasher_function_id = HasherFunctionID.IMAGE_DHASH
 
     def __init__(self):
-        try:
-            from lnsync_pkg.image_dhash import dhash
-        except Exception as exc:
-            msg = f"Cannot load PIL module: {str(exc)}"
-            raise RuntimeError(msg) from exc
-        self.dhash = dhash
+        super().__init__()
+        import lnsync_pkg.image_dhash as image_dhash
+        self.dhash = image_dhash.dhash
 
     def hash_file(self, fpath):
         dhash_val = self.dhash(fpath)
@@ -133,9 +130,11 @@ class ThumbnailHasher(ImageHasher):
     def __init__(self):
         super().__init__()
         try:
-            from lnsync_pkg.gnome_thumbnailer import GnomeThumbnailer
-        except Exception as exc:
-            msg = f"cannot load gnome thumbnail module: {str(exc)}"
+            from lnsync_pkg.gnome_thumbnailer \
+                import GnomeThumbnailer, ThumbnailerError
+        except ThumbnailerError as exc:
+            msg = f"cannot load gnome thumbnail module: {str(exc)};"
+            msg += "'gnome-desktop' is needed"
             raise RuntimeError(msg) from exc
         self.gnome_thumbnailer = GnomeThumbnailer()
 
@@ -149,11 +148,8 @@ class ThumbnailMirrorHasher(ThumbnailHasher):
 
     def __init__(self):
         super().__init__()
-        try:
-            from lnsync_pkg.image_dhash import dhash_symmetric
-        except Exception:
-            raise RuntimeError("Cannot load PIL module")
-        self.dhash = dhash_symmetric
+        import lnsync_pkg.image_dhash as image_dhash
+        self.dhash = image_dhash.dhash_symmetric
 
 class ExternalHasher(DigestHasher):
     _hasher_function_id = HasherFunctionID.EXTERNAL

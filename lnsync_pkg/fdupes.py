@@ -20,7 +20,8 @@ And for FileItem:
 
 from collections import defaultdict
 
-from lnsync_pkg.proptree import FileItem, TreeError
+from lnsync_pkg.miscutils import is_iter_empty
+from lnsync_pkg.proptree import FileItem, TreeNoPropValueError
 import lnsync_pkg.printutils as pr
 
 def _get_prop(tree, fobj):
@@ -31,9 +32,9 @@ def _get_prop(tree, fobj):
         "getprop: not a FileItem"
     try:
         prop = tree.get_prop(fobj)
-    except TreeError as exc:
-        pr.error(
-            "processing file id %d, ignored: %s" % (fobj.file_id, str(exc)))
+    except TreeNoPropValueError as exc:
+        if exc.first_try:
+            pr.error(f"processing, ignored: {str(exc)}")
         return None
     else:
         return prop
@@ -47,7 +48,7 @@ def sizes_repeated(all_trees, hard_links):
     """
     sizes_seen_once, sizes_seen_twice = set(), set()
     for tree in all_trees:
-        this_tree_sizes = list(tree.get_all_sizes())
+        this_tree_sizes = list(tree.get_possible_sizes())
         this_tree_sizes.sort()
         for file_sz in this_tree_sizes:
             if file_sz in sizes_seen_twice:
@@ -58,6 +59,8 @@ def sizes_repeated(all_trees, hard_links):
                 yield file_sz
             else:
                 files_this_sz = tree.size_to_files(file_sz)
+                if not files_this_sz:
+                    continue
                 if len(files_this_sz) > 1 or \
                         (not hard_links and len(files_this_sz[0].relpaths) > 1):
                 # If not hard_links, a size value seen once for an id
@@ -106,20 +109,15 @@ def sizes_onall(all_trees):
     if len(all_trees) >= 1:
         pr.progress("scanning sizes")
         trees_sizescounts = \
-            [(tree, len(tree.get_all_sizes())) for tree in all_trees]
+            [(tree, len(tree.get_possible_sizes())) for tree in all_trees]
         pr.progress("sorting sizes")
         trees_sizescounts.sort(key=lambda ts: ts[1])
         first_tree = trees_sizescounts[0][0]
-        other_trees = [ts[0] for ts in trees_sizescounts[1:]]
-        candidate_sizes = list(first_tree.get_all_sizes())
+        candidate_sizes = list(first_tree.get_possible_sizes())
         candidate_sizes.sort()
         for file_sz in candidate_sizes:
-            good_size = True
-            for tree in other_trees:
-                if not tree.size_to_files(file_sz):
-                    good_size = False
-                    break
-            if good_size:
+            if all(not is_iter_empty(tr.size_to_files_gen(file_sz)) \
+                   for tr in all_trees): # Check also first tree.
                 yield file_sz
 
 def _located_files_by_prop_of_size(trees, prop, file_sz):
@@ -176,7 +174,7 @@ def located_files_onfirstonly_of_size(all_trees, file_sz):
     and no files in any other trees.
     Assume there is some file of that size on the first tree.
     If file_sz is None, go over all files.
-    Yield prop=None if size is specified and there is a single file of that size.
+    Yield prop=None if size is specified and there's a single file of that size.
     """
     def _props_onfirstonly_of_size(trees, file_sz):
         """
@@ -232,7 +230,7 @@ def located_files_onfirstnotonly_of_size(all_trees, file_sz=None):
     and some file in any of the other trees.
     If a size is given:
         Assume there is some file of that size on the first tree.
-    If no size is given:
+    If file_sz is None, go over all files.
         Consider all files, which doesn't require pre-scanning the tree.
     """
     def _props_onfirstnotonly_of_size(trees, file_sz):
@@ -240,6 +238,7 @@ def located_files_onfirstnotonly_of_size(all_trees, file_sz=None):
         Considering only files of the given size, yield all props with at
         least one file in the first tree and some file on some of the remaining
         trees.
+        If file_sz is None, consider all files.
         """
         candidate_props = set()
         good_props = set()
@@ -262,11 +261,6 @@ def located_files_onfirstnotonly_of_size(all_trees, file_sz=None):
         yield from good_props
 
     if len(all_trees) >= 2:
-        first_tree = all_trees[0]
-        assert first_tree.size_to_files(file_sz), \
-            "located_files_onfirstonly_of_size: expected files"
-        # If there is a single file of that size in the first tree,
-        # no need to compute the property value. TODO
         for prop in _props_onfirstnotonly_of_size(all_trees, file_sz):
             yield prop, \
                   _located_files_by_prop_of_size(

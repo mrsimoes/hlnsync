@@ -391,7 +391,8 @@ class SQLPropDBManagerOffline(SQLPropDBManager, mode=Mode.OFFLINE):
             # Make sure we have the root directory contents, at least.
         super().__enter__()
         try:
-            _res = list(self.get_dir_entries(0)) # Force evaluation.
+            # Read all entries of root dir.
+            _res = list(self.get_dir_entries(0))
         except Exception as exc:
             self.__exit__(*sys.exc_info())
             msg = "not an offline database, was it created with mkoffline? "
@@ -415,6 +416,88 @@ class SQLPropDBManagerOffline(SQLPropDBManager, mode=Mode.OFFLINE):
             msg += ": " + str(exc)
             raise PropDBError(msg) from exc
 
+    def get_all_sizes(self):
+        """
+        Return a set with all sizes for which there is some file in the tree.
+        """
+        cmd = "SELECT size FROM metadata;"
+        try:
+            sizes = {res[0] for res in self._cx.execute(cmd).fetchall()}
+        except Exception as exc:
+            raise PropDBError( \
+                f"Cannot read database {self.dbpath} sizes: {exc}.")
+        return sizes
+
+    def get_max_size(self):
+        """
+        Return the max of all sizes, or None if there are no files.
+        """
+        cmd = "SELECT MAX(size) FROM metadata;"
+        breakpoint()
+        try:
+            res = self._cx.execute(cmd).fetchone()
+            if res is not None:
+                res = res[0]
+        except Exception as exc:
+            raise PropDBError( \
+                f"Cannot read database {self.dbpath} sizes: {exc}.")
+        return res
+
+    def get_file_ids_for_size(self, size):
+        """
+        Return a set of all file ids with given size.
+        """
+        cmd = "SELECT file_id FROM metadata WHERE size=?;"
+        try:
+            sizes = {res[0] for res \
+                     in self._cx.execute(cmd, (size,)).fetchall()}
+        except Exception as exc:
+            msg = f"Cannot read database {self.dbpath} files for size {size}."
+            raise PropDBError(msg) from exc
+        return sizes
+
+    def get_file_ids_for_basename_glob(self, glob_string):
+        """
+        Return a set of all file ids for which some path has a basename
+        matching the given pattern.
+        """
+        cmd = "SELECT obj_id " + \
+              "FROM dir_contents WHERE " + \
+              "like(?, cast(obj_basename as TEXT)) AND obj_is_file=TRUE;"
+        glob_string = glob_string.replace("%", r"\%").replace("*", "%")
+        # TODO escaped *?
+        try:
+            sizes = {res[0] for res \
+                     in self._cx.execute(cmd, (glob_string,)).fetchall()}
+        except Exception as exc:
+            msg = f"Cannot read {self.dbpath}: files matching {glob_string}."
+            raise PropDBError(msg) from exc
+        return sizes
+
+    def get_all_file_ids(self, min_size=None, max_size=None):
+        """
+        Return a set of all file ids, optionally limiting to those
+        with min_size <= size <= max_size.
+        If min_size or max_size are not give, the corresponding
+        restriction does not apply.
+        """
+        if min_size is None and max_size is None:
+            cmd = "SELECT file_id FROM metadata;"
+            args = (cmd,)
+        else:
+            if min_size is None:
+                min_size = -1
+            if max_size is None:
+                max_size = self.get_max_size()
+            cmd = "SELECT file_id FROM metadata WHERE size >= ? AND size <= ?;"
+            args = (cmd, (min_size, max_size))
+        try:
+            file_ids = {res[0] for res in self._cx.execute(*args).fetchall()}
+        except Exception as exc:
+            msg = f"Cannot read from {self.dbpath} files with " \
+                  f"size in ({min_size, max_size}): {exc}."
+            raise PropDBError(msg)
+        return file_ids
 
     def get_offline_metadata(self, file_id):
         """
@@ -447,6 +530,24 @@ class SQLPropDBManagerOffline(SQLPropDBManager, mode=Mode.OFFLINE):
         cur = self._cx.execute(cmd, (dir_id,))
         for db_rec in cur.fetchall():
             yield (self._sql_text_factory(db_rec[0]), db_rec[1], db_rec[2])
+
+    def get_all_containing_dirs_of_file(self, file_id):
+        """
+        Return a set of all dir ids containing this file_id.
+        """
+        cmd = "SELECT parent_id FROM dir_contents " \
+              "WHERE obj_id=? AND obj_is_file=1;"
+        cur = self._cx.execute(cmd, (file_id,))
+        return {res[0] for res in cur.fetchall()}
+
+    def get_containing_dir_of_dir(self, dir_id):
+        """
+        Return a set of all dir ids containing this file_id.
+        """
+        cmd = "SELECT parent_id FROM dir_contents " \
+              "WHERE obj_id=? AND obj_is_file=0;"
+        cur = self._cx.execute(cmd, (dir_id,))
+        return cur.fetchone()[0]
 
 class SQLPropDBManagerOnline(SQLPropDBManager, mode=Mode.ONLINE):
     """

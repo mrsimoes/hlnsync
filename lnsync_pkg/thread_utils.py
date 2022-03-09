@@ -26,12 +26,11 @@ A thread pool creator that terminates all threads on SIGINT.
 
 # pylint: disable=protected-access
 
-import time
 import abc
 
 import threading
-import concurrent.futures.thread
-from concurrent.futures import ThreadPoolExecutor
+#import concurrent.futures.thread
+#from concurrent.futures import ThreadPoolExecutor
 
 class NoMoreData(Exception):
     pass
@@ -130,7 +129,7 @@ def thread_executor_terminator(fn_task, objs, worth_threading):
     threads = set()
     try:
         for obj in objs:
-            fn = lambda : fn_task(obj)
+            fn = lambda: fn_task(obj)
             new_thread = threading.Thread(target=fn)
             threads.add(new_thread)
         for t in threads:

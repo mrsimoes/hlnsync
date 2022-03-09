@@ -65,6 +65,11 @@ from lnsync_pkg.propdbmanager import PropDBException, PropDBError, \
     PropDBNoValue, PropDBStaleValue
 from lnsync_pkg.sqlpropdb import SQLPropDBManager
 
+class TreeNoPropValueError(TreeError):
+    def __init__(self, *args, first_try=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.first_try = first_try
+
 class FileItemProp(FileItem):
     """
     A file tree object that records a file property value along with a
@@ -97,7 +102,8 @@ class FilePropTree(FileTree, metaclass=onofftype):
             - exclude_patterns: None or a list of glob patterns for
                 relative paths to ignore when reading from disk.
             - use_metadata: if True read metadata index files by size
-            - maxsize: ignore files larger than this, is positive and not None
+            - max_size: ignore files longer than this (may be None)
+            - min_size: ignore files shorter than this (may be None)
             - skipempty: ignore zero-length files
             - writeback: if True, path operation methods update the disk tree.
             - file_type, dir_type: classes to instantiate.
@@ -171,7 +177,7 @@ class FilePropTree(FileTree, metaclass=onofftype):
     def get_prop(self, f_obj):
         """
         Return the file property value, if at all possible.
-        Otherwise, raise an appropriate PropDBException or TreeError.
+        Otherwise, raise an appropriate PropDBException or TreeNoPropValueError.
         Do not delete stale DB values.
         """
         assert f_obj is not None, \
@@ -206,17 +212,33 @@ class FilePropTree(FileTree, metaclass=onofftype):
                 self.db.delete_ids(f_obj.file_id)
             raise PropDBStaleValue
 
+    @classmethod
+    def scan_online_trees_async(cls, trees):
+        for tree in trees:
+            if tree.mode == Mode.ONLINE:
+                tree.scan_subtree()
+
+    @classmethod
+    def scan_all_trees_async(cls, trees):
+        for tree in trees:
+            tree.scan_subtree()
+
 class FilePropTreeOffline(FilePropTree, mode=Mode.OFFLINE):
     """
     The file tree is stored in the property database along with up-to-date
     property values.
     """
 
-    def __init___(self, **kwargs):
-        topdir_path = kwargs.pop("topdir_path")
-        assert topdir_path is None, \
-            f"__init___: unexpected topdir_path: {topdir_path}"
-        super().__init__(topdir_path=topdir_path, **kwargs)
+    def __init__(self, **kwargs):
+        self._dir_id_to_obj = {}
+        super().__init__(**kwargs)
+
+    def _new_dir_obj(self, dir_id=None):
+        dir_obj = super()._new_dir_obj(dir_id)
+        dir_id = dir_obj.dir_id
+        assert dir_id not in self._dir_id_to_obj
+        self._dir_id_to_obj[dir_id] = dir_obj
+        return dir_obj
 
     def db_get_uptodate_prop(self, f_obj, delete_stale):
         """
@@ -228,8 +250,7 @@ class FilePropTreeOffline(FilePropTree, mode=Mode.OFFLINE):
         assert delete_stale is False, \
             "db_get_uptodate_prop: delete_stale set"
         try:
-            return super(FilePropTreeOffline,
-                         self).db_get_uptodate_prop(f_obj, delete_stale=False)
+            return super().db_get_uptodate_prop(f_obj, delete_stale=False)
         except (PropDBNoValue, PropDBStaleValue) as exc:
             raise PropDBError("while offline: " + str(exc)) from exc
 
@@ -267,6 +288,98 @@ class FilePropTreeOffline(FilePropTree, mode=Mode.OFFLINE):
         file_obj = self._file_type(obj_id, metadata)
         return file_obj
 
+    def get_possible_sizes(self):
+        """
+        Return list of all file sizes in the tree,
+        ignoring globbing, but respecting min and max size bounds.
+        This accesses the database and avoids a full scan.
+        """
+        sizes_set = self.db.get_all_sizes()
+        return [sz for sz in sizes_set if self.is_size_ok(sz)]
+
+    def size_to_files_gen(self, size=None):
+        """
+        Return a generator of file objects of a given size.
+        If size is None, yield all files.
+        Does not require a full scan, but takes advantage
+        of cached full scan data, if available.
+        """
+        if size is None:
+            for sz in self.db.get_all_sizes():
+                if self.is_size_ok(sz):
+                    yield from self.size_to_files_gen(sz)
+        elif self.is_size_ok(size):
+            if self._tree_fully_scanned:
+                if size in self._size_to_files:
+                    yield from self._size_to_files[size]
+            else:
+                file_ids = self.db.get_file_ids_for_size(size)
+                for fid in file_ids:
+                    f_obj = self.id_to_file(fid)
+                    if f_obj is not None:
+                        yield f_obj
+
+    def size_to_files(self, size=None):
+        """
+        Return a list of file objects of a given size.
+        Trigger a full-tree scan, if needed.
+        If size is None, return a list of all files. TODO needed?
+        """
+        assert size is not None
+        if not self.is_size_ok(size):
+            return []
+        elif self._tree_fully_scanned:
+            return self._size_to_files.get(size, [])
+        else:
+            return list(self.size_to_files_gen(size))
+
+    def get_file_count(self):
+        """
+        Return total number of files, without scanning the full tree.
+        """
+        file_ids = self.db.get_all_file_ids(self._min_size, self._max_size)
+        return len(file_ids)
+
+    def id_to_file(self, fid):
+        """
+        Creates the file object, if needed, scanning intermediate dirs to root.
+        """
+        if fid in self._id_to_file:
+            return self._id_to_file[fid]
+        else:
+            # Scan all intermediate dirs along any of the file relpaths.
+            containing_dirs = list(self.db.get_all_containing_dirs_of_file(fid))
+            a_containing_dir_id = containing_dirs[0]
+            for dir_id in containing_dirs:
+                stack = []
+                # stack will contain dir ids for which there's still no obj,
+                # that is the parent object needs to be scanned.
+                # and the dir itself need to be scanned.
+                while dir_id not in self._dir_id_to_obj:
+                    stack.append(dir_id)
+                    dir_id = self.db.get_containing_dir_of_dir(dir_id)
+                cur_dir_obj = self._dir_id_to_obj[dir_id]
+                while True:
+                    self.scan_dir(cur_dir_obj)
+                    if not stack:
+                        break
+                    next_dir = stack.pop()
+                    next_dir_obj = [d for d in cur_dir_obj.entries.values()
+                                    if d.is_dir() and d.dir_id == next_dir]
+                    assert len(next_dir_obj) <= 1
+                    if not next_dir_obj:
+                        return None
+                    cur_dir_obj = next_dir_obj[0]
+            a_containing_dir_id_obj = self._dir_id_to_obj[a_containing_dir_id]
+            fobj = [f for f in a_containing_dir_id_obj.entries.values()
+                    if f.is_file() and f.file_id == fid]
+            if not fobj:
+                return None # Filtered by glob.
+            else:
+                fobj = fobj[0] # The same dir may contain multiple paths
+                assert self._id_to_file[fid] == fobj
+                return fobj    # to the same file.
+
     def printable_path(self, rel_path=None, pprint=str):
         """
         Return a printable version of the tree+relpath.
@@ -287,13 +400,15 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
         assert os.path.isdir(topdir_path), \
             f"__init__: not a dir: {topdir_path}"
         super().__init__(topdir_path=topdir_path, **kwargs)
+        self._failed_prop_fobjs = {}  # fobj-> error_msg
 
     def get_prop(self, f_obj):
         """
         Return a file property value, from db if possible, updating db if
-        needed. Raise PropDBError if the DB cannot be read or TreeError if the
-        value cannot be obtained from source.
-        If the prop value cannot be written to the db, print an error message and continue.
+        needed. Raise PropDBError if the DB cannot be read or
+        TreeNoPropValueError if the value cannot be obtained from source.
+        If the prop value cannot be written to the db, print an error message
+        and continue.
         """
         # Try memory and database, without deleting entries.
         try:
@@ -303,18 +418,23 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
         except PropDBNoValue:
             pass
         # No value on memory or database: recompute and store.
+        if f_obj in self._failed_prop_fobjs:
+            error_msg = self._failed_prop_fobjs[f_obj]
+            raise TreeNoPropValueError(
+                error_msg, tree=self,
+                file_obj=f_obj,
+                first_try=False)
         try:
             prop_value = self.prop_from_source(f_obj)
-        except TreeError:
-            raise
+        except Exception as exc:
 #            self._rm_file(f_obj) # This impedes processing other files
                                   # in the same dir
                                   # TODO dynamic exclude
-        except Exception:
-            raise TreeError(
-                    f"getting prop from source: {str(exc)}",
-                    tree=self,
-                    file_obj=f_obj)
+            error_msg = f"getting prop from source: {str(exc)}"
+            self._failed_prop_fobjs[f_obj] = error_msg
+            raise TreeNoPropValueError(
+                error_msg, tree=self,
+                file_obj=f_obj, first_try=True)
         f_obj.prop_value = prop_value
         f_obj.prop_metadata = f_obj.file_metadata
         try:
@@ -323,7 +443,7 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
                                       f_obj.prop_metadata)
         except PropDBError as exc:
             path_digest = self.printable_file_path_digest(f_obj)
-            msg = f"while saving file id {f_obj.file_id} at {path_digest}: {str(exc)}"
+            msg = f"saving file id {f_obj.file_id} at {path_digest}: {str(exc)}"
             pr.error(msg)
         return f_obj.prop_value
 
@@ -343,13 +463,13 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
         error_files = set()
         update_files = set()
         try:
-            for fobj, _parent, path \
+            for fobj, _parent, _path \
                     in self.walk_paths(dirs=False, recurse=True):
                 try:
                     self.db_get_uptodate_prop(fobj, delete_stale=True)
                 except (PropDBNoValue, PropDBStaleValue):
                     update_files.add(fobj)
-                except (PropDBError, TreeError) as exc:
+                except (PropDBError, TreeNoPropValueError) as exc:
                     pr.error("processing file: %s" % (exc,))
                     error_files.add(fobj)
             for err_fobj in error_files:
@@ -359,7 +479,7 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
                 with pr.ProgressPrefix("%d/%d " % (index, tot_update_files)):
                     try:
                         self.get_prop(update_fobj)
-                    except (PropDBError, TreeError) as exc:
+                    except (PropDBError, TreeNoPropValueError) as exc:
                         pr.error("computing hash: %s" % (exc,))
         finally:
             pr.progress("writing database...")
@@ -371,8 +491,8 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
         prop value in the db and return True or False accordingly.
         Do not update the database.
         Raise PropDBStaleValue if the db value is not up-to-date.
-        May raise TreeError if there was an error computing the prop from
-        source.
+        May raise TreeNoPropValueError if there was an error computing the
+        prop from source.
         """
         assert self.rootdir_obj is not None, \
             "db_check_prop: missing root"
@@ -425,7 +545,7 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
         def filter_include_only_files_in_subtree(file_id):
             # This excludes prop entries corresponding to files
             # that no longer exist or to files that are not in the subtree
-            # that is benig saved, when using the db at a super-directory. 
+            # that is being saved, when using the db at a super-directory.
             return file_id in self._id_to_file
 
         if filter_fn is None:
@@ -443,7 +563,7 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
             target_dbmanager.rm_offline_tree()
 
             pr.progress("saving metadata...")
-            tot_items = len(self._id_to_file)
+            tot_items = len(self._id_to_file) # The full tree was scanned.
             cur_item = 0
             metadata_error_files = set()
             for f_id, f_obj in self._id_to_file.items():
@@ -460,15 +580,13 @@ class FilePropTreeOnline(FilePropTree, mode=Mode.ONLINE):
                         f"saving offline metadata for id {f_id} " \
                         f"at {path_digest}: {str(exc)}")
                     metadata_error_files.add(f_obj)
-                except Exception as exc:
-                    v = exc
-                    breakpoint()
 
             pr.progress("saving tree...")
             for obj, parent, path in self.walk_paths(recurse=True, dirs=True):
                 dir_id = parent.dir_id
                 if obj.is_file():
-                    if obj in metadata_error_files or (filter_fn and not filter_fn(obj.file_id)):
+                    if obj in metadata_error_files \
+                            or (filter_fn and not filter_fn(obj.file_id)):
                         continue
                     obj_is_file = 1
                     obj_id = obj.file_id

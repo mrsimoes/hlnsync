@@ -131,7 +131,7 @@ class Pattern:
 
     def matches_exactly(self, component):
         """
-        True if basename matches the full pattern.
+        True if the path component matches the full pattern.
         """
         tails = self.head_to_tails(component)
         return any(t.matches_empty() for t in tails)

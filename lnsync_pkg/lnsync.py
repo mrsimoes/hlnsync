@@ -35,7 +35,7 @@ from lnsync_pkg.miscutils import set_exception_hook, \
 from lnsync_pkg.glob_matcher import Pattern, IncludePattern, ExcludePattern
 from lnsync_pkg.human2bytes import human2bytes, bytes2human
 from lnsync_pkg.modaltype import Mode
-from lnsync_pkg.hasher_functions import HasherManager, HasherFunctionID, FileHasherAlgo
+from lnsync_pkg.hasher_functions import HasherManager, HasherFunctionID
 from lnsync_pkg.argparse_config import \
     ConfigError, NoSectionError, NoOptionError, NoValidConfigFile, \
     ArgumentParserConfig
@@ -45,6 +45,7 @@ from lnsync_pkg.lnsync_treeargs import TreeLocation, TreeLocationOnline, \
 from lnsync_pkg.prefixdbname import \
     get_default_dbprefix, adjust_default_dbprefix
 import lnsync_pkg.lnsync_cmd_handlers as lnsync_cmd_handlers
+from lnsync_pkg.groupedfileprinter import GroupedFileListPrinter
 
 ####################
 # Global variables and settings.
@@ -220,12 +221,24 @@ debugtrees_option_parser.add_argument(
 # Many optional arguments are shared by multiple command parsers.
 # To factor out these arguments, define as many single-argument parsers:
 
-maxsize_option_parser = argparse.ArgumentParser(add_help=False)
+def human2bytes_or_none(value):
+    if value is None:
+        return None
+    else:
+        return human2bytes(value)
 
-maxsize_option_parser.add_argument(
-    "-M", "--maxsize", type=human2bytes, default=-1,
+maxminsize_option_parser = argparse.ArgumentParser(add_help=False)
+
+maxminsize_option_parser.add_argument(
+    "--max-size", type=human2bytes_or_none, default=None,
     action=ConfigTreeOptionAction, sc_scope=Scope.ALL, sc_action="store",
-    help="ignore files larger than MAXSIZE (default: no limit), "
+    help="ignore files larger than MAXSIZE (default: no upper bound), "
+         "suffixes allowed: K, M, G, etc.")
+
+maxminsize_option_parser.add_argument(
+    "--min-size", type=human2bytes_or_none, default=None,
+    action=ConfigTreeOptionAction, sc_scope=Scope.ALL, sc_action="store",
+    help="ignore files smaller than MINSIZE (default: no lower bound), "
          "suffixes allowed: K, M, G, etc.")
 
 # NB: sc_action="store_bool":
@@ -472,22 +485,6 @@ dbrootdir_option_parser.add_argument(
 # Other shared options parsers, unrelated to trees.
 ####################
 
-# Output formatting options.
-
-sameline_option_parser = argparse.ArgumentParser(add_help=False)
-
-sameline_option_parser.add_argument(
-    "-1", "--sameline", "--no-sameline",
-    action=StoreBoolAction, dest="sameline", default=False,
-    help="print each group of identical files in the same line")
-
-sort_option_parser = argparse.ArgumentParser(add_help=False)
-
-sort_option_parser.add_argument(
-    "-s", "--sort", "--no-sort",
-    action=StoreBoolAction, dest="sort", default=False,
-    help="sort output by size")
-
 # Dry-run.
 
 dryrun_option_parser = argparse.ArgumentParser(add_help=False)
@@ -496,6 +493,39 @@ dryrun_option_parser.add_argument(
     "-n", "--dry-run", "--no-dry-run",
     action=StoreBoolAction, dest="dry_run", default=False,
     help="dry run")
+
+####################
+# Output formatting options.
+####################
+
+class SetOutputOptionAction(StoreBoolAction):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        setattr(GroupedFileListPrinter, self.dest, self.default)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        super().__call__(parser, namespace, values, option_string=option_string)
+        val = getattr(namespace, self.dest, None)
+        assert isinstance(val, bool)
+        setattr(GroupedFileListPrinter, self.dest, val)
+
+sameline_option_parser = argparse.ArgumentParser(add_help=False)
+sameline_option_parser.add_argument(
+    "-1", "--sameline", "--no-sameline",
+    action=SetOutputOptionAction, dest="sameline", default=False,
+    help="print each group of identical files in the same line")
+
+sort_option_parser = argparse.ArgumentParser(add_help=False)
+sort_option_parser.add_argument(
+    "-s", "--sort", "--no-sort",
+    action=SetOutputOptionAction, dest="sort", default=False,
+    help="sort output by size")
+
+showsize_option_parser = argparse.ArgumentParser(add_help=False)
+showsize_option_parser.add_argument(
+    "--show-size", "--no-show-size",
+    action=SetOutputOptionAction, dest="showsize", default=False,
+    help="show size of each file")
 
 ####################
 # Top parser and subcommand parsers and handlers.
@@ -550,7 +580,7 @@ top_parser = CustomArgumentParserConfig(\
 parser_sync = top_parser.add_parser_command(
     'sync', lnsync_cmd_handlers.do_sync,
     parents=[dryrun_option_parser, exclude_option_parser,
-             maxsize_option_parser,
+             maxminsize_option_parser,
              bysize_option_parser, skipempty_option_parser,
              dbrootdir_option_parser, dblocation_option_parser],
     help="sync-by-rename target to best match source, no "
@@ -570,7 +600,8 @@ parser_rsync = top_parser.add_parser_command(
     'rsync', lnsync_cmd_handlers.do_rsync,
     extra_args_cmd=True,
     parents=[dryrun_option_parser, exclude_option_parser,
-             hard_links_option_parser, maxsize_option_parser,
+             hard_links_option_parser,
+             maxminsize_option_parser, skipempty_option_parser,
              dbrootdir_option_parser, dblocation_option_parser],
     help="generate an rsync command to complete sync, " \
          "rightmost options are passed to rsync")
@@ -599,7 +630,8 @@ parser_syncr = top_parser.add_parser_command(
     'syncr', do_syncr,
     extra_args_cmd=True,
     parents=[dryrun_option_parser, exclude_option_parser,
-             hard_links_option_parser, maxsize_option_parser,
+             hard_links_option_parser,
+             maxminsize_option_parser, skipempty_option_parser,
              dbrootdir_option_parser, dblocation_option_parser, ],
     help="sync and then execute the rsync command, " \
          "rightmost options are passed to rsync")
@@ -618,13 +650,13 @@ parser_syncr.add_argument(
 # Search commands
 ##########
 
-_SEARCH_CMD_PARENTS = [exclude_all_options_parser,
-                       hard_links_option_parser, bysize_option_parser,
-                       maxsize_option_parser,
-                       skipempty_option_parser,
-                       sameline_option_parser, sort_option_parser,
-                       dbrootdir_option_parser, dblocation_option_parser,
-                       ]
+_SEARCH_CMD_PARENTS = \
+    [exclude_all_options_parser,
+     hard_links_option_parser, bysize_option_parser,
+     maxminsize_option_parser, skipempty_option_parser,
+     sameline_option_parser, sort_option_parser, showsize_option_parser,
+     dbrootdir_option_parser, dblocation_option_parser,
+     ]
 
 # fdupes
 
@@ -637,6 +669,7 @@ parser_fdupes.add_argument(
     "locations", type=TreeLocation, action=TreeLocationAction, nargs="+")
 
 # onall
+
 parser_onall = top_parser.add_parser_command(
     'onall', lnsync_cmd_handlers.do_onall,
     parents=_SEARCH_CMD_PARENTS,
@@ -692,10 +725,11 @@ parser_search = top_parser.add_parser_command(
     parents=_SEARCH_CMD_PARENTS,
     help="Search for files by relative path glob pattern")
 
-parser_search.add_argument("glob", type=Pattern, action="store")
-
 parser_search.add_argument(
     "locations", type=TreeLocation, action=TreeLocationAction, nargs="+")
+
+parser_search.add_argument(
+    "--glob", type=Pattern, action="store", default=None)
 
 ##########
 # update
@@ -709,7 +743,7 @@ def do_update(args):
 parser_update = top_parser.add_parser_command(
     'update', do_update,
     parents=[exclude_all_options_parser,
-             skipempty_option_parser, maxsize_option_parser,
+             skipempty_option_parser, maxminsize_option_parser,
              dbrootdir_option_parser, dblocation_option_parser],
     help='update hashes for new and modified files')
 
@@ -773,7 +807,7 @@ parser_cmp = top_parser.add_parser_command(
     'cmp', lnsync_cmd_handlers.do_cmp,
     parents=[exclude_all_options_parser,
              hard_links_option_parser, bysize_option_parser,
-             maxsize_option_parser, skipempty_option_parser,
+             maxminsize_option_parser, skipempty_option_parser,
              dbrootdir_option_parser, dblocation_option_parser,
             ],
     help='recursively compare two trees')
@@ -792,7 +826,7 @@ parser_check_files = top_parser.add_parser_command(
     'check', lnsync_cmd_handlers.do_check,
     parents=[exclude_all_options_parser,
              hard_links_option_parser,
-             maxsize_option_parser, skipempty_option_parser,
+             maxminsize_option_parser, skipempty_option_parser,
              dbrootdir_option_parser, dblocation_option_parser,
             ],
     help='rehash and compare against stored hash')
@@ -831,7 +865,7 @@ parser_get_info = top_parser.add_parser_command(
     'info', do_get_info,
     parents=[exclude_all_options_parser,
              hard_links_option_parser,
-             maxsize_option_parser, skipempty_option_parser,
+             maxminsize_option_parser, skipempty_option_parser,
              dbrootdir_option_parser, dblocation_option_parser,
             ],
     help='describe the given locations')
@@ -884,7 +918,7 @@ def writable_file_or_empty_path(path):
 
 parser_mkoffline = top_parser.add_parser_command(
     'mkoffline', lnsync_cmd_handlers.do_mkoffline,
-    parents=[exclude_all_options_parser, maxsize_option_parser,
+    parents=[exclude_all_options_parser, maxminsize_option_parser,
              skipempty_option_parser,
              dbrootdir_option_parser, dblocation_option_parser,
             ],
@@ -967,7 +1001,7 @@ def get_handler_fn(cmd_line_args):
             # Let argparse have a go at finding the error.
             top_parser.parse_args(cmd_line_args)
             raise ArgumentParserError("Unexpected arguments: " + extra_args)
-        if extra_args[0] == '--': # Strip away this delimiter.
+        if extra_args and extra_args[0] == '--': # Strip away this delimiter.
             extra_args == extra_args[1:]
         handler_fn = lambda: \
             top_parser.cmd_handlers_extra_args[cmd](args, extra_args)
@@ -1035,14 +1069,9 @@ def main():
         # Caught here if raised outside an Action.
         # Used instead of ArgumentParser.error, which exits with status 2.
         pr.error("parsing: %s" % (exc,))
-    except (RuntimeError, AssertionError) as exc:
+    except (RuntimeError,) as exc:
         pr.error("internal: %s" % str(exc))
-        if False and __DEBUG__:
-            print(sys.exc_info())
-            var = exc
-            breakpoint()
-    finally:
-        sys.exit(exit_code)
+    sys.exit(exit_code)
 
 if __name__ == "__main__":
     main()

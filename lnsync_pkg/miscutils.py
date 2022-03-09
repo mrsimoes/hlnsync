@@ -61,6 +61,16 @@ def int32_to_uint32(value):
     return res
 
 
+def is_iter_empty(it):
+    """
+    Check if iterator is empty, consuming one element to test.
+    """
+    try:
+        next(it)
+        return False
+    except StopIteration:
+        return True
+
 class HelperAppError(Exception):
     def __init__(self, cmd, error_msg):
         super().__init__()
@@ -95,7 +105,6 @@ def set_exception_hook():
         # device, so we call the default hook
             sys.__excepthook__(exc_type, value, traceback)
         else:
-            v = sys.exc_info()
             import traceback
             import pdb
             # we are NOT in interactive mode, print the exception...
@@ -110,6 +119,7 @@ def is_subdir(subdir, topdir):
     Test if subdir is topdir or a subdir of topdir.
     Return either False or the relative path (which is never an empty string).
     """
+
     assert os.path.isdir(subdir) and os.path.isdir(topdir), \
         f"is_subdir: expected dirs, got: '{subdir}' and '{topdir}'"
     relative = os.path.relpath(subdir, topdir) # (path, start)
@@ -127,6 +137,7 @@ class ListContextManager:
     managers, initialized from a given list of init_args dictionaries,
     and exits them in reverse.
     """
+
     def __init__(self, classref, init_args_list):
         self.classref = classref
         self.init_args_list = init_args_list
@@ -150,8 +161,10 @@ class StoreBoolAction(argparse.Action):
     argparse.Action that store true by default and stores false if option switch
     starts with '--no-'.
     """
+
     def __init__(self, *args, nargs=0, **kwargs):
         super().__init__(*args, nargs=0, **kwargs)
+
     def __call__(self, parser, namespace, pos_arg, option_string=None):
         if option_string and option_string[0:5] == "--no-":
             val = False
@@ -165,6 +178,7 @@ class BitField:
     https://code.activestate.com/recipes/113799-bit-field-manipulation/
     Licensed under PSF.
     """
+
     def __init__(self, value=0):
         self._d = value
 

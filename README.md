@@ -184,11 +184,27 @@ These commands operate on files, as opposed to paths. To instead operate on path
 The criteria for equality is matching hash value (plus matching size when using xxHash).
 
 - `cmp <tree1> <tree2>` Recursively compares two file trees. Accepts `--exclude=<pattern>`.
+
 - `fdupes [-h] [<tree>]+` Find files duplicated anywhere on the given trees.
-- `onall [<tree>]+`, `onfirstonly [<tree>]+`, `onfirstnotonly [<tree>]+`, `onlastonly [<tree>]+`, `onlastnotonly [<tree>]+` Find files as advertised. Some options: `-M` prunes by maximum size; `-0` prunes empty files; `-1` prints each group of files in a single line, separated by spaces and with escaped backslashes and spaces, like `fdupes`; `-s` sorts output by size (average size if sizes in a resulting file group aren't all the same).
+
+- `onall [<tree>]+`, `onfirstonly [<tree>]+`, `onfirstnotonly [<tree>]+`, `onlastonly [<tree>]+`, `onlastnotonly [<tree>]+` Find files as advertised.
+
 - `search [<globpat>] <tree>*` Find files one of whose relative paths matches one of the given glob patterns (which are as in `--exclude`).
 
+### Excluding files by size
+
+`-M` prunes by maximum size; `-0` prunes empty files; 
+
+### Output Formatting
+
+`--same-line` or `-1` prints each group of files in a single line, separated by spaces and with escaped backslashes and spaces, like `fdupes`.
+
+`--sort` or `-s` sorts output by size (average size if sizes in a resulting file group aren't all the same).
+
+`--show-size` shows the size of each file before each file path info, in human readable form.
+
 ### Other Commands
+
 - `check [<tree>] [<path>]*` Recompute hashes for given files and compare to the hash stored in the database, to check for changes/bitrot.
 
 ### Configuration Files
@@ -235,6 +251,8 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 
 ### Release Notes
 
+- v0.8.2: New --show-size and --min-size options. Much faster searches in offline database. Bug fixes.
+- v0.8.1: Implement onfirstnotonly for all hash functions.
 - v0.8.0: Rename hasher options. Rename main config section. New built-in hash functions: dhash and thumbnail_dhash. Bug fixes.
 - v0.7.6: New `onfirstnotonly` search command. Allow mkoffline to operate on non-writeable dirs. Fixed regressions: incomplete reading of config file options, mishandling of single quotes in offline location databases.
 - v0.7.5: New lnsync64 and lnsync32 entry points. Non-zero return value to indicate failed searches. Small improvements and bug fixes.

@@ -348,6 +348,7 @@ class State(SearchState):
 # Case 1. one id on each side.
         ids = srctgt_ids
         if len(ids.src) == len(ids.tgt) == 1:
+            # All these file objects are assured to exist, by construction.
             src_paths = self.trees.src.id_to_file(ids.src[0]).relpaths
             tgt_paths = self.trees.tgt.id_to_file(ids.tgt[0]).relpaths
 # Case 1a. single path for each id.

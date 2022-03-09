@@ -27,7 +27,8 @@ from lnsync_pkg.hasher_functions import HasherManager
 from lnsync_pkg.modaltype import onofftype, Mode
 from lnsync_pkg.propdbmanager import PropDBManager, PropDBException, \
     PropDBError, PropDBNoValue
-from lnsync_pkg.proptree import FilePropTree, TreeError, FileItemProp
+from lnsync_pkg.proptree import FilePropTree, TreeError, TreeNoPropValueError, \
+    FileItemProp
 from lnsync_pkg.sqlpropdb import SQLPropDBManager
 
 class FileHashTree(FilePropTree, metaclass=onofftype):
@@ -44,7 +45,8 @@ class FileHashTree(FilePropTree, metaclass=onofftype):
             - exclude_pattern: None or a list of glob patterns of
                 relative paths to ignore when reading from disk.
             - use_metadata: if True read metadata index files by size
-            - maxsize: ignore files larger than this, is positive and not None
+            - max_size: ignore files longer than this (may be None)
+            - min_size: ignore files shorter than this (may be None)
             - skipempty: ignore zero-length files
             - writeback: if True, path operation methods update the disk tree.
             - file_type, dir_type: classes to instantiate.
@@ -63,8 +65,8 @@ class FileHashTree(FilePropTree, metaclass=onofftype):
         # from scanning the source file tree (disk or offline).
         return file_obj.file_metadata.size
 
-    def _db_get_uptodate_prop_as_size(self, file_obj, delete_stale):
-        breakpoint()
+    def _db_get_uptodate_prop_as_size(self, _file_obj, _delete_stale):
+        raise Exception("db_get_uptodate_prop_as_size should not be called")
 
     def set_dbmanager(self, db):
         super(FileHashTree, self).set_dbmanager(db)
@@ -100,10 +102,11 @@ class FileHashTreeOnline(FileHashTree, mode=Mode.ONLINE):
         try:
             val = HasherManager.get_hasher().hash_file(abspath)
         except Exception as exc: # TODO tighten this.
-            raise TreeError(
+            raise TreeNoPropValueError(
                 f"while hashing: {str(exc)}",
                 file_obj=file_obj,
-                tree=self) from exc
+                tree=self,
+                first_try=True) from exc
         if not isinstance(val, int):
             raise  RuntimeError("bad property value %s" % (val,))
         return val

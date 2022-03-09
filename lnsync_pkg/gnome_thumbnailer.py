@@ -10,6 +10,11 @@ import gi
 gi.require_version('GnomeDesktop', '3.0')
 from gi.repository import Gio, GnomeDesktop
 
+class ThumbnailerError(Exception):
+    def __init__(self, msg, path):
+        super().__init__(msg)
+        self.path = path
+
 class GnomeThumbnailer:
     def __init__(self):
         self.factory = GnomeDesktop.DesktopThumbnailFactory()
@@ -30,7 +35,7 @@ class GnomeThumbnailer:
         if thumbnail_path is not None:
             return thumbnail_path
         if not factory.can_thumbnail(uri, mime_type, mtime):
-            raise RuntimeError("cannot make thumbnail for: "+filename)
+            raise ThumbnailerError("cannot make thumbnail:", filename)
         thumbnail = factory.generate_thumbnail(uri, mime_type)
         if thumbnail is None:
             raise RuntimeError("error making thumbnail for: "+filename)
