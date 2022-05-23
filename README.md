@@ -4,7 +4,7 @@ _lnsync_ provides sync-by-content of local directories (including hard link sync
 ###  Features
 The main feature is (partial) one-way sync of local directories by only renaming/linking/delinking on the target directory, without copying or deleting any file content from source. This may be used as a preprocessing step for a full sync tool (such as rsync).
 
-This is achieved by maintaining a simple on-file database of file hashes for each top directory.
+This is achieved by maintaining a simple one-file database of file hashes for each top directory.
 
 Files match if they have the same size and hash value.
 
@@ -251,6 +251,7 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 
 ### Release Notes
 
+- v0.8.3: Performance improvements and bug fixes.
 - v0.8.2: New --show-size and --min-size options. Much faster searches in offline database. Bug fixes.
 - v0.8.1: Implement onfirstnotonly for all hash functions.
 - v0.8.0: Rename hasher options. Rename main config section. New built-in hash functions: dhash and thumbnail_dhash. Bug fixes.

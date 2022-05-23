@@ -71,6 +71,7 @@ from functools import reduce
 from enum import Enum
 
 import lnsync_pkg.printutils as pr
+from lnsync_pkg.miscutils import ArgumentParserError
 
 def file_expanduser(path):
     path = os.path.expanduser(path)
@@ -111,9 +112,9 @@ class _LoadConfigSectionAction(argparse.Action):
             return
         parser.config_file_section_exec(namespace, values)
 
-_load_config_section_option_parser = argparse.ArgumentParser(add_help=False)
+_LOAD_CONFIG_SECTION_OPTION_PARSER = argparse.ArgumentParser(add_help=False)
 
-_load_config_section_option_parser.add_argument(
+_LOAD_CONFIG_SECTION_OPTION_PARSER.add_argument(
     "--config-section", metavar="SECTION",
     action=_LoadConfigSectionAction,
     help="apply options from SECTION in the config file")
@@ -431,7 +432,7 @@ class ArgumentParserConfig(ArgumentParserConfigSubparser):
 
             def add_parser(self, parser_name, *args, **kwargs):
                 parents = kwargs.pop("parents", [])
-                parents = parents + [_load_config_section_option_parser]
+                parents = parents + [_LOAD_CONFIG_SECTION_OPTION_PARSER]
                 return self._ap_handler.add_parser(
                     parser_name, *args, parents=parents, **kwargs)
 
@@ -460,7 +461,7 @@ class ArgumentParserConfig(ArgumentParserConfigSubparser):
             fo_val = CLIConfig.SET_NO_CONFIG_FILE
         elif first_switch_matches("--conf", "--config"):
             if len(args) < 3:
-                raise argparse.ArgumentError("Missing config file")
+                raise ArgumentParserError("Missing config file")
             fo_val = CLIConfig.SET_CONFIG_FILE_UNREAD
             self._read_config_files(file_expanduser(args[1]))
         else:

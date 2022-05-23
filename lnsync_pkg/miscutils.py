@@ -13,6 +13,7 @@ import os
 import sys
 import argparse
 from functools import reduce
+import array
 
 MAX_UINT64 = 2**64 - 1
 MAX_INT64 = 2**63 - 1
@@ -38,6 +39,29 @@ def int64_to_uint64(value):
         f"int64_to_uint64 overflow: {value}"
     return res
 
+def uint64_to_bytes(val):
+    """
+    Return array of 8 (unsigned) byte values.
+    Most significant bytes first.
+    """
+    res = array.array('H', [0] * 8)
+    for k in reversed(range(8)):
+        byte_val = val & 255
+        res[k] = byte_val
+        val >>= 8
+    return res
+
+def bytes_to_uint64(byte_array):
+    """
+    Convert an array of 8 (unsigned) byte values to uint64.
+    Most significant bytes first.
+    """
+    val = 0
+    for k in range(8):
+        val <<= 8
+        val += byte_array[k]
+    return val
+
 MAX_UINT32 = 2**32 - 1
 MAX_INT32 = 2**31 - 1
 MIN_INT32 = -2**31
@@ -61,12 +85,12 @@ def int32_to_uint32(value):
     return res
 
 
-def is_iter_empty(it):
+def is_iter_empty(iterator):
     """
     Check if iterator is empty, consuming one element to test.
     """
     try:
-        next(it)
+        next(iterator)
         return False
     except StopIteration:
         return True
@@ -215,3 +239,6 @@ def append_to_namespace_list(namespace, key, more_items):
     if prev_items is None: # It could have been None before.
         prev_items = []
     setattr(namespace, key, prev_items + more_items)
+
+class ArgumentParserError(Exception):
+    pass

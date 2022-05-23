@@ -54,6 +54,7 @@ class TreeLocationAction(ScPosArgAction):
     def __call__(self, parser, namespace, val, option_string=None):
         super().__call__(parser, namespace, val, option_string)
         tree_args = getattr(namespace, "sc_pos_args", [])
+        tree_args = namespace._sc_arparse_scoped_data.sc_pos_args
         locations_seen = []
         for tree_arg in tree_args:
             this_location = tree_arg.real_location
@@ -61,9 +62,6 @@ class TreeLocationAction(ScPosArgAction):
                 raise ValueError("duplicate location: " + this_location)
             else:
                 locations_seen.append(this_location)
-
-#class TreeLocationListAction(ScPosArgListAction):
-#    pass
 
 class TreeLocation:
     """
@@ -145,7 +143,7 @@ class TreeLocationOffline(TreeLocation):
     def set_alt_dbrootdir(self, alt_dbrootdir):
         pass
 
-    def set_alt_dbrootdir_parent(self, alt_dbrootdir):
+    def set_alt_dbrootdir_parent(self, alt_dbrootdir_parent):
         pass
 
 class TreeLocationOnline(TreeLocation):

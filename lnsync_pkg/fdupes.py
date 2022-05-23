@@ -21,7 +21,7 @@ And for FileItem:
 from collections import defaultdict
 
 from lnsync_pkg.miscutils import is_iter_empty
-from lnsync_pkg.proptree import FileItem, TreeNoPropValueError
+from lnsync_pkg.fileproptree import FileItem, TreeNoPropValueError
 import lnsync_pkg.printutils as pr
 
 def _get_prop(tree, fobj):
@@ -48,8 +48,7 @@ def sizes_repeated(all_trees, hard_links):
     """
     sizes_seen_once, sizes_seen_twice = set(), set()
     for tree in all_trees:
-        this_tree_sizes = list(tree.get_possible_sizes())
-        this_tree_sizes.sort()
+        this_tree_sizes = sorted(tree.get_possible_sizes())
         for file_sz in this_tree_sizes:
             if file_sz in sizes_seen_twice:
                 continue
@@ -108,13 +107,8 @@ def sizes_onall(all_trees):
     """
     if len(all_trees) >= 1:
         pr.progress("scanning sizes")
-        trees_sizescounts = \
-            [(tree, len(tree.get_possible_sizes())) for tree in all_trees]
-        pr.progress("sorting sizes")
-        trees_sizescounts.sort(key=lambda ts: ts[1])
-        first_tree = trees_sizescounts[0][0]
-        candidate_sizes = list(first_tree.get_possible_sizes())
-        candidate_sizes.sort()
+        least_sizes_tree = min(all_trees, key=lambda t: len(t.get_possible_sizes()))
+        candidate_sizes = sorted(least_sizes_tree.get_possible_sizes())
         for file_sz in candidate_sizes:
             if all(not is_iter_empty(tr.size_to_files_gen(file_sz)) \
                    for tr in all_trees): # Check also first tree.

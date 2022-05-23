@@ -31,7 +31,7 @@ from sqlite3 import Error as SQLError
 import lnsync_pkg.metadata as metadata
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.miscutils import set_exception_hook, \
-    HelperAppError, StoreBoolAction
+    HelperAppError, StoreBoolAction, ArgumentParserError
 from lnsync_pkg.glob_matcher import Pattern, IncludePattern, ExcludePattern
 from lnsync_pkg.human2bytes import human2bytes, bytes2human
 from lnsync_pkg.modaltype import Mode
@@ -39,7 +39,7 @@ from lnsync_pkg.hasher_functions import HasherManager, HasherFunctionID
 from lnsync_pkg.argparse_config import \
     ConfigError, NoSectionError, NoOptionError, NoValidConfigFile, \
     ArgumentParserConfig
-from lnsync_pkg.hashtree import FileHashTree, TreeError, PropDBError
+from lnsync_pkg.filehashtree import FileHashTree, TreeError, PropDBError
 from lnsync_pkg.lnsync_treeargs import TreeLocation, TreeLocationOnline, \
     TreeLocationAction, TreeOptionAction, ConfigTreeOptionAction, Scope
 from lnsync_pkg.prefixdbname import \
@@ -458,7 +458,6 @@ class DBRootDirOptions(TreeOptionAction):
         """
         Apply the correct operation to the tree (positional value).
         """
-        pass
 
 class DBRootDirOption(DBRootDirOptions):
     def apply_dbroot_option(self, pos_arg, opt_val):
@@ -530,9 +529,6 @@ showsize_option_parser.add_argument(
 ####################
 # Top parser and subcommand parsers and handlers.
 ####################
-
-class ArgumentParserError(Exception):
-    pass
 
 class CustomArgumentParserConfig(ArgumentParserConfig):
     """
@@ -844,7 +840,6 @@ parser_check_files.add_argument(
 ##########
 
 def do_get_info(args):
-#    breakpoint()
     for tree_arg in args.locations:
         with FileHashTree(**tree_arg.kws()) as tree:
             if tree.mode == Mode.ONLINE:
@@ -854,7 +849,7 @@ def do_get_info(args):
                 pr.print(f"[OFFLINE]: {tree_arg.real_location}")
                 pr.print(f"Hasher function: {tree.db.get_hasher_function_id()}")
             file_count = tree.get_file_count()
-            file_sizes = tree.get_all_sizes()
+            file_sizes = set(tree.get_all_sizes())
             minsz = bytes2human(min(file_sizes))
             maxsz = bytes2human(max(file_sizes))
             pr.print(f"Total files: {file_count}, sizes from {minsz} to {maxsz}")

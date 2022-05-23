@@ -321,8 +321,8 @@ class FileTree:
         """
         if self._tree_fully_scanned:
             if size is None:
-                for sz in self._size_to_files:
-                    yield from self._size_to_files[sz]
+                for sz_with_files in self._size_to_files:
+                    yield from self._size_to_files[sz_with_files]
             elif size in self._size_to_files:
                 yield from self._size_to_files[size]
         else:
@@ -358,7 +358,7 @@ class FileTree:
 
     def get_possible_sizes(self):
         """
-        Return list of possible file sizes in the tree.
+        Return an iterable of possible file sizes in the tree.
         May ignore globbing restrictions.
         Faster.
         """
@@ -366,12 +366,12 @@ class FileTree:
 
     def get_all_sizes(self):
         """
-        Return list of all file sizes in the tree.
+        Return an iterable of all file sizes in the tree.
         Exclude globbed out files.
         """
         if not self._tree_fully_scanned:
             self.scan_subtree()
-        return list(self._size_to_files.keys())
+        return self._size_to_files.keys()
 
     def get_all_file_ids(self):
         """

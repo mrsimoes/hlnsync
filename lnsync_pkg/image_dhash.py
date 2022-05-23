@@ -6,95 +6,69 @@ Compute a 64bit image dhash (difference hash).
 
 import sys
 
+from lnsync_pkg.miscutils import uint64_to_int64, \
+    bytes_to_uint64, uint64_to_bytes
+
 try:
-    import numpy as np
     from PIL import Image
 except ModuleNotFoundError as exc:
-    raise RuntimeError("please install modules 'numpy' and 'pillow'") from exc
+    raise RuntimeError("please install module 'pillow'") from exc
 except Exception as exc:
     raise RuntimeError(str(exc)) from exc
 
-from lnsync_pkg.miscutils import uint64_to_int64
-
-assert sys.byteorder == 'little'
-
-ONE_U64 = np.uint64(1)
-ZERO_U64 = np.uint64(0)
 DHASH_WIDTH = 8
 
-class DHash:
-    __slots__ = ('value',) # A uint64.
+def show_dhash(val):
+    res = ""
+    for k in range(64):
+        if val & 1:
+            res = "■" + res
+        else:
+            res = "▢" + res
+        if (k + 1) % 8 == 0 and k != 63:
+            res = "\n" + res
+        val >>= 1
+    print(res)
 
-    def __init__(self, value):
-        self.value = np.uint64(value)
+def dhash_int64(filepath):
+    val = image_file_to_dhash_uint64(filepath)
+    return uint64_to_int64(val)
 
-    def __str__(self):
-        val = self.value
-        res = ""
-        for k in range(64):
-            if val & ONE_U64:
-                res = "■" + res
-            else:
-                res = "▢" + res
-            if (k + 1) % 8 == 0 and k != 63:
-                res = "\n" + res
-            val >>= ONE_U64
-        return res
-
-    def to_uint64(self):
-        return self.value
-
-    def to_int64(self):
-        return uint64_to_int64(self.value)
-
-def dhash(filepath):
-    dhash = image_file_to_dhash_row(filepath)
-    return int(dhash.to_int64())
-
-def dhash_symmetric(filepath):
-    dhash = image_file_to_dhash_row(filepath)
-    val = dhash.to_uint64()
-    mirr_val = mirror_dhash_val(val)
+def dhash_symmetric_int64(filepath):
+    val = image_file_to_dhash_uint64(filepath)
+    mirr_val = mirror_dhash_uint64(val)
     return uint64_to_int64(min(val, mirr_val))
 
-def image_file_to_dhash_row(filepath):
+def image_file_to_dhash_uint64(filepath):
     img = Image.open(filepath).convert('L')
     img = img.resize((DHASH_WIDTH+1, DHASH_WIDTH),
                      resample=Image.BICUBIC)
-#    img.show(command="/usr/bin/eog")
-#    pr.print(filepath)
-    nparr = np.asarray(img)
-    dhash_val = calc_dhash_row(nparr)
-    dhash = DHash(dhash_val)
-#    print(str(dhash))
-    return dhash
+    return PIL_to_dhash_uint64(img)
 
-def calc_dhash_row(gray_array):
+def PIL_to_dhash_uint64(img):
     """
-    From a gray image with shape (  8,9)=(row,col) to a dhash value.
-    Return uint64, most significant byte is top row,
-    most significant bit is top-left difference.
+    From a gray PIL image with width x height == (9,8) to a dhash value.
+    Return uint64, most significant byte is top row, most significant bit is
+    top-left difference.
     """
-    assert gray_array.shape == (8, 9)
-    row_hash = ZERO_U64
-#    print(gray_array)
-    for row_ind in range(DHASH_WIDTH):
-        row = gray_array[row_ind]
-        for col_ind in range(DHASH_WIDTH):
-            row_bit = ONE_U64 if row[col_ind] < row[col_ind+1] else ZERO_U64
-            row_hash <<= ONE_U64
-            row_hash += row_bit
+    assert (img.width, img.height) == (9, 8)
+    row_hash = 0
+    for row_ind in range(8):
+        for col_ind in range(8):
+            row_hash <<= 1
+            if img.getpixel((col_ind, row_ind)) \
+                   < img.getpixel((col_ind+1, row_ind)):
+                row_hash += 1
     return row_hash
 
 _MIRROR_TABLE = None
-_NP = None
 
-def mirror_dhash_val(dash_value):
+def mirror_dhash_uint64(dash_value):
     """
     Compute the mirror dhash, given as an int value.
     """
     global _MIRROR_TABLE
-    global _NP
+
     def mirror_byte(x_uint8):
         res = 0
         for _k in range(8):
@@ -102,24 +76,48 @@ def mirror_dhash_val(dash_value):
             if x_uint8 & 1:
                 res += 1
             x_uint8 >>= 1
-        return _NP.uint8(res)
+        return res
+
     if _MIRROR_TABLE is None:
-        import numpy as np
-        _NP = np
-        _MIRROR_TABLE = _NP.zeros(256, dtype=_NP.uint8)
+        import array
+        _MIRROR_TABLE = array.array('H', [0]* 256)
         for k in range(256):
             _MIRROR_TABLE[k] = mirror_byte(k)
-    dhash_in = _NP.uint64(dash_value) # Copy?
-    arr_in = _NP.frombuffer(dhash_in, dtype=_NP.uint8)
-    arr_out = _NP.zeros(8, dtype=_NP.uint8)
-    for k in range(8):
-        arr_out[k] = _MIRROR_TABLE[arr_in[k]]
-    res = _NP.frombuffer(arr_out, dtype=_NP.uint64)
-    return res[0]
 
-if __name__ == "__main__":
+    arr = uint64_to_bytes(dash_value)
+    for k in range(8):
+        arr[k] = _MIRROR_TABLE[arr[k]]
+    val = bytes_to_uint64(arr)
+    return val
+
+def dhash_from_argv():
+    if len(sys.argv) <= 1:
+        print("Usage: image_dhash [-sym] [-show] <IMGFILES>*")
+
+    try:
+        sym_flag = sys.argv.index("-sym")
+        del sys.argv[sym_flag]
+        sym_flag = True
+    except ValueError:
+        sym_flag = False
+
+    try:
+        show_flag = sys.argv.index("-show")
+        del sys.argv[show_flag]
+        show_flag = True
+    except ValueError:
+        show_flag = False
+
     for file in sys.argv[1:]:
         try:
-            print(dhash(sys.argv[1]))
+            dhash_val_uint64 = image_file_to_dhash_uint64(file)
+            if sym_flag:
+                dhash_val_uint64 = min(dhash_val_uint64, mirror_dhash_uint64(dhash_val_uint64))
+            print("Hash:", dhash_val_uint64)
+            if show_flag:
+                show_dhash(dhash_val_uint64)
         except Exception as exc:
             print(f"Cannot process {file}: {str(exc)}")
+
+if __name__ == "__main__":
+    dhash_from_argv()

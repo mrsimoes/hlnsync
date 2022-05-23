@@ -33,12 +33,13 @@ import abc
 
 from psutil import disk_partitions
 
+import lnsync_pkg.printutils as pr
 from lnsync_pkg.hasher_functions import FileHasherXXHASH64
 from lnsync_pkg.miscutils import MIN_INT64, MAX_INT64
 
 FSE = sys.getfilesystemencoding() # Always UTF8 on Linux.
 
-def get_fs_type(path):
+def get_mountpt_and_fstype(path):
     """
     Return file_system for a path.
     """
@@ -48,28 +49,31 @@ def get_fs_type(path):
         mntpoint_to_fstype[part.mountpoint] = part.fstype
     while True:
         if path in mntpoint_to_fstype:
-            return mntpoint_to_fstype[path]
+            return path, mntpoint_to_fstype[path]
         if path == os.sep:
-            return None
+            raise RuntimeError(f"could not find mountpoint for: {path}")
         path = os.path.dirname(path)
 
-SYSTEMS_W_INODE = ('ext2', 'ext3', 'ext4', 'ecryptfs',
-                   'btrfs', 'ntfs', 'fuse.encfs', 'fuseblk')
-SYSTEMS_W_INODE += tuple(s.swapcase() for s in SYSTEMS_W_INODE)
-SYSTEMS_WO_INODE = ('vfat', 'fat', 'FAT')
+SYSTEMS_W_INODE = ['ext2', 'ext3', 'ext4', 'ecryptfs',
+                   'btrfs', 'ntfs', 'fuse.encfs', 'fuseblk']
+SYSTEMS_WO_INODE = ['vfat', 'fat', 'FAT', 'iso9660']
+
+for fs_list in SYSTEMS_W_INODE, SYSTEMS_WO_INODE:
+    fs_list.extend([s.swapcase() for s in fs_list])
 
 def make_id_computer(topdir_path):
     """
     Return an instance of the appropriate IDComputer class.
     """
-    file_sys = get_fs_type(topdir_path)
-    if file_sys in SYSTEMS_W_INODE:
-        return InodeIDComputer(topdir_path, file_sys)
-    elif file_sys in SYSTEMS_WO_INODE:
-        return HashPathIDComputer(topdir_path, file_sys)
+    mtpoint, fstype = get_mountpt_and_fstype(topdir_path)
+    if fstype in SYSTEMS_W_INODE:
+        return InodeIDComputer(topdir_path, fstype)
+    elif fstype in SYSTEMS_WO_INODE:
+        pr.warning(f"using path hash as file id for: {topdir_path}")
+        return HashPathIDComputer(topdir_path, fstype, mtpoint)
     else:
-        raise EnvironmentError(
-            "IDComputer: not implemented for file system %s." % file_sys)
+        raise NotImplementedError(
+            f"IDComputer: not implemented for file system: {fstype}")
 
 class IDComputer:
     """
@@ -102,29 +106,38 @@ class HashPathIDComputer(IDComputer):
     """
     Return hash(path)+size(file)+smallint as file serial number.
     """
-    def __init__(self, topdir_path, file_sys):
+    def __init__(self, topdir_path, file_sys, mtpoint):
+        if os.path.samefile(topdir_path, mtpoint):
+            self._mtpoint_to_topdir = ""
+        else:
+            self._mtpoint_to_topdir = os.path.relpath(topdir_path, mtpoint)
         self._hasher = FileHasherXXHASH64()
         self._hash_plus_size_uniq = {}
         super().__init__(topdir_path, file_sys)
         self.subdir_invariant = False
 
     def get_id(self, rel_path, stat_data=None):
+        """
+        rel_path is relative to topdir_path, but we hash the relative
+        path from the mount point.
+        """
         if stat_data is None:
             stat_data = os.stat(os.path.join(self._topdir_path, rel_path))
         file_id = 0
-        for path_component in rel_path.split(os.sep)[:-1]:
+        rel_path_to_mt = os.path.join(self._mtpoint_to_topdir, rel_path)
+        for path_component in rel_path_to_mt.split(os.sep)[:-1]:
             path_component = path_component.encode(FSE, "surrogateescape")
             file_id += self._hasher.hash_datum(path_component)
         file_id += stat_data.st_size
-        while file_id in self._hash_plus_size_uniq:
-            if self._hash_plus_size_uniq[file_id] == rel_path:
-                return file_id
-            else:
-                file_id += 1
         # Make sure we return a (signed) int64
         if file_id > MAX_INT64:
             file_id %= (MAX_INT64 + 1)
         if file_id < MIN_INT64:
             file_id = - (-file_id % (-MIN_INT64+1))
-        self._hash_plus_size_uniq[file_id] = rel_path
+        while file_id in self._hash_plus_size_uniq:
+            if self._hash_plus_size_uniq[file_id] == rel_path_to_mt:
+                return file_id
+            else:
+                file_id += 1
+        self._hash_plus_size_uniq[file_id] = rel_path_to_mt
         return file_id

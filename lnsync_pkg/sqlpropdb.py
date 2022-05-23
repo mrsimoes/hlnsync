@@ -418,11 +418,11 @@ class SQLPropDBManagerOffline(SQLPropDBManager, mode=Mode.OFFLINE):
 
     def get_all_sizes(self):
         """
-        Return a set with all sizes for which there is some file in the tree.
+        Return an iterable with all sizes for which there is some file in the tree.
         """
         cmd = "SELECT size FROM metadata;"
         try:
-            sizes = {res[0] for res in self._cx.execute(cmd).fetchall()}
+            sizes = map(lambda res: res[0], self._cx.execute(cmd).fetchall())
         except Exception as exc:
             raise PropDBError( \
                 f"Cannot read database {self.dbpath} sizes: {exc}.")
@@ -433,7 +433,6 @@ class SQLPropDBManagerOffline(SQLPropDBManager, mode=Mode.OFFLINE):
         Return the max of all sizes, or None if there are no files.
         """
         cmd = "SELECT MAX(size) FROM metadata;"
-        breakpoint()
         try:
             res = self._cx.execute(cmd).fetchone()
             if res is not None:

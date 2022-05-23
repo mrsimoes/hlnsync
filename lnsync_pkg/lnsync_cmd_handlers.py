@@ -24,7 +24,7 @@ from lnsync_pkg.prefixdbname import pick_db_basename, get_default_dbprefix
 from lnsync_pkg.fileid import make_id_computer
 from lnsync_pkg.groupedfileprinter import GroupedFileListPrinter
 from lnsync_pkg.matcher import TreePairMatcher
-from lnsync_pkg.hashtree import \
+from lnsync_pkg.filehashtree import \
     FileHashTree, TreeError, TreeNoPropValueError, PropDBException
 from lnsync_pkg.lnsync_treeargs import TreeLocation, TreeLocationOnline
 from lnsync_pkg.modaltype import Mode
@@ -409,12 +409,12 @@ def do_check(args):
             """
             Print report and return final error status.
             """
-            pr.print("%d distinct file(s) checked" % \
-                     (len(file_objs_checked_ok) \
-                      + len(file_objs_checked_bad),))
             if files_skipped > 0:
                 pr.print("%d file(s) skipped due to no existing hash" %
                          (files_skipped,))
+            pr.print("%d distinct file(s) checked" % \
+                     (len(file_objs_checked_ok) \
+                      + len(file_objs_checked_bad),))
             if files_error > 0:
                 pr.print("%d file(s) skipped due to file error" %
                          (files_error,))
@@ -532,7 +532,7 @@ def do_onfirstonly(args):
             first_tree = all_trees[0]
             other_trees = all_trees[1:]
             first_tree.scan_subtree()
-            for file_sz in sorted(first_tree.get_all_sizes()):
+            for file_sz in sorted(first_tree.get_possible_sizes()):
                 with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
                     if all(is_iter_empty(tr.size_to_files_gen(file_sz)) \
                                for tr in other_trees):
@@ -565,10 +565,10 @@ def do_onfirstnotonly(args):
             FileHashTree.scan_online_trees_async(all_trees)
             first_tree = all_trees[0]
             other_trees = all_trees[1:]
-            for file_sz in sorted(first_tree.get_all_sizes()):
+            for file_sz in sorted(first_tree.get_possible_sizes()):
                 with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
-                    if not all(is_iter_empty(tr.size_to_files_gen(file_sz)) \
-                            for tr in other_trees):
+                    if all(is_iter_empty(tr.size_to_files_gen(file_sz)) \
+                           for tr in other_trees):
                         continue
                     for _hash, located_files in \
                             fdupes.located_files_onfirstnotonly_of_size(

@@ -23,10 +23,10 @@ import copy
 from collections import namedtuple
 
 from lnsync_pkg.human2bytes import bytes2human
-from lnsync_pkg.miscutils import is_subdir
+from lnsync_pkg.miscutils import is_subdir, ArgumentParserError
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.onegraph import OneGraph
-from lnsync_pkg.proptree import Mode
+from lnsync_pkg.fileproptree import Mode
 from lnsync_pkg.backtracker import SearchState, do_search
 
 SrcTgt = namedtuple("SrcTgt", ["src", "tgt"])
@@ -46,7 +46,7 @@ class TreePairMatcher:
         if src_tree.db.mode == Mode.ONLINE and \
             (is_subdir(src_tree.topdir_path, tgt_tree.topdir_path) \
              or is_subdir(tgt_tree.topdir_path, src_tree.topdir_path)):
-            raise ValueError(
+            raise ArgumentParserError(
                 "Source and target cannot be subdirectories of each other.")
         self.trees = SrcTgt(src_tree, tgt_tree)
         self.mt_state = State(self.trees)
@@ -286,13 +286,10 @@ class State(SearchState):
         """
         Create a stack of (size, hash) to match.
         """
-        def list_intersection(list1, list2):
-            tmp = set(list1)
-            return [e for e in list2 if e in tmp]
-        common_sizes = list_intersection(self.trees.src.get_all_sizes(),
-                                         self.trees.tgt.get_all_sizes())
-        common_sizes.sort()
-        for common_sz in common_sizes:
+        # Expect two long lists with a large intersection.
+        sz1_set = set(self.trees.src.get_all_sizes())
+        sz2_set = set(self.trees.tgt.get_all_sizes())
+        for common_sz in sorted(sz1_set.intersection(sz2_set)):
             with pr.ProgressPrefix("size %s:" % (bytes2human(common_sz),)):
                 self._init_stack_and_pathop_persize(common_sz)
 

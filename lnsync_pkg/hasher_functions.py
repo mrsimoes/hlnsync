@@ -118,7 +118,7 @@ class ImageHasher(DigestHasher):
     def __init__(self):
         super().__init__()
         import lnsync_pkg.image_dhash as image_dhash
-        self.dhash = image_dhash.dhash
+        self.dhash = image_dhash.dhash_int64
 
     def hash_file(self, fpath):
         dhash_val = self.dhash(fpath)
@@ -149,7 +149,7 @@ class ThumbnailMirrorHasher(ThumbnailHasher):
     def __init__(self):
         super().__init__()
         import lnsync_pkg.image_dhash as image_dhash
-        self.dhash = image_dhash.dhash_symmetric
+        self.dhash = image_dhash.dhash_symmetric_int64
 
 class ExternalHasher(DigestHasher):
     _hasher_function_id = HasherFunctionID.EXTERNAL

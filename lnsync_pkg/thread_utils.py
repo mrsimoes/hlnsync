@@ -126,16 +126,16 @@ def thread_executor_terminator(fn_task, objs, worth_threading):
         for obj in objs:
             fn_task(obj)
         return
-    threads = set()
+    thread_set = set()
     try:
         for obj in objs:
-            fn = lambda: fn_task(obj)
-            new_thread = threading.Thread(target=fn)
-            threads.add(new_thread)
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+            thread_fn = lambda: fn_task(obj)
+            new_thread = threading.Thread(target=thread_fn)
+            thread_set.add(new_thread)
+        for thread in thread_set:
+            thread.start()
+        for thread in thread_set:
+            thread.join()
     finally:
         pass
 

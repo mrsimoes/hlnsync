@@ -93,9 +93,11 @@ def pick_db_basename(dir_path, dbprefix=None):
             msg = "no write access to " + dir_path
             raise EnvironmentError(msg)
         def random_digit_str(ndigit=3):
-            """Return a random string of digits of length ndigit."""
+            """
+            Return a random string of digits of length ndigit.
+            """
             return ("%%0%dd" % ndigit) % random.randint(0, 10**ndigit-1)
         db_basename = dbprefix + "-" + random_digit_str() + ".db"
     else:
-        raise EnvironmentError("too many db files at " + dir_path)
+        raise RuntimeError("too many db files at " + dir_path)
     return db_basename
