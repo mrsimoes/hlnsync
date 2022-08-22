@@ -85,7 +85,7 @@ def int32_to_uint32(value):
     return res
 
 
-def is_iter_empty(iterator):
+def iter_is_empty(iterator):
     """
     Check if iterator is empty, consuming one element to test.
     """
@@ -94,6 +94,9 @@ def is_iter_empty(iterator):
         return False
     except StopIteration:
         return True
+
+def iter_len(iterator):
+    return sum (1 for e in iterator)
 
 class HelperAppError(Exception):
     def __init__(self, cmd, error_msg):

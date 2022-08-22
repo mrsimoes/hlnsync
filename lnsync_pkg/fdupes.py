@@ -20,7 +20,7 @@ And for FileItem:
 
 from collections import defaultdict
 
-from lnsync_pkg.miscutils import is_iter_empty
+from lnsync_pkg.miscutils import iter_is_empty, iter_len
 from lnsync_pkg.fileproptree import FileItem, TreeNoPropValueError
 import lnsync_pkg.printutils as pr
 
@@ -57,11 +57,17 @@ def sizes_repeated(all_trees, hard_links):
                 sizes_seen_twice.add(file_sz)
                 yield file_sz
             else:
-                files_this_sz = tree.size_to_files(file_sz)
-                if not files_this_sz:
+                files_this_sz = tree.size_to_files_gen(file_sz)
+                try:
+                    first_file = next(files_this_sz)
+                except StopIteration:
                     continue
-                if len(files_this_sz) > 1 or \
-                        (not hard_links and len(files_this_sz[0].relpaths) > 1):
+                try:
+                    second_file = next(files_this_sz)
+                except StopIteration:
+                    second_file = None
+                if second_file is not None or \
+                        (not hard_links and len(first_file.relpaths) > 1):
                 # If not hard_links, a size value seen once for an id
                 # with multiple paths is recorded as a dupe.
                     sizes_seen_twice.add(file_sz)
@@ -100,6 +106,40 @@ def located_files_repeated_of_size(all_trees, file_sz, hard_links):
     for prop_val in props_twice_tree_fobjs:
         yield prop_val, props_twice_tree_fobjs[prop_val]
 
+def located_files_on_more_than_one_tree(all_trees, file_sz, hard_links):
+    """
+    Yield all tuples (prop, {tree1: [files_1],... {tree_k, [files_k]})
+    over all file props which correspond to a file on at least two trees.
+    If file_sz is None, go over all files.
+    If hard_links is False, count multiple paths to the same file as repeats of
+    the prop.
+    """
+    # For size sz and all trees, these are {prop: {tree: [fobjs]}}
+    props_one_tree_fobjs = defaultdict(lambda: defaultdict(lambda: []))
+    props_two_tree_fobjs = defaultdict(lambda: defaultdict(lambda: []))
+    for tree in all_trees:
+        props_new_this_tree = defaultdict(lambda: [])
+        for fobj in tree.size_to_files_gen(file_sz):
+            prop_val = _get_prop(tree, fobj)
+            if prop_val is None:
+                continue
+            if prop_val in props_two_tree_fobjs:
+                props_two_tree_fobjs[prop_val][tree].append(fobj)
+            elif prop_val in props_one_tree_fobjs:
+                props_two_tree_fobjs[prop_val] = \
+                    props_one_tree_fobjs[prop_val]
+                del props_one_tree_fobjs[prop_val]
+                props_two_tree_fobjs[prop_val][tree].append(fobj)
+            else:
+                if not hard_links and len(fobj.relpaths) > 1:
+                    props_two_tree_fobjs[prop_val][tree] = [fobj]
+                else:
+                    props_new_this_tree[prop_val] = [fobj]
+        for prop, fobjs in props_new_this_tree.items():
+            props_one_tree_fobjs[prop][tree] = fobjs
+    for prop_val in props_two_tree_fobjs:
+        yield prop_val, props_two_tree_fobjs[prop_val]
+
 def sizes_onall(all_trees):
     """
     Yield all sizes for which at least one file of that size exists on
@@ -107,10 +147,10 @@ def sizes_onall(all_trees):
     """
     if len(all_trees) >= 1:
         pr.progress("scanning sizes")
-        least_sizes_tree = min(all_trees, key=lambda t: len(t.get_possible_sizes()))
+        least_sizes_tree = min(all_trees, key=lambda t: iter_len(t.get_possible_sizes()))
         candidate_sizes = sorted(least_sizes_tree.get_possible_sizes())
         for file_sz in candidate_sizes:
-            if all(not is_iter_empty(tr.size_to_files_gen(file_sz)) \
+            if all(not iter_is_empty(tr.size_to_files_gen(file_sz)) \
                    for tr in all_trees): # Check also first tree.
                 yield file_sz
 

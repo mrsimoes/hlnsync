@@ -61,7 +61,7 @@ class OneGraph:
         assert not node_a in self._arrows, \
             "OneGraph.add_arrow: arrow already in"
         self._arrows[node_a] = node_b
-        cyc = self._cycle_from(node_b)
+        cyc = self._cycle_from_list(node_b)
         if cyc is not None: # There's a cycle. Is it a new one?
             elem = cyc[0] # Pick any elem in the found cycle.
             if not any((elem in old_cyc) for old_cyc in self._cycles):
@@ -117,7 +117,7 @@ class OneGraph:
                 leaves.discard(node)
         return leaves
 
-    def _cycle_from(self, node):
+    def _cycle_from_list(self, node):
         """
         Return a (list) cycle starting at e, if one exists, None otherwise.
         """
@@ -130,7 +130,8 @@ class OneGraph:
             if top in arrow_gr:        # There is a next node.
                 nxt = arrow_gr[top]
                 if nxt in stack:
-                    return stack
+                    pos = stack.index(nxt)
+                    return stack[pos:]
                 else:
                     stack.append(nxt)
             else:

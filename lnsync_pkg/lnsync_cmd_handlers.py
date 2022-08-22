@@ -17,7 +17,7 @@ import tempfile
 
 from lnsync_pkg.sqlpropdb import SQLPropDBManager
 import lnsync_pkg.printutils as pr
-from lnsync_pkg.miscutils import is_subdir, is_iter_empty, HelperAppError
+from lnsync_pkg.miscutils import is_subdir, iter_is_empty, HelperAppError
 from lnsync_pkg.human2bytes import bytes2human
 import lnsync_pkg.fdupes as fdupes
 from lnsync_pkg.prefixdbname import pick_db_basename, get_default_dbprefix
@@ -478,7 +478,6 @@ def do_fdupes(args):
     Find duplicate files, using file size as well as file hash.
     """
     return_code = 1 # Default if no duplicates are found.
-
     grouper = GroupedFileListPrinter(args.hard_links, args.all_links)
     with FileHashTree.listof(targ.kws() for targ in args.locations) \
             as all_trees:
@@ -494,6 +493,29 @@ def do_fdupes(args):
         else:
             for _hash, located_files in \
                     fdupes.located_files_repeated_of_size(
+                            all_trees, None, args.hard_links):
+                return_code = 0
+                grouper.add_group(located_files)
+        grouper.flush()
+    return return_code
+
+def do_onmorethanone(args):
+    return_code = 1 # Default if none are found.
+    grouper = GroupedFileListPrinter(args.hard_links, args.all_links)
+    with FileHashTree.listof(targ.kws() for targ in args.locations) \
+            as all_trees:
+        FileHashTree.scan_online_trees_async(all_trees)
+        if hash_depends_on_file_size():
+            for file_sz in fdupes.sizes_repeated(all_trees, args.hard_links):
+                with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
+                    for _hash, located_files in \
+                            fdupes.located_files_on_more_than_one_tree(
+                                    all_trees, file_sz, args.hard_links):
+                        return_code = 0
+                        grouper.add_group(located_files)
+        else:
+            for _hash, located_files in \
+                    fdupes.located_files_on_more_than_one_tree(
                             all_trees, None, args.hard_links):
                 return_code = 0
                 grouper.add_group(located_files)
@@ -534,7 +556,7 @@ def do_onfirstonly(args):
             first_tree.scan_subtree()
             for file_sz in sorted(first_tree.get_possible_sizes()):
                 with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
-                    if all(is_iter_empty(tr.size_to_files_gen(file_sz)) \
+                    if all(iter_is_empty(tr.size_to_files_gen(file_sz)) \
                                for tr in other_trees):
                         for fobj in first_tree.size_to_files_gen(file_sz):
                             grouper.add_group({first_tree: [fobj]})
@@ -567,7 +589,7 @@ def do_onfirstnotonly(args):
             other_trees = all_trees[1:]
             for file_sz in sorted(first_tree.get_possible_sizes()):
                 with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
-                    if all(is_iter_empty(tr.size_to_files_gen(file_sz)) \
+                    if all(iter_is_empty(tr.size_to_files_gen(file_sz)) \
                            for tr in other_trees):
                         continue
                     for _hash, located_files in \

@@ -18,7 +18,7 @@ The file structure under a directory (path names, file sizes, mod dates) can be 
 
 Most _lnsync_ commands accept offline trees as well as local directory. For example, an offline tree may be used as the source to reorganize a target directory according to a certain pattern.
 
-Via a config file, specfic options may be applied to online trees matching a glob pattern.
+Via a config file, specific options may be applied to online trees matching a glob pattern.
 
 To describe a tree: `lnsync info <LOCATION>`.
 
@@ -27,7 +27,7 @@ Note that the database file of an online tree is NOT an offline tree, since it i
 ### File Hashes
 Files are identified by their content hash, using either 32-bit or 64-bit xxHash (a fast, non-cryptographic hash function), or other functions (see Hashing Functions below).
 
-Hash values are stored in local databases, on a single file per tree, by default with a name matching `lnsync-[0-9]+.db`. Only one such file should exist at each location. At the time of creation, the numeric part is chosen randomly, to avoid overwritting by accident when doing a full sync. Files matching `lnsync-[0-9]+.db` as well as the hash database in use are ignored by _lnsync_ operations.
+Hash values are stored in local databases, on a single file per tree, by default with a name matching `lnsync-[0-9]+.db`. Only one such file should exist at each location. At the time of creation, the numeric part is chosen randomly, to avoid overwriting by accident when doing a full sync. Files matching `lnsync-[0-9]+.db` as well as the hash database in use are ignored by _lnsync_ operations.
 
 File modification times are used to detect stale hash values. Modification times are not synced to the target.
 
@@ -52,7 +52,7 @@ Finally, the `lnsync-nopreset` entry point requires explicitly selecting the has
 ## Files, File Paths, and Hard Links
 On most current file systems, the same _file_ may be reached via multiple _file paths_, also called _aliases_, or _hard links_. If there is a single hard link to a file, removing that link deletes the file.
 
-`lnsync` oprerates on files, not file paths. E.g., if a file has two hard links, it does not count as a duplicate.
+`lnsync` operates on files, not file paths. E.g., if a file has two hard links, it does not count as a duplicate.
 
 ### Ignored File System Objects
 Files which cannot be read are skipped. File ownership and permissions are otherwise ignored.
@@ -97,7 +97,7 @@ To find duplicate files, run `lnsync fdupes /home/you/Photos`. Use `-z` to compa
 
 Use `-H` to treat hard links to the same file as distinct. If this option is not given, for each multiple-linked with other duplicates, a path is arbitrarily picked and printed.
 
-To find all files in Photos which are not in the backup (under any name): `lnsync onfirstonly /home/you/Photos /mnt/disk/Photos`. To find all files with jpg extension, `lnsync search "*.jpg" /home/you/Photos`.
+To find all files in Photos which are not in the backup (under any file name): `lnsync onfirstonly /home/you/Photos /mnt/disk/Photos`. To find all files with jpg extension, `lnsync search "*.jpg" /home/you/Photos`.
 
 To have any operation on a subdir of `/home/you/Photos` use the hash database at `/home/you/Photos`, include `root=/home/you/Photos` under section `/home/you/Photos/**` of your config file. (See Configuration Files below.)
 
@@ -130,11 +130,11 @@ By default, the database file corresponding to an online file tree is the unique
 
 To specify another prefix for all following online file trees, `--dbprefix <PREFIX>`.
 
-To specify a different database directory possibly for all online file trees where to look for the database file, `--dbrootdir DBDIR`. Each online file tree corresponding to a subdir of DBDIR will use the database file at DBDIR.
+To specify a different database directory possibly for all online file trees where to look for the database file, `--dbrootdir <DBDIR>+`. Each online file tree corresponding to a subdir of some DBDIR will use the database file at DBDIR. The closest DBDIR will be used. 
 
-To specify a directory containing database root directories to be used for any contained onlien tree, `--dbrootmounr DBMOUNTSLOCATION`. This is useful e.g. for removable media, which are all mounted at `/mnt/user`. Then `--dbrootmounr /mnt/user` will use `/mnt/user/somedrive` for the online tree at `/mnt/user/somedrive/some/subdir/`.
+To specify a directory containing database root directories to be used for any contained online tree, `--dbrootmount <DBMOUNTSLOCATION>*`. This is useful e.g. for removable media, which are all mounted at `/mnt/user`. Then `--dbrootmounr /mnt/user` will use `/mnt/user/somedrive` for the online tree at `/mnt/user/somedrive/some/subdir/`.
 
-To specify the database file for the following online file tree, `--dblocation FILEPATH`.
+To specify the database file for the following online file tree, `--dblocation <FILEPATH>`.
 
 ### Syncing
 
@@ -150,7 +150,7 @@ For each matched target file, its pathnames are made to match those of the corre
 
  - `-M=<size>` Excludes all files larger than <size>, which may be given in human form, e.g. `10k`, `2.1M`, `3G`.
 
- - `--exclude <glob_pattern> ... <glob_pattern>` Exclude source files and directories by glob patterns. There is a corresponding `--include` and these are interpreted as in `rsync --exclude <pattern> source/ target` (beware, compatability has not been fully tested).
+ - `--exclude <glob_pattern> ... <glob_pattern>` Exclude source files and directories by glob patterns. There is a corresponding `--include` and these are interpreted as in `rsync --exclude <pattern> source/ target` (beware, compatibility has not been fully tested).
 
   - A file or directory is excluded if it matches an `exclude` pattern before matching any `include` pattern.
 
@@ -187,7 +187,7 @@ The criteria for equality is matching hash value (plus matching size when using 
 
 - `fdupes [-h] [<tree>]+` Find files duplicated anywhere on the given trees.
 
-- `onall [<tree>]+`, `onfirstonly [<tree>]+`, `onfirstnotonly [<tree>]+`, `onlastonly [<tree>]+`, `onlastnotonly [<tree>]+` Find files as advertised.
+- `onall [<tree>]+`, `onfirstonly [<tree>]+`, `onfirstnotonly [<tree>]+`, `onlastonly [<tree>]+`, `onlastnotonly [<tree>]+`, `onmorethanone [<tree>]+`  NB: these operations ignore file names and operate only by file contents.
 
 - `search [<globpat>] <tree>*` Find files one of whose relative paths matches one of the given glob patterns (which are as in `--exclude`).
 
@@ -223,7 +223,7 @@ For each tree location in the command line, options are read from all sections w
 
 For example, to have an option applied to all locations, include it in a section`[**]`.
 
-To specify another configuration file altogether, `--config FILENAME`. To not load any config file: `--no-config`.
+To specify another configuration file altogether, `--config <FILENAME>`. To not load any config file: `--no-config`.
 
 ## Origin, Status, and Future Development
 
@@ -251,6 +251,8 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 
 ### Release Notes
 
+- v0.8.5: New `onmorethanone` search command. Small fixes.
+- v0.8.4: Performance improvements on find commamnds. Bug fixes. Allow multiple arguments to `--dbrootmount`.
 - v0.8.3: Performance improvements and bug fixes.
 - v0.8.2: New --show-size and --min-size options. Much faster searches in offline database. Bug fixes.
 - v0.8.1: Implement onfirstnotonly for all hash functions.
@@ -276,7 +278,7 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 - v0.1.9: Improved sync algorithm. Remove directories left empty after sync.
 - v0.1.0: Initial version.
 
-### Possible Improvements
+### Possible Future Improvements
 
 - Support hash values larger than 64 bits, including the newer 128-bit xxhash3, and others.
 - Better configuration file format.

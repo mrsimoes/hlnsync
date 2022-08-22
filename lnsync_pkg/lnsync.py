@@ -101,8 +101,7 @@ try:
     ArgumentParserConfig.set_optionals_section(LNSYNC_CONFIG_MAIN_SECTION)
     ArgumentParserConfig.set_default_config_files(
         "./lnsync.cfg",
-        os.path.expanduser("~/lnsync.cfg"),
-        os.path.expanduser("~/.lnsync.cfg"))
+        os.path.expanduser("~/lnsync.cfg"))
 except NoValidConfigFile:
     pass
 
@@ -470,13 +469,16 @@ dbrootdir_option_parser.add_argument(
     help="set database directory for all online locations that are subdirs")
 
 class DBRootMountLocationOption(DBRootDirOptions):
-    def apply_dbroot_option(self, pos_arg, opt_val):
-        pos_arg.set_alt_dbrootdir_parent(opt_val)
+    def apply_dbroot_option(self, pos_arg, opt_vals):
+        assert isinstance(opt_vals, list)
+        for opt_val in opt_vals:
+            pos_arg.set_alt_dbrootdir_parent(opt_val)
 
 dbrootdir_option_parser.add_argument(
     "--dbrootmount", metavar="DBROOTS_MOUNTS_LOCATION",
     type=readable_dir,
     action=DBRootMountLocationOption, sc_scope=Scope.ALL,
+    nargs="+",
     help="set directory whose immediate subdirs will be database directories " \
     "for online trees contained within")
 
@@ -679,7 +681,7 @@ parser_onall.add_argument(
 parser_onfirstonly = top_parser.add_parser_command(
     'onfirstonly', lnsync_cmd_handlers.do_onfirstonly,
     parents=_SEARCH_CMD_PARENTS,
-    help='find files on first tree which are not on any other')
+    help='find files on first tree and not on any other (content only)')
 
 parser_onfirstonly.add_argument(
     "locations", type=TreeLocation, action=TreeLocationAction, nargs="+")
@@ -689,7 +691,7 @@ parser_onfirstonly.add_argument(
 parser_onlastonly = top_parser.add_parser_command(
     'onlastonly', lnsync_cmd_handlers.do_onlastonly,
     parents=_SEARCH_CMD_PARENTS,
-    help='find files on last tree which are not on any other')
+    help='find files on last tree and not on any other (content only)')
 
 parser_onlastonly.add_argument(
     "locations", type=TreeLocation, action=TreeLocationAction, nargs="+")
@@ -699,7 +701,7 @@ parser_onlastonly.add_argument(
 parser_onfirstnotonly = top_parser.add_parser_command(
     'onfirstnotonly', lnsync_cmd_handlers.do_onfirstnotonly,
     parents=_SEARCH_CMD_PARENTS,
-    help='find files on first tree which are also on some other')
+    help='find files on first tree and also on some other (content only)')
 
 parser_onfirstnotonly.add_argument(
     "locations", type=TreeLocation, action=TreeLocationAction, nargs="+")
@@ -709,9 +711,19 @@ parser_onfirstnotonly.add_argument(
 parser_onlastnotonly = top_parser.add_parser_command(
     'onlastnotonly', lnsync_cmd_handlers.do_onlastnotonly,
     parents=_SEARCH_CMD_PARENTS,
-    help='find files on last tree which are also on some other')
+    help='find files on last tree but also on some other (content only)')
 
 parser_onlastnotonly.add_argument(
+    "locations", type=TreeLocation, action=TreeLocationAction, nargs="+")
+
+# onmorethanone
+
+parser_onmorethanone = top_parser.add_parser_command(
+    'onmorethanone', lnsync_cmd_handlers.do_onmorethanone,
+    parents=_SEARCH_CMD_PARENTS,
+    help='find files on at least two trees (content only)')
+
+parser_onmorethanone.add_argument(
     "locations", type=TreeLocation, action=TreeLocationAction, nargs="+")
 
 # search
@@ -1055,15 +1067,17 @@ def main():
     except TreeError as exc:
         pr.error("file tree: %s" % str(exc))
     except (PropDBError, SQLError) as exc:
-        pr.error("database: %s" % str(exc))
-    except NotImplementedError as exc:
-        pr.error("not implemented on your system: %s" % str(exc))
+        pr.error("database fatal: %s" % str(exc))
     except HelperAppError as exc:
         pr.error(str(exc))
     except ArgumentParserError as exc:
         # Caught here if raised outside an Action.
         # Used instead of ArgumentParser.error, which exits with status 2.
         pr.error("parsing: %s" % (exc,))
+    except NotImplementedError as exc:
+        pr.error("not implemented on your system: %s" % str(exc))
+    except EnvironmentError as exc:
+        pr.error(str(exc))
     except (RuntimeError,) as exc:
         pr.error("internal: %s" % str(exc))
     sys.exit(exit_code)
