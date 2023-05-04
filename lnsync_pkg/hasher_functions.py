@@ -55,6 +55,7 @@ class HasherFunctionID(IntEnum):
     IMAGE_DHASH = 2
     THUMB_DHASH = 3
     THUMB_DHASH_SYM = 4
+    BASENAME_HASH = 5
     EXTERNAL = 255
 
     @staticmethod
@@ -132,7 +133,7 @@ class ThumbnailHasher(ImageHasher):
         try:
             from lnsync_pkg.gnome_thumbnailer \
                 import GnomeThumbnailer, ThumbnailerError
-        except ThumbnailerError as exc:
+        except Exception as exc:
             msg = f"cannot load gnome thumbnail module: {str(exc)};"
             msg += "'gnome-desktop' is needed"
             raise RuntimeError(msg) from exc
@@ -150,6 +151,20 @@ class ThumbnailMirrorHasher(ThumbnailHasher):
         super().__init__()
         import lnsync_pkg.image_dhash as image_dhash
         self.dhash = image_dhash.dhash_symmetric_int64
+
+class BasenameHasher(DigestHasher):
+    _hasher_function_id = HasherFunctionID.BASENAME_HASH
+    def __init__(self):
+        super().__init__()
+        import xxhash # In the requirements, no check needed.
+        self._xxhash = xxhash
+
+    def hash_file(self, fpath):
+        # TODO handle files with multiple paths.
+        # TODO This just picks one filename.
+        basename = os.path.split(fpath)[-1]
+        hash_val_uint64 = self._xxhash.xxh64(basename).intdigest()
+        return uint64_to_int64(hash_val_uint64)
 
 class ExternalHasher(DigestHasher):
     _hasher_function_id = HasherFunctionID.EXTERNAL

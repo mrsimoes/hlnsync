@@ -1,6 +1,11 @@
 make.sh
 README.html
 
+bluefish*.bfproject
+
+thumbnail_test_images/
+sync_test_dirs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

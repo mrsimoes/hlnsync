@@ -45,9 +45,9 @@ FSE = sys.getfilesystemencoding() # Always UTF8 on Linux.
 # Make printing sequences of terminal ctrl codes thread-safe.
 PRINT_LOCK = threading.RLock()
 
-FATAL_LEVEL = -2
-ERROR_LEVEL = -1
-WARNING_LEVEL = 0
+FATAL_LEVEL = -3
+ERROR_LEVEL = -2
+WARNING_LEVEL = -1
 PRINT_LEVEL = 0
 INFO_LEVEL = 1
 DEBUG_LEVEL = 2

@@ -39,7 +39,7 @@ are reversible, except those that delete a file's only path.
 import os
 
 import lnsync_pkg.printutils as pr
-from lnsync_pkg.fileid import make_id_computer
+from lnsync_pkg.filesystems import make_id_computer
 from lnsync_pkg.glob_matcher import GlobMatcher
 
 class TreeError(Exception):
@@ -201,11 +201,18 @@ class FileTree:
     """
     A file tree that can read from disk and write back changes.
 
-    Support files with multiple paths (hard links) and persistent serial number
-    id (inode), dirs, and explicit 'other'.
-    Files are accessible by file id.
+    Each file may have multiple paths (hard links).
+    Each file is identified by a persistent serial number id (inode).
+    Paths may be added or removed to a file object.
+    When a path is added to a file, it is registered into the tree.
+    If a file has a single path and that path is removed, the file is
+    de-registered from the tree.
+
+    Directory entries may also be "other," to represent pipes, etc.
+
     Optionally, associate metadata (size, ctime, mtime) to files. In this case,
     files are accessible by size.
+
     Files can be excluded by size limit. File paths and dirs can be excluded by
     glob pattern. Exclude patterns may be set so long as the root dir hasn't
     been scanned yet.
@@ -492,7 +499,7 @@ class FileTree:
                 pr.debug("ignored file by size: %s", obj_path)
                 parent_obj.add_entry(basename, ExcludedItem(basename))
                 return
-        self._add_path(file_obj, parent_obj, basename)
+        self.add_path(file_obj, parent_obj, basename)
 
     def _scan_dir_process_dir(
             self, parent_obj, obj_id, parent_glob, basename):
@@ -577,7 +584,7 @@ class FileTree:
                     pr.debug("ignored special file %s", obj_abspath)
                     yield (obj_bname, None, OtherItem, None)
 
-    def _add_path(self, file_obj, dir_obj, fbasename):
+    def add_path(self, file_obj, dir_obj, fbasename):
         """
         Add a new path to a file object:  fbasename at dir_obj.
         If this is the first path, the file is registered into
@@ -596,7 +603,7 @@ class FileTree:
         relpath = os.path.join(dir_obj.get_relpath(), fbasename)
         file_obj.relpaths.append(relpath)
 
-    def _rm_path(self, file_obj, dir_obj, fbasename):
+    def rm_path(self, file_obj, dir_obj, fbasename):
         """
         Remove a path from an existing file: fbasename at dir.
         dir must have already been scanned.
@@ -606,7 +613,7 @@ class FileTree:
         dir_obj.rm_entry(fbasename)
         relpath = os.path.join(dir_obj.get_relpath(), fbasename)
         assert relpath in file_obj.relpaths, \
-            "_rm_path: non-existing relpath."
+            "rm_path: non-existing relpath."
         file_obj.relpaths.remove(relpath)
         if file_obj.relpaths == []:
             fid = file_obj.file_id
@@ -623,8 +630,8 @@ class FileTree:
         """
         paths = list(file_obj.relpaths)
         for path in paths:
-            tr_obj = self.path_to_obj(os.path.dirname(path))
-            self._rm_path(file_obj, tr_obj, os.path.basename(path))
+            dir_obj = self.path_to_obj(os.path.dirname(path))
+            self.rm_path(file_obj, dir_obj, os.path.basename(path))
 
     def path_to_obj(self, relpath):
         """
@@ -746,8 +753,8 @@ class FileTree:
         Add a new path to an existing file, creating intermediate dirs if
         needed.
         """
-        tr_obj = self._create_dir_if_needed_writeback(os.path.dirname(relpath))
-        self._add_path(file_obj, tr_obj, os.path.basename(relpath))
+        dir_obj = self._create_dir_if_needed_writeback(os.path.dirname(relpath))
+        self.add_path(file_obj, dir_obj, os.path.basename(relpath))
         if self.writeback:
             assert file_obj is not None, \
                 "add_path_writeback: no file_obj."
@@ -759,11 +766,11 @@ class FileTree:
     def rm_path_writeback(self, file_obj, relpath):
         if self.writeback:
             os.unlink(self.rel_to_abs(relpath))
-        tr_obj = self.path_to_obj(os.path.dirname(relpath))
-        assert tr_obj is not None and tr_obj.is_dir(), \
+        dir_obj = self.path_to_obj(os.path.dirname(relpath))
+        assert dir_obj is not None and dir_obj.is_dir(), \
             "rm_path_writeback: expected a dir at " + \
                 os.path.dirname(relpath)
-        self._rm_path(file_obj, tr_obj, os.path.basename(relpath))
+        self.rm_path(file_obj, dir_obj, os.path.basename(relpath))
 
     def mv_path_writeback(self, file_obj, fn_from, fn_to):
         """
@@ -776,8 +783,8 @@ class FileTree:
             "mv_path_writeback: expected a dir at " + \
                 os.path.dirname(fn_from)
         d_to = self._create_dir_if_needed_writeback(os.path.dirname(fn_to))
-        self._add_path(file_obj, d_to, os.path.basename(fn_to))
-        self._rm_path(file_obj, d_from, os.path.basename(fn_from))
+        self.add_path(file_obj, d_to, os.path.basename(fn_to))
+        self.rm_path(file_obj, d_from, os.path.basename(fn_from))
         if self.writeback:
             os.rename(self.rel_to_abs(fn_from), self.rel_to_abs(fn_to))
 
@@ -803,8 +810,8 @@ class FileTree:
         Return dir obj corresponding to dir_relpath, creating all needed
         directories. May raise TreeError.
         """
-        tr_obj = self.path_to_obj(dir_relpath)
-        if tr_obj is None:
+        dir_obj = self.path_to_obj(dir_relpath)
+        if dir_obj is None:
             supdname = os.path.dirname(dir_relpath)
             dbasename = os.path.basename(dir_relpath)
             supd = self._create_dir_if_needed_writeback(supdname)
@@ -814,8 +821,8 @@ class FileTree:
             if self.writeback:
                 os.mkdir(self.rel_to_abs(dir_relpath))
             return newd
-        elif tr_obj.is_dir():
-            return tr_obj
+        elif dir_obj.is_dir():
+            return dir_obj
         else:
             raise TreeError("cannot create dir " + dir_relpath)
 

@@ -105,9 +105,7 @@ try:
 except NoValidConfigFile:
     pass
 
-####################
-# Argument parsing
-####################
+## Argument parsing
 
 # Utilities.
 
@@ -119,9 +117,7 @@ def relative_path_type(value):
         raise argparse.ArgumentTypeError("not a relative path: %s." % value)
     return value
 
-####################
-# Top-level parsers
-####################
+## Top-level parsers
 
 # Verbosity control.
 
@@ -213,9 +209,7 @@ debugtrees_option_parser.add_argument(
     help=argparse.SUPPRESS)
 
 
-####################
-# Options applying to all tree arguments.
-####################
+## Options applying to all tree arguments.
 
 # Many optional arguments are shared by multiple command parsers.
 # To factor out these arguments, define as many single-argument parsers:
@@ -276,13 +270,9 @@ hard_links_option_parser.add_argument(
     default=True,
     help="on results, print all hard links, not just one")
 
-####################
-# Options applying to one or more tree args.
-####################
+## Options applying to one or more tree args.
 
-##########
-# Database file location options
-##########
+## Database file location options
 
 dblocation_option_parser = argparse.ArgumentParser(add_help=False)
 
@@ -316,9 +306,7 @@ dblocation_option_parser.add_argument(
     action=DBLocationTreeOption, sc_scope=Scope.NEXT,
     help="database file location for following online tree")
 
-##########
-# Include/exclude pattern options.
-##########
+## Include/exclude pattern options.
 
 class IncExcPatternOptionBase(ConfigTreeOptionAction):
     """
@@ -416,9 +404,7 @@ exclude_all_options_parser = argparse.ArgumentParser(
             ],
     )
 
-##########
-# dbrootdir options.
-##########
+## dbrootdir options.
 
 # Specify directories where the hash database actually is.
 
@@ -482,9 +468,7 @@ dbrootdir_option_parser.add_argument(
     help="set directory whose immediate subdirs will be database directories " \
     "for online trees contained within")
 
-####################
-# Other shared options parsers, unrelated to trees.
-####################
+## Other shared options parsers, unrelated to trees.
 
 # Dry-run.
 
@@ -495,9 +479,7 @@ dryrun_option_parser.add_argument(
     action=StoreBoolAction, dest="dry_run", default=False,
     help="dry run")
 
-####################
-# Output formatting options.
-####################
+## Output formatting options.
 
 class SetOutputOptionAction(StoreBoolAction):
     def __init__(self, *args, **kwargs):
@@ -528,9 +510,7 @@ showsize_option_parser.add_argument(
     action=SetOutputOptionAction, dest="showsize", default=False,
     help="show size of each file")
 
-####################
-# Top parser and subcommand parsers and handlers.
-####################
+## Top parser and subcommand parsers and handlers.
 
 class CustomArgumentParserConfig(ArgumentParserConfig):
     """
@@ -571,9 +551,7 @@ top_parser = CustomArgumentParserConfig(\
              debugtrees_option_parser],
     add_help=False, usage=argparse.SUPPRESS,)
 
-##########
-# sync
-##########
+## sync
 
 parser_sync = top_parser.add_parser_command(
     'sync', lnsync_cmd_handlers.do_sync,
@@ -590,9 +568,7 @@ parser_sync.add_argument(
 parser_sync.add_argument(
     "target", type=TreeLocationOnline, action=TreeLocationAction)
 
-##########
-# rsync
-##########
+## rsync
 
 parser_rsync = top_parser.add_parser_command(
     'rsync', lnsync_cmd_handlers.do_rsync,
@@ -644,9 +620,7 @@ parser_syncr.add_argument(
     "--cmp", default=False, action="store_true",
     help="compare source and target after rsync")
 
-##########
-# Search commands
-##########
+## Search commands
 
 _SEARCH_CMD_PARENTS = \
     [exclude_all_options_parser,
@@ -739,9 +713,7 @@ parser_search.add_argument(
 parser_search.add_argument(
     "--glob", type=Pattern, action="store", default=None)
 
-##########
-# update
-##########
+## update
 
 def do_update(args):
     with FileHashTree.listof(d.kws() for d in args.dirs) as trees:
@@ -758,9 +730,7 @@ parser_update = top_parser.add_parser_command(
 parser_update.add_argument(
     "dirs", type=TreeLocationOnline, action=TreeLocationAction, nargs="+")
 
-##########
-# rehash
-##########
+## rehash
 
 def do_rehash(args):
     return lnsync_cmd_handlers.do_rehash(args.topdir, args.relpath_patterns)
@@ -775,9 +745,7 @@ parser_rehash.add_argument("topdir",
 
 parser_rehash.add_argument("relpath_patterns", type=relative_path_type, nargs='+')
 
-##########
-# lookup
-##########
+## lookup
 
 parser_lookup = top_parser.add_parser_command(
         'lookup', lnsync_cmd_handlers.do_lookup,
@@ -791,9 +759,7 @@ parser_lookup.add_argument("location",
 
 parser_lookup.add_argument("relpaths", type=relative_path_type, nargs="*")
 
-##########
-# aliases
-##########
+## aliases
 
 parser_aliases = top_parser.add_parser_command(
         'aliases', lnsync_cmd_handlers.do_aliases,
@@ -807,9 +773,7 @@ parser_aliases.add_argument("location",
 
 parser_aliases.add_argument("relpath", type=relative_path_type)
 
-##########
-# cmp
-##########
+## cmp
 
 parser_cmp = top_parser.add_parser_command(
     'cmp', lnsync_cmd_handlers.do_cmp,
@@ -826,9 +790,7 @@ parser_cmp.add_argument(
 parser_cmp.add_argument(
     "rightlocation", type=TreeLocation, action=TreeLocationAction)
 
-##########
-# check
-##########
+## check
 
 parser_check_files = top_parser.add_parser_command(
     'check', lnsync_cmd_handlers.do_check,
@@ -847,9 +809,7 @@ parser_check_files.add_argument(
     "relpaths", metavar="RELATIVE_PATHS",
     type=relative_path_type, nargs="*")
 
-##########
-# info
-##########
+## info
 
 def do_get_info(args):
     for tree_arg in args.locations:
@@ -882,9 +842,7 @@ parser_get_info.add_argument(
     type=TreeLocation, action=TreeLocationAction,
     nargs="*")
 
-##########
-# subdir
-##########
+## subdir
 
 parser_subdir = top_parser.add_parser_command(
         'subdir', lnsync_cmd_handlers.do_subdir,
@@ -900,9 +858,7 @@ parser_subdir.add_argument(
     "relativesubdir",
     type=relative_path_type)
 
-##########
-# mkoffline
-##########
+## mkoffline
 
 def writable_file_or_empty_path(path):
     if not os.path.exists(path):
@@ -942,9 +898,7 @@ parser_mkoffline.add_argument(
     "-o", "--outputpath", type=writable_file_or_empty_path, default=None,
     required=True)
 
-##########
 ## cleandb
-##########
 
 parser_cleandb = top_parser.add_parser_command(
         'cleandb', lnsync_cmd_handlers.do_cleandb,
@@ -955,9 +909,7 @@ parser_cleandb = top_parser.add_parser_command(
 parser_cleandb.add_argument(
     "location", type=TreeLocationOnline, action=TreeLocationAction)
 
-####################
-# main
-####################
+## main
 
 def debug_tree_info(args):
     xargs = vars(args)

@@ -1,30 +1,31 @@
+# This package will be renamed to `hlnsync` starting with v0.9.0
+
 ## Overview
-_lnsync_ provides sync-by-content of local directories (including hard link syncing), plus other features related to matching and finding.
+This tool provides sync-by-content of local directories, including hard links, plus other matching and searching features.
 
 ###  Features
-The main feature is (partial) one-way sync of local directories by only renaming/linking/delinking on the target directory, without copying or deleting any file content from source. This may be used as a preprocessing step for a full sync tool (such as rsync).
+The main feature is partial one-way sync of local directories without copying or deleting data, that is by only renaming/linking/delinking files in the target. This may be used as a perliminary step to a full sync using some other tool, such as rsync.
 
-This is achieved by maintaining a simple one-file database of file hashes for each top directory.
+For each file tree processed, a one-file database of file hashes is stored at its top directory.
 
-Files match if they have the same size and hash value.
+Using those file hashes, other features are provided, e.g. finding duplicate files, checking for file content changes, and listing all hard links to a file.
 
-Using file hashes, other features are provided, including: finding duplicate files, checking for file content changes, and listing all hard links to a file.
+Multiple hashing functions are provided, including dhash, an image hash that is invariant under scaling and recoloring. This allows finding duplicate images.
 
-Other hashing functions are provided, including dhash, an image invariant under scaling and recoloring. This allows finding duplicate images.
+Files match if they have the same size and hash. Modification time and permissions are ignored.
 
 ### File Trees: Online and Offline
 
-The file structure under a directory (path names, file sizes, mod dates) can be saved to a one-file database, along with the file hashes. Such a database is termed here an _offline tree_, whereas local top directories with their hash database are _online trees_,
+The structure of a file tree -- path names, file sizes, mod dates --  may be stored in a one-file database, along with the file hashes.
 
-Most _lnsync_ commands accept offline trees as well as local directory. For example, an offline tree may be used as the source to reorganize a target directory according to a certain pattern.
+Such a database file is an _offline tree_, while the top directory of a file tree with their hash database is an _online trees_. (Note: the database file of an online tree is NOT in itself an offline tree, since it does not include the tree directory structure, file names, etc.)
 
-Via a config file, specific options may be applied to online trees matching a glob pattern.
+Most _lnsync_ commands both offline and online trees. For example, an offline tree database may be used as a pattern to reorganize a target directory.
 
-To describe a tree: `lnsync info <LOCATION>`.
-
-Note that the database file of an online tree is NOT an offline tree, since it is missing the file and directory names.
+Using a config file, specific options may be applied to online trees matching glob patterns.
 
 ### File Hashes
+
 Files are identified by their content hash, using either 32-bit or 64-bit xxHash (a fast, non-cryptographic hash function), or other functions (see Hashing Functions below).
 
 Hash values are stored in local databases, on a single file per tree, by default with a name matching `lnsync-[0-9]+.db`. Only one such file should exist at each location. At the time of creation, the numeric part is chosen randomly, to avoid overwriting by accident when doing a full sync. Files matching `lnsync-[0-9]+.db` as well as the hash database in use are ignored by _lnsync_ operations.
@@ -62,6 +63,7 @@ Symbolic links and any other file system objects are ignored.
 As with rsync, files and directories may be included/excluded using glob patterns.
 
 ### Directories
+
 When syncing, directories are created as needed on the target, and target directories left empty and not on the source are removed.
 
 ## Installing
@@ -83,7 +85,9 @@ Some of the many tools for syncing with rename detection:
 In addition to syncing, _lnsync_ allows using the file hash database to search for files according to a variety of criteria.
 
 ## Usage Scenarios
+
 ### Syncing
+
 If your photos are at `/home/you/Photos` and its backup is at `/mnt/disk/Photos`, then `lnsync sync /home/you/Photos /mnt/disk/Photos` will sync the target. For a dry run, use the `-n` switch.
 
 After syncing, two database files are created, one at the source `/home/you/Photos` and another at the target `/mnt/disk/Photos`. File hashes are computed, as needed, and stored in those files. The database filenames include a random suffix, to help avoid accidental overwriting when syncing with a tool other than _lsync_.
@@ -251,6 +255,7 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 
 ### Release Notes
 
+- v0.8.6: Show size in search command results. Add BasenameHasher. Drop dependency on psutil, use lsblk. Bug fixes. Improve documentation.
 - v0.8.5: New `onmorethanone` search command. Small fixes.
 - v0.8.4: Performance improvements on find commamnds. Bug fixes. Allow multiple arguments to `--dbrootmount`.
 - v0.8.3: Performance improvements and bug fixes.

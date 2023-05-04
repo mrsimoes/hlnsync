@@ -99,7 +99,7 @@ class FileTreeCreator(FileTree):
         st = os.stat(abs_filepath)
         fid = self._id_computer.get_id(relpath)
         f_obj = self._new_file_obj(fid, st)
-        self._add_path(f_obj, reldir_obj, bname)
+        self.add_path(f_obj, reldir_obj, bname)
 
     def exec_cmd(self, cmd):
         """
@@ -115,8 +115,9 @@ class FileTreeCreator(FileTree):
             st = os.stat(fn_abs_to)
             fid = self._id_computer.get_id(fn_to)
             new_f_obj = self._new_file_obj(fid, st)
-            tr_obj = self._create_dir_if_needed_writeback(os.path.dirname(fn_to))
-            self._add_path(new_f_obj, tr_obj, os.path.basename(fn_to))
+            tr_obj = self._create_dir_if_needed_writeback(
+                os.path.dirname(fn_to))
+            self.add_path(new_f_obj, tr_obj, os.path.basename(fn_to))
         elif cmd[0] == "rm" and cmd[2] is None:
             assert self.writeback, "cannot rm file without writeback"
             dirname = os.path.dirname(cmd[1])
@@ -130,7 +131,7 @@ class FileTreeCreator(FileTree):
             with open(abs_filepath, "r") as f:
                 contents = f.read()
             self._files_removed[cmd[1]] = contents
-            self._rm_path(f_obj, d_obj, bname)
+            self.rm_path(f_obj, d_obj, bname)
             os.unlink(abs_filepath)
         else:
             super(FileTreeCreator, self).exec_cmd(cmd)

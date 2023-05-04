@@ -284,8 +284,14 @@ def merge_pattern_lists(pats1, pats2):
             return [e1, *merge_lists(l1[1:], l2)]
         else:
             return [e1, e2, *merge_lists(l1[1:], l2[1:])]
+    if pats1 == pats2:
+        return list(pats1)
     common_pats = merge_lists(list(pats1), list(pats2))
-    if common_pats != pats1 or common_pats != pats1:
+    if common_pats != pats1 and common_pats != pats2:
+        # If the merge result is different from both
+        # inputs, issue a message to the user.
+        # Merging all includes or all excludes produces
+        # only a info message, otherwise a warning.
         if any(all(all(getattr(p, f)() for p in pset)
                    for pset in (pats1, pats2))
                for f in ("is_include", "is_exclude")):

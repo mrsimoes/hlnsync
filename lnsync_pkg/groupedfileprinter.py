@@ -29,6 +29,7 @@ or concatenated on a single line.
 import lnsync_pkg.printutils as pr
 from lnsync_pkg.human2bytes import bytes2human
 
+
 class GroupedFileListPrinter:
     """
     Output filepaths in groups, either separated by empty lines or by empty
@@ -60,7 +61,7 @@ class GroupedFileListPrinter:
 
     def add_group(self, located_files):
         """
-        located files is {tree_1: [files_1],... {tree_k, [files_k]}
+        located files is {tree_1: [files_1, ...], ... , tree_k: [files_k, ...]}
         """
         if self.sort:
             self.groups.append(located_files)
@@ -99,7 +100,7 @@ class GroupedFileListPrinter:
     def _print_file(self, tree, fobj):
         if self.showsize:
             size = fobj.file_metadata.size
-            size_str = f"{bytes2human(size)}"
+            size_str = f"{bytes2human(size)} "
         else:
             size_str = ""
         if self.sameline:
@@ -123,9 +124,9 @@ class GroupedFileListPrinter:
         else:
             for k, relpath in enumerate(fobj.relpaths):
                 if k == 0:
-                    include, prefix = (True, size_str + " ")
+                    include, prefix = (True, size_str)
                 elif not self.hard_links:
-                    include, prefix = (True, size_str + " ")
+                    include, prefix = (True, size_str)
                 elif self.all_links:
                     include, prefix = (True, " ")
                 else:

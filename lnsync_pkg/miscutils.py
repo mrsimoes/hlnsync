@@ -84,6 +84,19 @@ def int32_to_uint32(value):
         f"int32_to_uint32 overflow: {value}"
     return res
 
+def argmin(seq, key=None):
+    if not seq:
+        raise ValueError("attempt to get argmin of an empty sequence")
+    if key is None:
+        key = lambda x: x
+    minval = key(seq[0])
+    argmin_res = 0
+    for ind, item in enumerate(seq[1:]):
+        val = key(item)
+        if val < minval:
+            minval = val
+            argmin_res = ind
+    return argmin_res
 
 def iter_is_empty(iterator):
     """

@@ -21,7 +21,7 @@ from lnsync_pkg.miscutils import is_subdir, iter_is_empty, HelperAppError
 from lnsync_pkg.human2bytes import bytes2human
 import lnsync_pkg.fdupes as fdupes
 from lnsync_pkg.prefixdbname import pick_db_basename, get_default_dbprefix
-from lnsync_pkg.fileid import make_id_computer
+from lnsync_pkg.filesystems import make_id_computer
 from lnsync_pkg.groupedfileprinter import GroupedFileListPrinter
 from lnsync_pkg.matcher import TreePairMatcher
 from lnsync_pkg.filehashtree import \
@@ -181,8 +181,17 @@ def do_search(args):
     """
     Search for files by relative pattern glob pattern.
     """
+# TODO group together file paths for the same file.
+#    grouper = GroupedFileListPrinter(args.hard_links, args.all_links)
+
+    return_code = 1  # If no files are found, return 1.
+
+    if args.glob is None:
+        return return_code
+
     def print_file_match(tree, fobj):
-        nonlocal return_code
+        if args.showsize:
+            pr.print(bytes2human(fobj.file_metadata.size), end=" ")
         pr.print(tree.printable_path(files_paths_matched[fobj][0]))
         for fpath in files_paths_matched[fobj][1:]:
             pr.print(" " + tree.printable_path(fpath))
@@ -190,6 +199,13 @@ def do_search(args):
             for fpath in fobj.relpaths:
                 if fpath not in files_paths_matched[fobj]:
                     pr.print(" " + tree.printable_path(fpath))
+
+    def print_file_match_simple(tree, fobj, path):
+        """ Print just the first path.
+        """
+        if args.showsize:
+            pr.print(bytes2human(fobj.file_metadata.size), end=" ")
+        pr.print(tree.printable_path(fobj.relpaths[0]))
 
     def search_dir(tree, dir_obj, patterns):
         nonlocal files_paths_to_check
@@ -203,7 +219,7 @@ def do_search(args):
         def handle_file_match(obj, basename):
             path = os.path.join(dir_obj.get_relpath(), basename)
             if not args.hard_links or len(obj.relpaths) == 1:
-                pr.print(tree.printable_path(path))
+                print_file_match_simple(tree, obj)
             else:
                 if obj not in files_paths_to_check:
                     files_paths_to_check[obj] = list(obj.relpaths)
@@ -254,11 +270,6 @@ def do_search(args):
                 pr.print(tree.printable_path(fobj.relpaths[0]))
             else:
                 files_paths_matched[fobj] = paths_matched
-
-    return_code = 1 # If no files are found, return 1.
-
-    if args.glob is None:
-        return return_code
 
     tree_kws = (treearg.kws() for treearg in args.locations)
     glob_string = args.glob.to_str()
@@ -433,6 +444,13 @@ def do_check(args):
             return res
 
         def check_one_file(fobj, path):
+            """
+            fobj can be any type of tree object, or None if path does not
+            correspond to any item, or if some containing dir is excluded.
+            """
+            if fobj is None or not fobj.is_file():
+                pr.warning("skipping: " + tree.printable_path(path))
+                return
             if tree.db_check_prop(fobj):
                 pr.info(
                     "passed check: " + tree.printable_path(path))

@@ -7,8 +7,8 @@ lnsync project metadata.
 
 # The package name, which is also the "UNIX name" for the project.
 package = 'lnsync'
-version = '0.8.5'
-description = "Dir sync by content with rename detection, " \
+version = '0.8.6'
+description = "Sync local dirs by content, with rename detection and " \
               "hard link support, plus fast fdupes, and more."
 summary = description
 project = 'lnsync dir sync tool'
