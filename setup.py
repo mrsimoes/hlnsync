@@ -10,7 +10,7 @@ with open(os.path.join("README.md")) as readme_file:
     long_description = readme_file.read()
 
 setup(
-    name = 'lnsync',
+    name = 'hlnsync',
     version = metadata.version,
     summary = "bug fixes",
     description = metadata.description,
@@ -27,10 +27,10 @@ setup(
     entry_points = {
         'console_scripts': [
             # CLI command=package.module:function
-            'lnsync=lnsync_pkg.lnsync:main32',
-            'lnsync32=lnsync_pkg.lnsync:main32',
-            'lnsync64=lnsync_pkg.lnsync:main64',
-            'lnsync-nopreset=lnsync_pkg.lnsync:main_nopreset',
+            'hlnsync=lnsync_pkg.lnsync:main32',
+            'hlnsync32=lnsync_pkg.lnsync:main32',
+            'hlnsync64=lnsync_pkg.lnsync:main64',
+            'hlnsync-nopreset=lnsync_pkg.lnsync:main_nopreset',
         ],
     },
     classifiers = [

@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-lnsync project metadata.
+hlnsync project metadata.
 """
 
 # pylint: disable-all
 
 # The package name, which is also the "UNIX name" for the project.
-package = 'lnsync'
-version = '0.8.6'
+package = 'hlnsync'
+version = '0.9.0rc1'
 description = "Sync local dirs by content, with rename detection and " \
               "hard link support, plus fast fdupes, and more."
 summary = description
-project = 'lnsync dir sync tool'
+project = 'hlnsync dir sync tool'
 project_no_spaces = project.replace(' ', '')
-url = 'https://github.com/mrsimoes/lnsync'
-download_url = 'https://github.com/mrsimoes/lnsync/archive/v%s.tar.gz' % version
+url = 'https://github.com/mrsimoes/hlnsync'
+download_url = 'https://github.com/mrsimoes/hlnsync/archive/v%s.tar.gz' % version
 keywords = 'sync rsync fast rename backup link hardlink fdupes'
 authors = ['Miguel Simoes']
 authors_string = ', '.join(authors)

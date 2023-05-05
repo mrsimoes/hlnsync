@@ -412,7 +412,7 @@ class ArgumentParserConfig(ArgumentParserConfigSubparser):
         configfile_option_parser.add_argument(
             "--config", type=file_expanduser,
             action=ChooseConfigFileSet, dest="configfile",
-            help="choose configuration file (default: lnsync.cfg)")
+            help="choose configuration file (default: hlnsync.cfg)")
         configfile_option_parser.add_argument(
             "--no-config", nargs=0,
             action=ChooseConfigFileUnset, dest="configfile")

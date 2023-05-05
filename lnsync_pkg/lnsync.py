@@ -63,7 +63,7 @@ class FormatLateDescription(argparse.HelpFormatter):
     Custom formatter_class that allows description to be set at display time.
     """
     description = \
-        "Home: http://github.com/mrsimoes/lnsync " \
+        "Home: http://github.com/mrsimoes/hlnsync " \
         "Copyright (C) 2018-2021 Miguel Simoes. " \
         "This program comes with ABSOLUTELY NO WARRANTY. " \
         "This is free software, and you are welcome to redistribute it " \
@@ -100,8 +100,11 @@ class FormatLateDescription(argparse.HelpFormatter):
 try:
     ArgumentParserConfig.set_optionals_section(LNSYNC_CONFIG_MAIN_SECTION)
     ArgumentParserConfig.set_default_config_files(
+        "./hlnsync.cfg",
         "./lnsync.cfg",
-        os.path.expanduser("~/lnsync.cfg"))
+        os.path.expanduser("~/hlnsync.cfg"),
+        os.path.expanduser("~/lnsync.cfg"),
+        )
 except NoValidConfigFile:
     pass
 
