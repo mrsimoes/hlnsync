@@ -573,6 +573,10 @@ def do_onfirstonly(args):
             other_trees = all_trees[1:]
             first_tree.scan_subtree()
             for file_sz in sorted(first_tree.get_possible_sizes()):
+                # For offline DBs, possible sizes includes files in excluded
+                # directories.
+                if iter_is_empty(first_tree.size_to_files_gen(file_sz)):
+                    continue
                 with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
                     if all(iter_is_empty(tr.size_to_files_gen(file_sz)) \
                                for tr in other_trees):
@@ -606,6 +610,10 @@ def do_onfirstnotonly(args):
             first_tree = all_trees[0]
             other_trees = all_trees[1:]
             for file_sz in sorted(first_tree.get_possible_sizes()):
+                # For offline DBs, possible sizes includes files in excluded
+                # directories.
+                if iter_is_empty(first_tree.size_to_files_gen(file_sz)):
+                    continue
                 with pr.ProgressPrefix("size %s:" % (bytes2human(file_sz),)):
                     if all(iter_is_empty(tr.size_to_files_gen(file_sz)) \
                            for tr in other_trees):

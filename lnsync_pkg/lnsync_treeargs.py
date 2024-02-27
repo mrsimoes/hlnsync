@@ -56,11 +56,19 @@ class TreeLocationAction(ScPosArgAction):
         tree_args = getattr(namespace, "sc_pos_args", [])
         tree_args = namespace._sc_arparse_scoped_data.sc_pos_args
         locations_seen = []
+        locations_seen_online = []
         for tree_arg in tree_args:
             this_location = tree_arg.real_location
             if this_location in locations_seen:
-                raise ValueError("duplicate location: " + this_location)
+                raise ValueError("duplicate location:", this_location)
             else:
+                if tree_arg.mode == Mode.ONLINE:
+                    for prev_loc in locations_seen_online:
+                        if is_subdir(this_location, prev_loc):
+                            pr.warning(this_location, "is a subdir of", prev_loc)
+                        elif is_subdir(this_location, prev_loc):
+                            pr.warning(prev_loc, "is a subdir of", this_location)
+                    locations_seen_online.append(this_location)
                 locations_seen.append(this_location)
 
 class TreeLocation:

@@ -118,7 +118,7 @@ class GroupedFileListPrinter:
                 if include:
                     pr_path = tree.printable_path(relpath)
                     # Escape a few choice characters.
-                    for char in ("\\", " ", "'", '"', "(", ")"):
+                    for char in ("\\", " ", "'", '"', "(", ")", "&"):
                         pr_path = pr_path.replace(char, "\\"+char)
                     self._built_line += prefix + pr_path
         else:

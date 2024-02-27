@@ -987,7 +987,7 @@ def main64():
     return main()
 
 def main_nopreset():
-    FormatLateDescription.update_description("lnsync", "no preset hasher")
+    FormatLateDescription.update_description("hlnsync", "no preset hasher")
     return main()
 
 def main():
@@ -998,7 +998,7 @@ def main():
     elif len(sys.argv) == 2 and sys.argv[1] in ("-h", "--help"):
         top_parser.print_help(sys.stderr)
         sys.exit(64)
-    pr.set_app_prefix("lnsync:")
+    pr.set_app_prefix("hlnsync:")
     try:
         exit_code = 2
         cmd_handler = get_handler_fn(sys.argv[1:])

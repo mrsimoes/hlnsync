@@ -204,17 +204,19 @@ def located_files_onall_of_size(all_trees, file_sz):
 def located_files_onfirstonly_of_size(all_trees, file_sz):
     """
     Yield all tuples (prop, {tree_1: [files_1],... {tree_k, [files_k]})
-    over all file props for which there is at least one file in the first tree
-    and no files in any other trees.
+    over all property values corresponding to at least one file in the first
+    tree and no files in any other trees.
     Assume there is some file of that size on the first tree.
     If file_sz is None, go over all files.
-    Yield prop=None if size is specified and there's a single file of that size.
+    Set prop=None in the tuples yielded if size is specified and there's a
+    single file of that size. (This is to avoid the unnecessary and potentially
+    costly computation.)
     """
     def _props_onfirstonly_of_size(trees, file_sz):
         """
-        Considering only files of the given size, yield all props with at
-        least one file the first tree and no other files on any of the remaining
-        trees.
+        Considering only files of the given size, yield all property values
+        corresponding to at least one file the first tree and no other files on
+        any of the other trees.
         If file_sz is None, consider all files.
         """
         good_props = set()

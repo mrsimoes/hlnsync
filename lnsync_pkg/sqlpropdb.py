@@ -345,9 +345,9 @@ class SQLPropDBManager(PropDBManager):
 
     def update_table_from_list(self, table_name, values):
         test_cursor = self._cx.cursor()
-        test_cursor.executemany(
-            f"SELECT * FROM {table_name} WHERE file_id=?;",
-            [(res[0],) for res in values])
+        test_cursor.execute(
+            f"SELECT * FROM {table_name} WHERE file_id IN " \
+            "({})".format(",".join(str(res[0]) for res in values)))
         existing_records = test_cursor.fetchall()
         test_cursor.executemany(
             f"DELETE FROM {table_name} WHERE file_id=?;",

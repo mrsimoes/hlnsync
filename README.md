@@ -1,14 +1,12 @@
-# This package will be renamed to `hlnsync` starting with v0.9.0
-
 ## Overview
 This tool provides sync-by-content of local directories, including hard links, plus other matching and searching features.
 
 ###  Features
 The main feature is partial one-way sync of local directories without copying or deleting data, that is by only renaming/linking/delinking files in the target. This may be used as a perliminary step to a full sync using some other tool, such as rsync.
 
-For each file tree processed, a one-file database of file hashes is stored at its top directory.
+For each file tree processed, a one-file database of file hash values is stored at its top directory.
 
-Using those file hashes, other features are provided, e.g. finding duplicate files, checking for file content changes, and listing all hard links to a file.
+Using those file hash values, other features are provided, e.g. finding duplicate files, checking for file content changes, and listing all hard links to a file.
 
 Multiple hashing functions are provided, including dhash, an image hash that is invariant under scaling and recoloring. This allows finding duplicate images.
 
@@ -16,25 +14,25 @@ Files match if they have the same size and hash. Modification time and permissio
 
 ### File Trees: Online and Offline
 
-The structure of a file tree -- path names, file sizes, mod dates --  may be stored in a one-file database, along with the file hashes.
+The structure of a file tree -- path names, file sizes, mod dates --  may be stored in a one-file database, along with the file hash values.
 
 Such a database file is an _offline tree_, while the top directory of a file tree with their hash database is an _online trees_. (Note: the database file of an online tree is NOT in itself an offline tree, since it does not include the tree directory structure, file names, etc.)
 
-Most _lnsync_ commands both offline and online trees. For example, an offline tree database may be used as a pattern to reorganize a target directory.
+Most _hlnsync_ commands both offline and online trees. For example, an offline tree database may be used as a pattern to reorganize a target directory.
 
 Using a config file, specific options may be applied to online trees matching glob patterns.
 
-### File Hashes
+### File Hash Values
 
-Files are identified by their content hash, using either 32-bit or 64-bit xxHash (a fast, non-cryptographic hash function), or other functions (see Hashing Functions below).
+Files are identified by their content hash value, using either 32-bit or 64-bit xxHash (a fast, non-cryptographic hash function), or other functions (see Hashing Functions below).
 
-Hash values are stored in local databases, on a single file per tree, by default with a name matching `lnsync-[0-9]+.db`. Only one such file should exist at each location. At the time of creation, the numeric part is chosen randomly, to avoid overwriting by accident when doing a full sync. Files matching `lnsync-[0-9]+.db` as well as the hash database in use are ignored by _lnsync_ operations.
+Hash values are stored in local databases, on a single file per tree, by default with a name matching `hlnsync-[0-9]+.db`. Only one such file should exist at each location. At the time of creation, the numeric part is chosen randomly, to avoid overwriting by accident when doing a full sync. Files matching `hlnsync-[0-9]+.db` as well as the hash database in use are ignored by _hlnsync_ operations.
 
 File modification times are used to detect stale hash values. Modification times are not synced to the target.
 
 ### Hashing Functions
 
-Using `--hasher=<HASHERNAME>` selects one of the a built-in hashing function, and also changes the default file hash database basename pattern to `lnsync-<HASHERNAME>-[0-9]+.db`.
+Using `--hasher=<HASHERNAME>` selects one of the a built-in hashing function, and also changes the default file hash database basename pattern to `hlnsync-<HASHERNAME>-[0-9]+.db`.
 
 The built-in hashing functions are:
 
@@ -44,16 +42,16 @@ The built-in hashing functions are:
 
 When xxHash is selected, files match only if they also have the same size.
 
-Invoking `lnsync32` or `lnsync64` selects the 32-bit and the 64-bit version of the xxHash, respectively, while keeping `lnsync-[0-9]+.db` as the file hash database location. Otherwise the two commands work the same. `lnsync` is equivalent to `lnsync32`.
+Invoking `hlnsync32` or `hlnsync64` selects the 32-bit and the 64-bit version of the xxHash, respectively, while keeping `hlnsync-[0-9]+.db` as the file hash database location. Otherwise the two commands work the same. `hlnsync` is equivalent to `hlnsync32`.
 
-External hashing functions are supported: `--external-hasher=<EXECUTABLE>`. The should take as single argument a file path and print out (in decimal) a 64-bit unsigned integer hash value. The file hash location is set to `lnsync-external-[0-9]+.db`.
+External hashing functions are supported: `--external-hasher=<EXECUTABLE>`. The should take as single argument a file path and print out (in decimal) a 64-bit unsigned integer hash value. The file hash location is set to `hlnsync-external-[0-9]+.db`.
 
-Finally, the `lnsync-nopreset` entry point requires explicitly selecting the hashing function.
+Finally, the `hlnsync-nopreset` entry point requires explicitly selecting the hashing function.
 
 ## Files, File Paths, and Hard Links
 On most current file systems, the same _file_ may be reached via multiple _file paths_, also called _aliases_, or _hard links_. If there is a single hard link to a file, removing that link deletes the file.
 
-`lnsync` operates on files, not file paths. E.g., if a file has two hard links, it does not count as a duplicate.
+`hlnsync` operates on files, not file paths. E.g., if a file has two hard links, it does not count as a duplicate.
 
 ### Ignored File System Objects
 Files which cannot be read are skipped. File ownership and permissions are otherwise ignored.
@@ -67,7 +65,7 @@ As with rsync, files and directories may be included/excluded using glob pattern
 When syncing, directories are created as needed on the target, and target directories left empty and not on the source are removed.
 
 ## Installing
-Install the latest version from the PyPI repository with `pip install --user -U lnsync` or else clone the repo with `git clone https://github.com/mrsimoes/lnsync.git` and then run `python setup.py install`.
+Install the latest version from the PyPI repository with `pip install --user -U hlnsync` or else clone the repo with `git clone https://github.com/mrsimoes/hlnsync.git` and then run `python setup.py install`.
 
 ### Alternative Tools for Linux
 Some of the many tools for syncing with rename detection:
@@ -82,47 +80,47 @@ Some of the many tools for syncing with rename detection:
 
 - Support in modern file systems (e.g. btrfs) for snapshots may be adapted for syncing.
 
-In addition to syncing, _lnsync_ allows using the file hash database to search for files according to a variety of criteria.
+In addition to syncing, _hlnsync_ allows using the file hash database to search for files according to a variety of criteria.
 
 ## Usage Scenarios
 
 ### Syncing
 
-If your photos are at `/home/you/Photos` and its backup is at `/mnt/disk/Photos`, then `lnsync sync /home/you/Photos /mnt/disk/Photos` will sync the target. For a dry run, use the `-n` switch.
+If your photos are at `/home/you/Photos` and its backup is at `/mnt/disk/Photos`, then `hlnsync sync /home/you/Photos /mnt/disk/Photos` will sync the target. For a dry run, use the `-n` switch.
 
 After syncing, two database files are created, one at the source `/home/you/Photos` and another at the target `/mnt/disk/Photos`. File hashes are computed, as needed, and stored in those files. The database filenames include a random suffix, to help avoid accidental overwriting when syncing with a tool other than _lsync_.
 
-To obtain an _rsync_ command that will complete syncing, skipping `lnsync` database files, run `lnsync rsync /home/you/Photos /mnt/disk/Photos`. If the `rsync` options provided are suitable, run the command again with the `-x` switch to execute. Alternatively, run `lnsync syncr /home/you/Photos /mnt/disk/Photos` to complete those two steps in one go.
+To obtain an _rsync_ command that will complete syncing, skipping `hlnsync` database files, run `hlnsync rsync /home/you/Photos /mnt/disk/Photos`. If the `rsync` options provided are suitable, run the command again with the `-x` switch to execute. Alternatively, run `hlnsync syncr /home/you/Photos /mnt/disk/Photos` to complete those two steps in one go.
 
-Finally, to compare source and target, run `lnsync cmp /home/you/Photos /mnt/disk/Photos`.
+Finally, to compare source and target, run `hlnsync cmp /home/you/Photos /mnt/disk/Photos`.
 
 ### Other Operations
-To find duplicate files, run `lnsync fdupes /home/you/Photos`. Use `-z` to compare by size only.
+To find duplicate files, run `hlnsync fdupes /home/you/Photos`. Use `-z` to compare by size only.
 
 Use `-H` to treat hard links to the same file as distinct. If this option is not given, for each multiple-linked with other duplicates, a path is arbitrarily picked and printed.
 
-To find all files in Photos which are not in the backup (under any file name): `lnsync onfirstonly /home/you/Photos /mnt/disk/Photos`. To find all files with jpg extension, `lnsync search "*.jpg" /home/you/Photos`.
+To find all files in Photos which are not in the backup (under any file name): `hlnsync onfirstonly /home/you/Photos /mnt/disk/Photos`. To find all files with jpg extension, `hlnsync search "*.jpg" /home/you/Photos`.
 
 To have any operation on a subdir of `/home/you/Photos` use the hash database at `/home/you/Photos`, include `root=/home/you/Photos` under section `/home/you/Photos/**` of your config file. (See Configuration Files below.)
 
-For example, to sync the subdir `/home/you/Photos/Best` to another target, using the hash database at `/home/you/Photos`: `lnsync sync /home/you/Photos/Best --root=/home/you/Photos /mnt/eframe/`.
+For example, to sync the subdir `/home/you/Photos/Best` to another target, using the hash database at `/home/you/Photos`: `hlnsync sync /home/you/Photos/Best --root=/home/you/Photos /mnt/eframe/`.
 
 ## External Hashers
-As an example of an external hasher function, if `hashmp3.sh` computes the hash of only the sound content of an mp3 (and not any included metadata), then the following `lnsync-mp3.cfg` config file may be used to find duplicate mp3 content:
+As an example of an external hasher function, if `hashmp3.sh` computes the hash of only the sound content of an mp3 (and not any included metadata), then the following `hlnsync-mp3.cfg` config file may be used to find duplicate mp3 content:
 
     [LNSYNC_MAIN]
         external_hasher = ~/bin/hashmp3.sh
     [**]
-        dbprefix = lnsync-mp3
+        dbprefix = hlnsync-mp3
         only_include = *.mp3
 
 The second section applies the `--only-include="*.mp3"` to ALL online tree locations.
 
-Invoke this mode with `lnsync --config <PATH TO lnsync-mp3.cfg> <COMMAND> [<ARG> ...]`.
+Invoke this mode with `hlnsync --config <PATH TO hlnsync-mp3.cfg> <COMMAND> [<ARG> ...]`.
 
 ## Command Reference
 
-All _lnsync_ commands are `lnsync [<global-options>] <command> [<cmd-options>] [<cmd-parameters>]`.
+All _hlnsync_ commands are `hlnsync [<global-options>] <command> [<cmd-options>] [<cmd-parameters>]`.
 
 ### Tree information
 
@@ -144,7 +142,7 @@ To specify the database file for the following online file tree, `--dblocation <
 
 - `sync [options] <source> <target>` syncs a target dir from a source dir (or offline tree).
 
-First, target files are matched to source files. Each matched target file is associated to a single source file. If either file system supports hard links, a file may have multiple pathnames. _lnsync_ will not complain if the match is not unique or some files are not matched on either source and/or target.
+First, target files are matched to source files. Each matched target file is associated to a single source file. If either file system supports hard links, a file may have multiple pathnames. _hlnsync_ will not complain if the match is not unique or some files are not matched on either source and/or target.
 
 For each matched target file, its pathnames are made to match those of the corresponding source file, by renaming, deleting, or creating hard links. New intermediate subdirectories are created as needed on the target and directories which become empty on the target are removed.
 
@@ -168,7 +166,7 @@ For each matched target file, its pathnames are made to match those of the corre
 
  - `--root <DIR>` For each online location that is a subdir of <DIR>, use the hash database at <DIR> to read and update. If several <DIR> in the command line are suitable for a location, use the last one given.
  
-- `rsync [options] <tree> <dir> [rsync-options]` Prints an _rsync_ command that would sync target dir from source, skipping _lnsync_ database files. Source may be a dir or an offline tree. Check the default _rsync_ options provided are what you want. To also run the _rsync_ command, use the `-x` switch.
+- `rsync [options] <tree> <dir> [rsync-options]` Prints an _rsync_ command that would sync target dir from source, skipping _hlnsync_ database files. Source may be a dir or an offline tree. Check the default _rsync_ options provided are what you want. To also run the _rsync_ command, use the `-x` switch.
 
 - `syncr` This convenience command is like `sync`, but follows it by executing the command created by `rsync` just above.
 
@@ -215,7 +213,7 @@ The criteria for equality is matching hash value (plus matching size when using 
 
 Optional command-line arguments are read from an INI-style configuration file. (The format is not very suitable to store default options: at most one entry per key, no order on keys.)
 
-Unless otherwise specified, the config file is searched at at `./lnsync.cfg`, `~/lnsync.cfg`, or `~/.lnsync.cfg` location may nbe specified.
+Unless otherwise specified, the config file is searched at at `./hlnsync.cfg`, `~/hlnsync.cfg`, or `~/.hlnsync.cfg`.
 
 Entries are `key = value`, the `key` can match the short or long option name (`n` or `dry-run`).
 
@@ -255,6 +253,7 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 
 ### Release Notes
 
+- v0.9.0: Name changed from lnsync to hlnsync. Minor improvements and bug fixed.
 - v0.8.6: Show size in search command results. Add BasenameHasher. Drop dependency on psutil, use lsblk. Bug fixes. Improve documentation.
 - v0.8.5: New `onmorethanone` search command. Small fixes.
 - v0.8.4: Performance improvements on find commamnds. Bug fixes. Allow multiple arguments to `--dbrootmount`.
