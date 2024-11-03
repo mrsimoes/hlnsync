@@ -92,7 +92,8 @@ class FormatLateDescription(argparse.HelpFormatter):
                 hasher=hasher_name)
     def format_help(self, *args, **kwargs):
         static_help_text = super().format_help(*args, **kwargs)
-        return self.description_prefix + "\n" + static_help_text
+        return self.description_prefix + "\n" + \
+               static_help_text
 
 # This must be set before creating ArgumentParserConfig instances,
 # which need to include the correct command-line config-file option

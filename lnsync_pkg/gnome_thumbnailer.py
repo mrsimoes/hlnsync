@@ -8,6 +8,7 @@ import os
 
 import gi
 gi.require_version('GnomeDesktop', '3.0')
+
 from gi.repository import Gio, GnomeDesktop
 
 class ThumbnailerError(Exception):

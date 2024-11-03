@@ -200,8 +200,9 @@ def do_search(args):
                 if fpath not in files_paths_matched[fobj]:
                     pr.print(" " + tree.printable_path(fpath))
 
-    def print_file_match_simple(tree, fobj, path):
-        """ Print just the first path.
+    def print_file_match_simple(tree, fobj):
+        """
+        Print just the first path.
         """
         if args.showsize:
             pr.print(bytes2human(fobj.file_metadata.size), end=" ")

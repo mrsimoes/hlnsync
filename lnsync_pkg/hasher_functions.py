@@ -134,8 +134,8 @@ class ThumbnailHasher(ImageHasher):
             from lnsync_pkg.gnome_thumbnailer \
                 import GnomeThumbnailer, ThumbnailerError
         except Exception as exc:
-            msg = f"cannot load gnome thumbnail module: {str(exc)};"
-            msg += "'gnome-desktop' is needed"
+            msg = f"cannot load gnome thumbnail module: {str(exc)}; " \
+                  "'gnome-desktop' is needed"
             raise RuntimeError(msg) from exc
         self.gnome_thumbnailer = GnomeThumbnailer()
 

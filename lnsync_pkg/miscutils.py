@@ -109,7 +109,7 @@ def iter_is_empty(iterator):
         return True
 
 def iter_len(iterator):
-    return sum (1 for e in iterator)
+    return sum(1 for e in iterator)
 
 class HelperAppError(Exception):
     def __init__(self, cmd, error_msg):
