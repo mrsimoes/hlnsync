@@ -131,16 +131,13 @@ class ThumbnailHasher(ImageHasher):
     def __init__(self):
         super().__init__()
         try:
-            from lnsync_pkg.gnome_thumbnailer \
-                import GnomeThumbnailer, ThumbnailerError
+            from lnsync_pkg.freedesktop_thumbnailer import get_thumbnail
         except Exception as exc:
-            msg = f"cannot load gnome thumbnail module: {str(exc)}; " \
-                  "'gnome-desktop' is needed"
-            raise RuntimeError(msg) from exc
-        self.gnome_thumbnailer = GnomeThumbnailer()
+            raise RuntimeError("cannot load module xdg_thumbnailer") from exc
+        self.get_thumbnail = get_thumbnail
 
     def hash_file(self, fpath):
-        thumbnail_path = self.gnome_thumbnailer.make_thumbnail(fpath)
+        thumbnail_path = self.get_thumbnail(fpath)
         dhash_val = self.dhash(thumbnail_path)
         return dhash_val
 
