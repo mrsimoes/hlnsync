@@ -253,7 +253,7 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 
 ### Release Notes
 
-- v0.9.0: Name change to hlnsync from lnsync. Minor improvements and bug fixes. Use vignette module for thumbnailing.
+- v0.9.0: Name change to hlnsync from lnsync. Use vignette module for thumbnailing on freedesktop. Fix cmp result code bug. Other minor improvements and bug fixes.
 - v0.8.6: Show size in search command results. Add BasenameHasher. Drop dependency on psutil, use lsblk. Bug fixes. Improve documentation.
 - v0.8.5: New `onmorethanone` search command. Small fixes.
 - v0.8.4: Performance improvements on find commamnds. Bug fixes. Allow multiple arguments to `--dbrootmount`.

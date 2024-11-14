@@ -342,11 +342,13 @@ def do_cmp(args):
                         return_code = 1
 
     def cmp_subdir(dirpaths_to_visit, cur_dirpath):
+        nonlocal return_code
         for left_obj, basename in \
                 left_tree.walk_dir_contents(cur_dirpath, dirs=True):
             left_path = os.path.join(cur_dirpath, basename)
             right_obj = right_tree.path_to_obj(left_path)
             if right_obj is None or right_obj.is_excluded():
+                return_code = 1
                 if left_obj.is_file():
                     pr.print("left only: " + left_path)
                 elif left_obj.is_dir():
@@ -354,18 +356,22 @@ def do_cmp(args):
                 else:
                     raise RuntimeError("unexpected left object: " + left_path)
             elif left_obj.is_file():
+                return_code = 1
                 if  right_obj.is_file():
                     cmp_files(left_path, left_obj, right_obj)
                 elif right_obj.is_dir():
                     pr.print("left file vs right dir: " + left_path)
                 else:
+                    return_code = 1
                     pr.print("left file vs other: " + left_path)
             elif left_obj.is_dir():
                 if right_obj.is_dir():
                     dirpaths_to_visit.append(left_path)
                 elif right_obj.is_file():
+                    return_code = 1
                     pr.print("left dir vs right file: " + left_path)
                 else:
+                    return_code = 1
                     pr.print("left dir vs other: " + left_path + os.path.sep)
             else:
                 raise RuntimeError("unexpected left object: " + left_path)
@@ -398,6 +404,7 @@ def do_cmp(args):
             while dirpaths_to_visit:
                 cur_dirpath = dirpaths_to_visit.pop()
                 cmp_subdir(dirpaths_to_visit, cur_dirpath)
+
     return return_code
 
 def do_check(args):
