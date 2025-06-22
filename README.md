@@ -30,6 +30,8 @@ Hash values are stored in local databases, on a single file per tree, by default
 
 File modification times are used to detect stale hash values. Modification times are not synced to the target.
 
+Use `--nohash` to prevent new hash values from being computed.
+
 ### Hashing Functions
 
 Using `--hasher=<HASHERNAME>` selects one of the a built-in hashing function, and also changes the default file hash database basename pattern to `hlnsync-<HASHERNAME>-[0-9]+.db`.
@@ -253,7 +255,7 @@ This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you a
 
 ### Release Notes
 
-- v0.9.0: Name change to hlnsync from lnsync. Use vignette module for thumbnailing on freedesktop. Fix cmp result code bug. Other minor improvements and bug fixes.
+- v0.9.0: Name change to hlnsync from lnsync. New --nohashing option. Use vignette module for thumbnailing on freedesktop. Minor improvements and bug fixes.
 - v0.8.6: Show size in search command results. Add BasenameHasher. Drop dependency on psutil, use lsblk. Bug fixes. Improve documentation.
 - v0.8.5: New `onmorethanone` search command. Small fixes.
 - v0.8.4: Performance improvements on find commamnds. Bug fixes. Allow multiple arguments to `--dbrootmount`.

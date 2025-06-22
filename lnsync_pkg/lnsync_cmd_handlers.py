@@ -25,7 +25,8 @@ from lnsync_pkg.filesystems import make_id_computer
 from lnsync_pkg.groupedfileprinter import GroupedFileListPrinter
 from lnsync_pkg.matcher import TreePairMatcher
 from lnsync_pkg.filehashtree import \
-    FileHashTree, TreeError, TreeNoPropValueError, PropDBException
+    FileHashTree, TreeError, TreeNoPropValueError, TreePropFetchingPaused, \
+    PropDBException
 from lnsync_pkg.lnsync_treeargs import TreeLocation, TreeLocationOnline
 from lnsync_pkg.modaltype import Mode
 from lnsync_pkg.hasher_functions import HasherManager
@@ -77,7 +78,8 @@ def do_lookup(args):
                 error_found = True
                 continue
             elif file_obj.is_file():
-                # getprop Raises TreeNoPropValueError if no prop.
+                # getprop Raises TreeNoPropValueError or TreePropFetchingPaused
+                # if no prop.
                 prop = tree.get_prop(file_obj)
                 pr.print(prop, fname)
             else:
@@ -314,7 +316,7 @@ def do_cmp(args):
             if exc.first_try:
                 exc.pprint = shlex.quote
                 pr.error(f"reading, ignoring: {str(exc)}")
-            return_code = 1
+            return_code = 2
         else:
             if left_prop != right_prop:
                 pr.print("files differ in content: " + path)
@@ -356,10 +358,10 @@ def do_cmp(args):
                 else:
                     raise RuntimeError("unexpected left object: " + left_path)
             elif left_obj.is_file():
-                return_code = 1
                 if  right_obj.is_file():
                     cmp_files(left_path, left_obj, right_obj)
                 elif right_obj.is_dir():
+                    return_code = 1
                     pr.print("left file vs right dir: " + left_path)
                 else:
                     return_code = 1
@@ -375,6 +377,7 @@ def do_cmp(args):
                     pr.print("left dir vs other: " + left_path + os.path.sep)
             else:
                 raise RuntimeError("unexpected left object: " + left_path)
+
         for right_obj, basename in \
                 right_tree.walk_dir_contents(cur_dirpath, dirs=True):
             right_path = os.path.join(cur_dirpath, basename)

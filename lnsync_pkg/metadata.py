@@ -7,7 +7,7 @@ hlnsync project metadata.
 
 # The package name, which is also the "UNIX name" for the project.
 package = 'hlnsync'
-version = '0.9.0rc4'
+version = '0.9.0'
 description = "Sync local dirs by content, with rename detection and " \
               "hard link support, plus fast fdupes, and more."
 summary = description
@@ -20,4 +20,4 @@ authors = ['Miguel Simoes']
 authors_string = ', '.join(authors)
 emails = ['miguelrsimoes@yahoo.com']
 license = 'GNU General Public License v3'
-copyright = '(C) 2018-2021 ' + authors_string
+copyright = '(C) 2018-2025 ' + authors_string

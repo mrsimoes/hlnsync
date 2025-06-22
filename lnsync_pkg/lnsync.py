@@ -165,6 +165,7 @@ builtin_hasher_option_parser.add_argument(
     action=SetBuiltinHasher, default=None,
     help="set built-in xxhash hasher variant")
 
+
 # Pick alternative hasher or filter functions.
 
 def valid_executable_str(path):
@@ -250,6 +251,14 @@ bysize_option_parser.add_argument(
     sc_action="store_bool", sc_dest="size_as_hash",
     default=False,
     help="compare files by size only")
+
+nohashing_option_parser = argparse.ArgumentParser(add_help=False)
+
+nohashing_option_parser.add_argument(
+    "-N", "--nohashing",
+    action=ConfigTreeOptionAction, sc_scope=Scope.ALL, sc_action="store_bool",
+    default=False,
+    help="do not compute new hash values")
 
 skipempty_option_parser = argparse.ArgumentParser(add_help=False)
 
@@ -630,6 +639,7 @@ _SEARCH_CMD_PARENTS = \
     [exclude_all_options_parser,
      hard_links_option_parser, bysize_option_parser,
      maxminsize_option_parser, skipempty_option_parser,
+     nohashing_option_parser,
      sameline_option_parser, sort_option_parser, showsize_option_parser,
      dbrootdir_option_parser, dblocation_option_parser,
      ]
@@ -783,7 +793,8 @@ parser_cmp = top_parser.add_parser_command(
     'cmp', lnsync_cmd_handlers.do_cmp,
     parents=[exclude_all_options_parser,
              hard_links_option_parser, bysize_option_parser,
-             maxminsize_option_parser, skipempty_option_parser,
+             maxminsize_option_parser, nohashing_option_parser,
+             skipempty_option_parser,
              dbrootdir_option_parser, dblocation_option_parser,
             ],
     help='recursively compare two trees')
@@ -886,7 +897,7 @@ def writable_file_or_empty_path(path):
 parser_mkoffline = top_parser.add_parser_command(
     'mkoffline', lnsync_cmd_handlers.do_mkoffline,
     parents=[exclude_all_options_parser, maxminsize_option_parser,
-             skipempty_option_parser,
+             nohashing_option_parser, skipempty_option_parser,
              dbrootdir_option_parser, dblocation_option_parser,
             ],
     help="create offline file tree from dir")

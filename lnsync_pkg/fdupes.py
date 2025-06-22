@@ -21,7 +21,8 @@ And for FileItem:
 from collections import defaultdict
 
 from lnsync_pkg.miscutils import iter_is_empty, iter_len
-from lnsync_pkg.fileproptree import FileItem, TreeNoPropValueError
+from lnsync_pkg.fileproptree import \
+    FileItem, TreeNoPropValueError, TreePropFetchingPaused
 import lnsync_pkg.printutils as pr
 
 def _get_prop(tree, fobj):
@@ -32,6 +33,8 @@ def _get_prop(tree, fobj):
         "getprop: not a FileItem"
     try:
         prop = tree.get_prop(fobj)
+    except TreePropFetchingPaused:
+        return None
     except TreeNoPropValueError as exc:
         if exc.first_try:
             pr.error(f"processing, ignored: {str(exc)}")

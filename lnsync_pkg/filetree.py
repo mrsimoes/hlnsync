@@ -240,6 +240,7 @@ class FileTree:
         self.writeback = kwargs.pop("writeback", True)
         self._file_type = kwargs.pop("file_type", FileItem)
         self._dir_type = kwargs.pop("dir_type", DirItem)
+        self._nohashing = kwargs.pop("nohashing", False)
         self._use_metadata = kwargs.pop("use_metadata", False)
         self._tree_fully_scanned = False
         self._unscanned_dir_count = 1
